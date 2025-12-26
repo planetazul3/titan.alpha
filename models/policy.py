@@ -178,7 +178,9 @@ class TradingActor(nn.Module):
         std = log_std.exp()
         
         if deterministic:
-            action = torch.tanh(mean) * self.max_stake
+            # M05: Fix action scaling. Use sigmoid to match stochastic path range [0, max_stake].
+            # Previously tanh mapped to [-max, max] which is invalid for stake.
+            action = torch.sigmoid(mean) * self.max_stake
             log_prob = torch.zeros_like(action)
         else:
             # Reparameterization trick
