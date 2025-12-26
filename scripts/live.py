@@ -697,14 +697,27 @@ async def run_live_trading(args):
                     time_since_last_inference = current_time - last_inference_time
                     cooldown_ready = time_since_last_inference >= inference_cooldown_seconds
                     
+                    # H07: Stale Data Check
+                    # Prevent trading on old data if system lags
+                    now_utc = datetime.now(timezone.utc)
+                    latency = (now_utc - candle_event.timestamp).total_seconds()
+                    
+                    if latency > 5.0:
+                        logger.warning(
+                            f"[LATENCY] Skipping stale candle (closed {latency:.1f}s ago). "
+                            f"Threshold: 5.0s"
+                        )
+                        console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
+                        continue
+
                     # Run inference only when: candle closed + buffer ready + cooldown passed
                     if is_new_candle and buffer.is_ready() and cooldown_ready:
                         console_log(
                             f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
-                            f"(cooldown: {time_since_last_inference:.1f}s)",
+                            f"(cooldown: {time_since_last_inference:.1f}s, latency: {latency:.1f}s)",
                             "MODEL",
                         )
-                        logger.info("Candle closed: running inference with completed candles")
+                        logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
 
                         try:
                             await run_inference(
