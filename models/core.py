@@ -90,7 +90,11 @@ class DerivOmniModel(nn.Module):
         logger.info(f"DerivOmniModel initialized with {total_params:,} parameters")
 
     def forward(
-        self, ticks: torch.Tensor, candles: torch.Tensor, vol_metrics: torch.Tensor
+        self, 
+        ticks: torch.Tensor, 
+        candles: torch.Tensor, 
+        vol_metrics: torch.Tensor,
+        masks: dict[str, torch.Tensor] | None = None
     ) -> dict[str, torch.Tensor]:
         """
         Full forward pass through all experts and heads.
@@ -99,6 +103,7 @@ class DerivOmniModel(nn.Module):
             ticks: Tick sequence, shape (batch, seq_len_ticks)
             candles: Candle features, shape (batch, seq_len_candles, 10)
             vol_metrics: Volatility metrics, shape (batch, 4)
+            masks: Optional dictionary of masks (e.g. 'candles_mask')
 
         Returns:
             Dictionary of logits:
@@ -106,7 +111,9 @@ class DerivOmniModel(nn.Module):
                 'touch_logit': (batch, 1)
                 'range_logit': (batch, 1)
         """
-        emb_temp = self.temporal(candles)  # (batch, temp_dim)
+        candles_mask = masks.get("candles_mask") if masks else None
+        
+        emb_temp = self.temporal(candles, mask=candles_mask)  # (batch, temp_dim)
         emb_spat = self.spatial(ticks)  # (batch, spat_dim)
         emb_vol = self.volatility.encode(vol_metrics)  # (batch, vol_dim)
 
@@ -121,12 +128,16 @@ class DerivOmniModel(nn.Module):
         return logits
 
     def predict_probs(
-        self, ticks: torch.Tensor, candles: torch.Tensor, vol_metrics: torch.Tensor
+        self, 
+        ticks: torch.Tensor, 
+        candles: torch.Tensor, 
+        vol_metrics: torch.Tensor,
+        masks: dict[str, torch.Tensor] | None = None
     ) -> dict[str, torch.Tensor]:
         """
         Forward pass with Sigmoid applied for inference.
         """
-        logits = self(ticks, candles, vol_metrics)
+        logits = self(ticks, candles, vol_metrics, masks=masks)
         probs = {k.replace("_logit", "_prob"): torch.sigmoid(v) for k, v in logits.items()}
         return probs
 

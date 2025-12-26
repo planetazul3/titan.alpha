@@ -48,17 +48,18 @@ class TemporalExpert(nn.Module):
             dropout=settings.hyperparams.dropout_rate,
         )
 
-    def forward(self, candles: torch.Tensor) -> torch.Tensor:
+    def forward(self, candles: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             candles: (batch, seq_len, features) normalized candle data
+            mask: (batch, seq_len) attention mask (optional)
         Returns:
             embedding: (batch, embedding_dim) temporal representation
         """
         if self.use_tft:
             # TFT returns (output, attention_weights, feature_weights)
             # output: (batch, seq_len, hidden_size)
-            tft_out, _, _ = self.tft(candles)
+            tft_out, _, _ = self.tft(candles, mask=mask)
             
             # Use the last time step for embedding
             # (batch, hidden_size)

@@ -531,13 +531,15 @@ class TemporalFusionTransformer(nn.Module):
     
     def forward(
         self, 
-        x: torch.Tensor
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Apply TFT encoder.
         
         Args:
             x: Input features [batch, seq_len, input_size]
+            mask: Optional attention mask [batch, seq_len]
         
         Returns:
             Tuple of:
@@ -556,7 +558,15 @@ class TemporalFusionTransformer(nn.Module):
         lstm_out = self.post_lstm_grn(lstm_out) + selected
         
         # Self-attention for long-range patterns
-        attention_out, attention_weights = self.attention(lstm_out)
+        # H03: Pass mask to attention
+        # Mask needs to be broadcastable to [batch, heads, seq, seq] or handled by attention
+        attn_mask = None
+        if mask is not None:
+             # Mask keys (columns) where mask == 0
+             # Shape: [batch, 1, 1, seq_len]
+             attn_mask = mask.unsqueeze(1).unsqueeze(1)
+
+        attention_out, attention_weights = self.attention(lstm_out, mask=attn_mask)
         
         # Skip connection
         attention_out = self.post_attention_grn(attention_out) + lstm_out

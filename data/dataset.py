@@ -60,6 +60,8 @@ class DerivDataset(Dataset):
         - 'candles': (seq_len_candles, 10) float32
         - 'vol_metrics': (4,) float32
         - 'targets': Dict with 'rise_fall', 'touch', 'range' labels
+        - 'ticks_mask': (seq_len_ticks,) float32 (1=valid, 0=padding)
+        - 'candles_mask': (seq_len_candles,) float32 (1=valid, 0=padding)
     """
 
     def __init__(
@@ -279,6 +281,15 @@ class DerivDataset(Dataset):
                 # Fallback to safe non-zero default (log returns will be 0 anyway)
                 padding = np.full(pad_len, 100.0, dtype=np.float32)
             tick_slice = np.concatenate([padding, tick_slice])
+            
+            # Create tick mask (0 for padding, 1 for real data)
+            valid_len = total_tick_len - pad_len
+            tick_mask = np.concatenate([np.zeros(pad_len, dtype=np.float32), np.ones(valid_len, dtype=np.float32)])
+        else:
+            tick_mask = np.ones(len(tick_slice), dtype=np.float32)
+
+        # Candle mask (always full valid due to index logic, but consistent)
+        candle_mask = np.ones(len(candle_slice), dtype=np.float32)
 
         # CANONICAL feature processing via FeatureBuilder
         features = self.feature_builder.build_numpy(
@@ -286,6 +297,10 @@ class DerivDataset(Dataset):
             candles=candle_slice,
             validate=False,  # Allow partial data during dataset iteration
         )
+        
+        # Trim masks to match output feature length (remove warmup)
+        tick_mask = tick_mask[-self.tick_len:]
+        candle_mask = candle_mask[-self.candle_len:]
 
         # Generate labels from future movement
         targets = self._generate_labels(candle_idx)
@@ -295,6 +310,8 @@ class DerivDataset(Dataset):
             "candles": torch.from_numpy(features["candles"]),
             "vol_metrics": torch.from_numpy(features["vol_metrics"]),
             "targets": targets,
+            "ticks_mask": torch.from_numpy(tick_mask),
+            "candles_mask": torch.from_numpy(candle_mask),
         }
 
     def _generate_labels(self, candle_idx: int) -> dict[str, torch.Tensor]:
