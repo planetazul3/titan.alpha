@@ -81,7 +81,7 @@ def log_returns(prices: np.ndarray, fill_first: bool = True) -> np.ndarray:
 
 
 def z_score_normalize(
-    values: np.ndarray, window: int | None = None, epsilon: float = 1e-8
+    values: np.ndarray, window: int | None = None, epsilon: float = 1e-6
 ) -> np.ndarray:
     """
     Apply Z-score normalization: (x - mean) / std.
@@ -93,7 +93,7 @@ def z_score_normalize(
         values: Input array to normalize
         window: Rolling window size for local normalization.
                 If None, uses global statistics.
-        epsilon: Small value to avoid division by zero (default 1e-8)
+        epsilon: Small value to avoid division by zero (default 1e-6)
 
     Returns:
         Normalized array of same shape, with NaN filled as 0
