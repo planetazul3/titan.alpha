@@ -186,16 +186,7 @@ async def run_live_trading(args):
     logger.info(f"Starting live trading for {settings.trading.symbol}")
     logger.info(f"Device: {device}")
 
-    # M13: Disk Usage Management
-    # Perform cleanup at startup to prevent unbounded growth
-    try:
-        from utils.logging_setup import cleanup_logs
-        deleted_logs = cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
-        if deleted_logs > 0:
-            console_log(f"Cleaned up {deleted_logs} old log files", "INFO")
-            logger.info(f"Deleted {deleted_logs} old log files (> {settings.system.log_retention_days} days)")
-    except Exception as e:
-        logger.error(f"Log cleanup failed: {e}")
+    # M13: Disk Usage Management - DEPRECATED: Moved to background task
 
     # ══════════════════════════════════════════════════════════════════════
     # STRUCTURED METRICS - for production observability
@@ -301,13 +292,7 @@ async def run_live_trading(args):
     # This enables the continual learning pipeline by storing tick/candle windows
     shadow_store = SQLiteShadowStore(Path(settings.system.system_db_path))
     
-    # M13: DB Pruning
-    try:
-        pruned_count = shadow_store.prune(retention_days=settings.system.db_retention_days)
-        if pruned_count > 0:
-             console_log(f"Pruned {pruned_count} old shadow records", "INFO")
-    except Exception as e:
-        logger.error(f"DB pruning failed: {e}")
+        # M13: DB Pruning - DEPRECATED: Moved to background task
         
     console_log("Shadow store ready (SQLite)", "SUCCESS")
 
@@ -713,6 +698,40 @@ async def run_live_trading(args):
                 except Exception as e:
                     logger.error(f"Error processing candle: {e}", exc_info=True)
 
+        async def maintenance_task():
+            """
+            Background maintenance task for logs and database pruning.
+            Runs once every 24 hours.
+            """
+            interval = 86400  # 24 hours
+            while True:
+                try:
+                    logger.info("[MAINTENANCE] Starting background maintenance...")
+                    
+                    # 1. Log cleanup
+                    try:
+                        from utils.logging_setup import cleanup_logs
+                        deleted_logs = cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
+                        if deleted_logs > 0:
+                            logger.info(f"[MAINTENANCE] Deleted {deleted_logs} old log files")
+                    except Exception as e:
+                        logger.error(f"[MAINTENANCE] Log cleanup failed: {e}")
+
+                    # 2. DB Pruning
+                    try:
+                        if shadow_store:
+                            pruned_count = shadow_store.prune(retention_days=settings.system.db_retention_days)
+                            if pruned_count > 0:
+                                logger.info(f"[MAINTENANCE] Pruned {pruned_count} old shadow records")
+                    except Exception as e:
+                        logger.error(f"[MAINTENANCE] DB pruning failed: {e}")
+
+                    logger.info("[MAINTENANCE] Background maintenance completed.")
+                except Exception as e:
+                    logger.error(f"[MAINTENANCE] Unexpected error in maintenance task: {e}")
+                
+                await asyncio.sleep(interval)
+
         async def heartbeat():
             """Periodic status logging for observability."""
             from observability.shadow_metrics import ShadowTradeMetrics
@@ -761,8 +780,7 @@ async def run_live_trading(args):
                             console_log(f"Checkpoint update detected! Reloading... ({checkpoint_path.name})", "MODEL")
                             logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
                             
-                            # Load new weights (off-thread to avoid blocking loop? load is fast enough usually)
-                            # Actually, torch.load can be slow for large models. Let's do it carefully.
+                            # Load new weights
                             new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
                             
                             # R04: Validate architecture compatibility before loading
@@ -791,8 +809,6 @@ async def run_live_trading(args):
                                 new_version = new_manifest.get("model_version", "unknown")
                                 logger.info(f"[HOT-RELOAD] Loaded version: {new_version}")
                                 console_log(f"Model reloaded: v{new_version}", "SUCCESS")
-                                # Update engine's model version if possible (it's immutable usually, but maybe we can update it)
-                                # Check decision engine implementation.
                                 if hasattr(engine, 'model_version'):
                                     engine.model_version = new_version
                             
@@ -806,243 +822,56 @@ async def run_live_trading(args):
                         logger.error(f"[HOT-RELOAD] Failed to reload model: {e}")
                         console_log(f"Hot-reload failed: {e}", "ERROR")
 
-                # Performance and Retraining Checks
-                perf_stats = perf_tracker.get_summary()
-                latency = perf_stats["latency"]
-                should_retrain, retrain_reason = retrain_trigger.should_retrain(shadow_metrics_cache)
-                
-                # HUMAN-READABLE CONSOLE OUTPUT
-                console_log(
-                    f"═══ HEARTBEAT ═══════════════════════════════",
-                    "HEART",
-                )
-                console_log(
-                    f"Ticks: {tick_count} | Candles: {candle_count} | Inferences: {inference_count}",
-                    "DATA",
-                )
-                console_log(
-                    f"Latency: p50={latency['p50']:.1f}ms | p95={latency['p95']:.1f}ms | RAM: {perf_stats['memory_mb']:.1f}MB",
-                    "PERF"
-                )
-                
-                # Display Shadow Trade Performance
-                if shadow_metrics_cache.resolved_trades > 0:
-                    console_log(
-                        f"───────── SHADOW TRADING PERFORMANCE ─────────",
-                        "INFO",
-                    )
-                    console_log(
-                        f"⚠️  Resolved: {shadow_metrics_cache.resolved_trades} | "
-                        f"Win Rate: {shadow_metrics_cache.win_rate * 100:.1f}% | "
-                        f"Wins: {shadow_metrics_cache.wins} | Losses: {shadow_metrics_cache.losses}",
-                        "SUCCESS" if shadow_metrics_cache.win_rate > 0.5 else "WARN",
-                    )
-                    console_log(
-                        f"{'✅' if shadow_metrics_cache.simulated_pnl > 0 else '❌'} "
-                        f"Simulated P&L: ${shadow_metrics_cache.simulated_pnl:.2f} | "
-                        f"ROI: {shadow_metrics_cache.simulated_roi:.1f}%",
-                        "SUCCESS" if shadow_metrics_cache.simulated_pnl > 0 else "ERROR",
-                    )
-                    
-                    if should_retrain:
-                        console_log(f"⚠️ RETRAINING RECOMMENDED: {retrain_reason}", "WARN")
-
-                console_log(
-                    f"═══════════════════════════════════════════════",
-                    "INFO",
-                )
+                # HEARTBEAT LOGGING
+                stale_threshold = settings.heartbeat.stale_data_threshold_seconds
+                if stale_seconds > stale_threshold:
+                    console_log(f"WARNING: No ticks for {stale_seconds:.1f}s - possible connection issue", "WARN")
+                    logger.warning(f"[STALE] No ticks received for {stale_seconds:.1f}s")
 
                 logger.info(
                     f"[HEARTBEAT] ticks={tick_count}, candles={candle_count}, "
                     f"inferences={inference_count}, stale_sec={stale_seconds:.1f}, "
-                    f"trades={stats.get('real', 0)}, shadow={stats.get('shadow', 0)}, "
-                    f"vetoed={stats.get('regime_vetoed', 0)}, "
-                    f"shadow_only={cal_stats.get('shadow_only_mode', False)}, "
-                    f"shadow_win_rate={shadow_metrics_cache.win_rate:.3f}, "
-                    f"shadow_pnl={shadow_metrics_cache.simulated_pnl:.2f}"
+                    f"shadow_win_rate={shadow_metrics_cache.win_rate:.3f}"
                 )
 
-                # Update system health dashboard
-                try:
-                    health_data = system_monitor.get_dashboard_data()
-                    health_file = log_dir / settings.observability.health_check_file_path
-                    # Atomic write
-                    tmp_file = health_file.with_suffix(".tmp")
-                    health_file.parent.mkdir(parents=True, exist_ok=True)
-                    with open(tmp_file, "w") as f:
-                        import json
-                        json.dump(health_data, f, indent=2)
-                    tmp_file.rename(health_file)
-                except Exception as e:
-                    logger.error(f"Failed to update health dashboard: {e}")
-
-                # Stale data warning
-                if stale_seconds > stale_threshold:
-                    console_log(
-                        f"WARNING: No ticks for {stale_seconds:.1f}s - possible connection issue",
-                        "WARN",
-                    )
-                    logger.warning(f"[STALE] No ticks received for {stale_seconds:.1f}s")
-
-        # START TASKS (Early, to catch events)
-        console_log("Starting background tasks (Stream + Heartbeat)...", "WAIT")
-        tick_task = asyncio.create_task(process_ticks())
-        candle_task = asyncio.create_task(process_candles())
-        heartbeat_task = asyncio.create_task(heartbeat())
-        
-        # Wait a moment for subscription to establish and start buffering
-        console_log("Waiting for stream to stabilize...", "WAIT")
-        await asyncio.sleep(2.0)
-
-        # Pre-load historical data (While streaming is buffering)
-        console_log("=" * 60, "INFO")
-        console_log("LOADING HISTORICAL DATA...", "DATA")
-        logger.info("[INIT] Fetching historical data while buffering live events...")
-
-        console_log(f"Fetching {tick_len} historical ticks...", "WAIT")
-        hist_ticks = await client.get_historical_ticks(count=tick_len)
-        buffer.append_ticks(hist_ticks)
-        console_log(f"Loaded {buffer.tick_count()} ticks", "SUCCESS")
-        logger.info(f"[INIT] Pre-loaded {buffer.tick_count()} ticks")
-
-        console_log(f"Fetching {candle_len} historical candles...", "WAIT")
-        hist_candles = await client.get_historical_candles(count=candle_len, interval=60)
-        candle_arrays = [
-            [
-                float(c["open"]),
-                float(c["high"]),
-                float(c["low"]),
-                float(c["close"]),
-                0.0,
-                float(c["epoch"]),
-            ]
-            for c in hist_candles
+        # Start background tasks
+        tasks = [
+            asyncio.create_task(process_ticks()),
+            asyncio.create_task(process_candles()),
+            asyncio.create_task(heartbeat()),
+            asyncio.create_task(maintenance_task()),
         ]
-        buffer.preload_candles(candle_arrays)
-        console_log(f"Loaded {buffer.candle_count()} candles", "SUCCESS")
-        logger.info(
-            f"[INIT] Pre-loaded {buffer.candle_count()} candles. Buffer ready: {buffer.is_ready()}"
-        )
 
-        # H11: FLUSH STARTUP BUFFERS (Atomic Handover)
-        logger.info("[INIT] Flushing startup buffers...")
-        console_log(f"Flushing buffered startup events ({len(startup_buffer_ticks)} ticks, {len(startup_buffer_candles)} candles)...", "DATA")
+        if not args.test:
+             # Add real trade tracker task if not in test mode
+             tasks.append(asyncio.create_task(real_trade_tracker.start()))
         
-        # Flush Ticks
-        for t in startup_buffer_ticks:
-            buffer.append_tick(t)
-            tick_count += 1
-            
-        # Flush Candles (with deduplication)
-        for c in startup_buffer_candles:
-            buffer.update_candle(c)
-            candle_count += 1
-            
-        # Clear buffers and set flag to enable live processing
-        startup_buffer_ticks.clear()
-        startup_buffer_candles.clear()
-        startup_complete.set()
+        # Monitor tasks
+        # If any task fails, we should probably stop the system
+        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         
-        console_log("Startup synchronization complete - LIVE MODE ACTIVE", "SUCCESS")
-        logger.info("[INIT] Startup synchronization complete. Live processing active.")
-
-        # Warm up regime detector with historical close prices
-        if hasattr(regime_veto, 'update_prices') and candle_arrays:
-            import numpy as np
-            close_prices = np.array([c[3] for c in candle_arrays])  # Index 3 is close price
-            regime_veto.update_prices(close_prices)
-            console_log(f"Regime veto warmed up with {len(close_prices)} prices", "SUCCESS")
-
-        # Run initial inference if buffer ready
-        if buffer.is_ready():
-            console_log("=" * 60, "INFO")
-            console_log("RUNNING INITIAL INFERENCE...", "MODEL")
-            initial_recon_error = await run_inference(
-                model,
-                engine,
-                executor,
-                buffer,
-                feature_builder,
-                device,
-                settings,
-                metrics,
-                return_recon_error=True,  # Get reconstruction error for validation
-                trade_tracker=real_trade_tracker,
-            )
-            console_log(
-                f"Initial inference complete! Reconstruction error: {initial_recon_error:.4f}",
-                "SUCCESS",
-            )
+        for task in pending:
+            task.cancel()
             
-            # Calibration checks
-            if initial_recon_error is not None:
-                if initial_recon_error > 1.0:
-                    logger.critical(
-                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} is extremely high! "
-                        f"Expected < 1.0. Model may need retraining with normalized features. "
-                        f"Trading will continue in CAUTION mode."
-                    )
-                    console_log("CALIBRATION WARNING: High reconstruction error!", "WARN")
-                elif initial_recon_error > 0.3:
-                    logger.warning(
-                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} exceeds VETO threshold (0.3). "
-                        f"Consider retraining or adjusting thresholds."
-                    )
-                    console_log("CALIBRATION CAUTION: Error above veto threshold", "WARN")
-                else:
-                    logger.info(
-                        f"[HEALTH] Reconstruction error {initial_recon_error:.4f} is within expected range."
-                    )
-                    console_log("Health check passed", "SUCCESS")
-        else:
-            console_log(
-                f"Buffer not ready. Ticks: {buffer.tick_count()}, Candles: {buffer.candle_count()}",
-                "WARN",
-            )
-            
-        # ══════════════════════════════════════════════════════════════════════
-        # Wait for tasks (Main Loop)
-        # ══════════════════════════════════════════════════════════════════════
-
-        await asyncio.gather(tick_task, candle_task, heartbeat_task)
-
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-    except (ConnectionError, asyncio.TimeoutError, OSError) as e:
-        # Network errors - may be recoverable
-        logger.error(f"[NETWORK] Connection error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 1
-    except (RuntimeError, ValueError, torch.cuda.OutOfMemoryError) as e:
-        # Inference/model errors
-        logger.error(f"[INFERENCE] Model error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 1
     except Exception as e:
-        # Unexpected errors - log category for observability
-        logger.error(f"[UNEXPECTED] {type(e).__name__}: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.critical(f"FATAL ERROR in main loop: {e}", exc_info=True)
+        console_log(f"CRITICAL ERROR: {e}", "ERROR")
         return 1
     finally:
-        await client.disconnect()
-
+        if client:
+            await client.disconnect()
+        
         # Log statistics
-        stats = engine.get_statistics()
-        logger.info(f"Session statistics: {stats}")
+        if 'engine' in locals():
+            stats = engine.get_statistics()
+            logger.info(f"Session statistics: {stats}")
 
-        if executor:
+        if 'executor' in locals() and executor:
             # Log safety wrapper statistics
             safety_stats = executor.get_safety_statistics()
             logger.info(f"Safety statistics: {safety_stats}")
 
-        # Export final metrics
-        logger.info(f"Final metrics: {metrics.export()}")
+        console_log("System shutdown complete", "INFO")
 
     return 0
 

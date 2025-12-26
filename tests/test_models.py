@@ -20,9 +20,12 @@ def mock_settings():
     settings.data_shapes.feature_dim_ticks = 1
     settings.data_shapes.feature_dim_candles = 10
     settings.hyperparams.dropout_rate = 0.1
+    settings.hyperparams.fusion_dropout = 0.2
+    settings.hyperparams.head_dropout = 0.1
     settings.hyperparams.latent_dim = 16
     settings.hyperparams.lstm_hidden_size = 64
     settings.hyperparams.cnn_filters = 32
+    settings.hyperparams.use_tft = False  # Test BiLSTM path by default
     return settings
 
 

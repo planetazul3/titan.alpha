@@ -38,7 +38,7 @@ def create_contract_heads(input_dim: int, settings: Settings) -> nn.ModuleDict:
     """
     Factory function to create all contract heads.
     """
-    dropout = settings.hyperparams.dropout_rate
+    dropout = settings.hyperparams.head_dropout
 
     # We can use slightly different architectures per head if needed
     heads = nn.ModuleDict(

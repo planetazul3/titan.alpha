@@ -115,6 +115,11 @@ class ModelHyperparams(BaseModel):
     cnn_filters: int = Field(..., description="CNN filter count", gt=0)
     latent_dim: int = Field(..., description="Autoencoder latent dimension", gt=0)
     use_tft: bool = Field(default=True, description="Use Temporal Fusion Transformer (TFT) instead of BiLSTM")
+    
+    # R02: Externalize Model Component Hyperparameters
+    fusion_dropout: float = Field(default=0.2, description="Dropout rate for expert fusion layer", ge=0.0, lt=1.0)
+    head_dropout: float = Field(default=0.1, description="Dropout rate for contract heads", ge=0.0, lt=1.0)
+    
     regime_caution_threshold: float = Field(default=0.2, description="Regime caution threshold", gt=0)
     regime_veto_threshold: float = Field(default=0.5, description="Regime veto threshold", gt=0)
 

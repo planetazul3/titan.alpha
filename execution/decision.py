@@ -14,6 +14,13 @@ from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 from execution.signals import ShadowTrade, TradeSignal
 from observability.shadow_logging import shadow_trade_logger
 
+try:
+    from opentelemetry import trace
+    from opentelemetry.trace import Status, StatusCode
+    TRACING_ENABLED = True
+except ImportError:
+    TRACING_ENABLED = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +49,11 @@ class DecisionEngine:
         self.regime_veto = regime_veto or RegimeVeto()
         self.shadow_store = shadow_store  # New immutable store
         self.model_version = model_version
+        
+        if TRACING_ENABLED:
+            self.tracer = trace.get_tracer(__name__)
+        else:
+            self.tracer = None
         self._stats = {
             "processed": 0,
             "real": 0,
@@ -381,34 +393,69 @@ class DecisionEngine:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
 
-        # Get regime assessment
-        regime_assessment = self.regime_veto.assess(reconstruction_error)
+        if self.tracer:
+            with self.tracer.start_as_current_span("decision_engine.process_with_context") as span:
+                span.set_attribute("model_version", self.model_version)
+                span.set_attribute("reconstruction_error", reconstruction_error)
+                span.set_attribute("entry_price", entry_price)
 
-        # I02 Fix: Get all signals ONCE and reuse for both shadow storage and decision making
-        all_signals = filter_signals(probs, self.settings, timestamp)
+                # Get regime assessment
+                regime_assessment = self.regime_veto.assess(reconstruction_error)
+                span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
 
-        # Store shadow trades with full context to ShadowTradeStore
-        if self.shadow_store:
-            for sig in all_signals:
-                await self._store_shadow_trade_async(
-                    signal=sig,
-                    reconstruction_error=reconstruction_error,
-                    regime_state=self._get_regime_state_string(regime_assessment),
-                    tick_window=tick_window,
-                    candle_window=candle_window,
-                    entry_price=entry_price,
-                    regime_vetoed=regime_assessment.is_vetoed(),
-                    metadata=market_data,
-                )
+                # I02 Fix: Get all signals ONCE and reuse
+                all_signals = filter_signals(probs, self.settings, timestamp)
+                span.set_attribute("signals_count", len(all_signals))
 
-        # I02 Fix: Pass pre-filtered signals to avoid redundant filtering
-        return self._process_signals(
-            all_signals=all_signals,
-            reconstruction_error=reconstruction_error,
-            regime_assessment=regime_assessment,
-            timestamp=timestamp,
-            market_data=market_data,
-        )
+                # Store shadow trades with full context
+                if self.shadow_store:
+                    with self.tracer.start_as_current_span("decision_engine.store_shadow_trades"):
+                        for sig in all_signals:
+                            await self._store_shadow_trade_async(
+                                signal=sig,
+                                reconstruction_error=reconstruction_error,
+                                regime_state=self._get_regime_state_string(regime_assessment),
+                                tick_window=tick_window,
+                                candle_window=candle_window,
+                                entry_price=entry_price,
+                                regime_vetoed=regime_assessment.is_vetoed(),
+                                metadata=market_data,
+                            )
+
+                # Process signals
+                with self.tracer.start_as_current_span("decision_engine.process_signals") as p_span:
+                    real_trades = self._process_signals(
+                        all_signals=all_signals,
+                        reconstruction_error=reconstruction_error,
+                        regime_assessment=regime_assessment,
+                        timestamp=timestamp,
+                        market_data=market_data,
+                    )
+                    p_span.set_attribute("real_trades_count", len(real_trades))
+                    return real_trades
+        else:
+            # Fallback when tracing disabled
+            regime_assessment = self.regime_veto.assess(reconstruction_error)
+            all_signals = filter_signals(probs, self.settings, timestamp)
+            if self.shadow_store:
+                for sig in all_signals:
+                    await self._store_shadow_trade_async(
+                        signal=sig,
+                        reconstruction_error=reconstruction_error,
+                        regime_state=self._get_regime_state_string(regime_assessment),
+                        tick_window=tick_window,
+                        candle_window=candle_window,
+                        entry_price=entry_price,
+                        regime_vetoed=regime_assessment.is_vetoed(),
+                        metadata=market_data,
+                    )
+            return self._process_signals(
+                all_signals=all_signals,
+                reconstruction_error=reconstruction_error,
+                regime_assessment=regime_assessment,
+                timestamp=timestamp,
+                market_data=market_data,
+            )
 
     async def _store_shadow_trade_async(
         self,

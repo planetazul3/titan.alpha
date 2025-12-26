@@ -90,6 +90,7 @@ class DerivOmniModel(nn.Module):
             spatial_dim=spat_dim,
             volatility_dim=vol_dim,
             output_dim=fusion_out,
+            dropout=settings.hyperparams.fusion_dropout,
         )
 
         self.heads = create_contract_heads(input_dim=fusion_out, settings=settings)

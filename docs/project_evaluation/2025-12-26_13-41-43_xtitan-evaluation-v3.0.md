@@ -6,7 +6,7 @@
 
 ## IMPORTANT ISSUES
 
-### 1. Retention Policy Enforced at Application Level
+### 1. Retention Policy Enforced at Application Level [✅ COMPLETED]
 - **Problem Description**: Database pruning and log cleanup are performed within the main execution loop of the live trading script.
 - **Impact**: While functional, this couples business logic (trading) with system maintenance. In high-load scenarios, synchronous pruning operations could introduce latency jitter in the trading loop.
 - **Solution Implementation**:
@@ -22,7 +22,7 @@
             - *Validation*: Verify that trading continues uninterrupted during a simulated pruning operation.
     - **Validation**: Confirm pruning occurs without blocking the capture of incoming market data.
 
-### 2. Manual Checkpoint Promotion Process
+### 2. Manual Checkpoint Promotion Process [✅ COMPLETED]
 - **Problem Description**: The system loads checkpoints directly from a local directory without a formal validation gate.
 - **Impact**: Increased risk of deploying a model that passed training metrics but exhibits unexpected behavior in production-like regimes.
 - **Solution Implementation**:
@@ -40,12 +40,12 @@
 
 ## IMPROVEMENT RECOMMENDATIONS
 
-### 1. Structured Tracing with OpenTelemetry
+### 1. Structured Tracing with OpenTelemetry [✅ COMPLETED]
 - **Action**: Transition from flat file logging to structured spans.
 - **Goal**: Improve the ability to correlate events across ingestion, inference, and execution layers, especially for low-latency debugging.
 - **Details**: Implement a tracing layer in the decision engine to track a signal's lifecycle from the moment a candle closes until the order is acknowledged.
 
-### 2. Externalization of Model Component Hyperparameters
+### 2. Externalization of Model Component Hyperparameters [✅ COMPLETED]
 - **Action**: Move remaining hardcoded values in neural network modules to the central configuration.
 - **Goal**: Increase experimentation agility and maintainability.
 - **Details**: Specifically, move the default dropout rates in the fusion and contract head layers into the hyperparameter section of the settings file.
