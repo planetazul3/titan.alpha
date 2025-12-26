@@ -535,6 +535,19 @@ async def run_live_trading(args):
             f"max_stake=${safety_config.max_stake_per_trade}"
         )
 
+        # C03: Recover pending trades from previous session
+        # Use try-except to prevent blocking startup on recovery failure
+        try:
+            console_log("Checking for pending trades...", "WAIT")
+            recovered_count = await real_trade_tracker.recover_pending_trades()
+            if recovered_count > 0:
+                console_log(f"Recovered {recovered_count} pending trades", "SUCCESS")
+            else:
+                logger.info("No pending trades to recover")
+        except Exception as e:
+            logger.error(f"Failed to recover pending trades: {e}")
+            console_log(f"Recovery warning: {e}", "WARN")
+
         # Test mode - just verify connection
         if args.test:
             console_log("Test mode - connection verified. Exiting.", "SUCCESS")
