@@ -701,6 +701,49 @@ async def run_live_trading(args):
                     except Exception as e:
                         logger.error(f"Failed to update shadow metrics: {e}")
 
+                # M12: Model Hot-Reloading
+                # Check if checkpoint file has been modified (new weights from online training)
+                if checkpoint_path and checkpoint_path.exists():
+                    try:
+                        current_mtime = checkpoint_path.stat().st_mtime
+                        # Initialize last_mtime on first run if needed, but it should be set
+                        if 'last_ckpt_mtime' not in locals():
+                             last_ckpt_mtime = current_mtime
+                        
+                        if current_mtime > last_ckpt_mtime:
+                            console_log(f"Checkpoint update detected! Reloading... ({checkpoint_path.name})", "MODEL")
+                            logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
+                            
+                            # Load new weights (off-thread to avoid blocking loop? load is fast enough usually)
+                            # Actually, torch.load can be slow for large models. Let's do it carefully.
+                            new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+                            
+                            # Update model
+                            model.load_state_dict(new_checkpoint["model_state_dict"])
+                            model.eval() # Ensure eval mode
+                            
+                            # Update version info
+                            if "manifest" in new_checkpoint:
+                                new_manifest = new_checkpoint["manifest"]
+                                new_version = new_manifest.get("model_version", "unknown")
+                                logger.info(f"[HOT-RELOAD] Loaded version: {new_version}")
+                                console_log(f"Model reloaded: v{new_version}", "SUCCESS")
+                                # Update engine's model version if possible (it's immutable usually, but maybe we can update it)
+                                # engine.model_version is public? No, it's used in prepare_trade_metadata.
+                                # Check decision engine implementation.
+                                if hasattr(engine, 'model_version'):
+                                    engine.model_version = new_version
+                            
+                            last_ckpt_mtime = current_mtime
+                            
+                            # Reset calibration monitor as behavior might change
+                            calibration_monitor.errors = [] 
+                            calibration_monitor.consecutive_high_count = 0
+                            
+                    except Exception as e:
+                        logger.error(f"[HOT-RELOAD] Failed to reload model: {e}")
+                        console_log(f"Hot-reload failed: {e}", "ERROR")
+
                 # Performance and Retraining Checks
                 perf_stats = perf_tracker.get_summary()
                 latency = perf_stats["latency"]
