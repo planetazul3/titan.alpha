@@ -20,6 +20,12 @@ from typing import Any, Callable, Protocol, Optional
 from execution.executor import TradeExecutor, TradeResult, TradeSignal
 from execution.safety_store import SQLiteSafetyStateStore
 
+try:
+    from opentelemetry import trace
+    TRACING_ENABLED = True
+except ImportError:
+    TRACING_ENABLED = False
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -67,6 +73,11 @@ class SafeTradeExecutor:
         self._minute_trades: list[float] = []
         self._symbol_minute_trades: dict[str, list[float]] = {}
         
+        if TRACING_ENABLED:
+            self.tracer = trace.get_tracer(__name__)
+        else:
+            self.tracer = None
+            
         logger.info(f"SafeTradeExecutor initialized with DB: {state_file}")
 
     async def execute(self, signal: TradeSignal) -> TradeResult:
@@ -115,8 +126,16 @@ class SafeTradeExecutor:
                  return self._reject(f"Stake resolution failed: {e}")
 
         # 5. Execute with Retries
-        result = await self._execute_with_retry(signal)
-        
+        if self.tracer:
+            with self.tracer.start_as_current_span("safety_executor.execute") as span:
+                span.set_attribute("symbol", get_symbol_from_signal(signal))
+                span.set_attribute("contract_type", str(signal.contract_type))
+                span.set_attribute("stake", signal.metadata.get("stake", 0.0))
+                
+                result = await self._execute_with_retry(signal)
+        else:
+            result = await self._execute_with_retry(signal)
+            
         # 6. Update State
         if result.success:
             await self._record_trade(signal.metadata.get("symbol", "unknown"), result)

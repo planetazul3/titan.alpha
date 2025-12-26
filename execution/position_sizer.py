@@ -235,7 +235,16 @@ class KellyPositionSizer:
             adjusted *= self.high_volatility_reduction
         
         # 7. Convert to stake amount
-        if account_balance is not None and account_balance > 0:
+        if account_balance is not None:
+            if account_balance <= 0:
+                return PositionSizeResult(
+                    stake=0.0,
+                    kelly_fraction=kelly,
+                    adjusted_fraction=adjusted,
+                    confidence_multiplier=confidence_mult,
+                    drawdown_multiplier=drawdown_mult,
+                    reason="Insufficient account balance (<= 0)"
+                )
             # Dynamic sizing based on current balance
             stake = adjusted * account_balance
         else:

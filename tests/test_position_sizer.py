@@ -203,3 +203,35 @@ class TestKellyPositionSizer:
         result = sizer.compute_stake(probability=0.65, payout_ratio=0.9)
         assert result.stake > 0
         assert "Kelly" in result.reason
+
+    def test_kelly_zero_edge(self):
+        """Test break-even probability (50% for 1:1 payout)."""
+        sizer = KellyPositionSizer(base_stake=10.0, safety_factor=1.0)
+        # 1:1 payout (payout_ratio=1.0)
+        # Kelly = p - q/b = 0.5 - 0.5/1.0 = 0
+        result = sizer.compute_stake(probability=0.5, payout_ratio=1.0)
+        assert result.stake == 0
+        assert "Negative edge" in result.reason
+
+    def test_kelly_negative_edge(self):
+        """Test negative edge (prob < break-even)."""
+        sizer = KellyPositionSizer(base_stake=10.0)
+        result = sizer.compute_stake(probability=0.4, payout_ratio=0.9)
+        assert result.stake == 0
+        assert "negative" in result.reason.lower()
+
+    def test_kelly_zero_balance(self):
+        """Test behavior with zero balance."""
+        # balance=0 in compute_stake
+        sizer = KellyPositionSizer(base_stake=10.0)
+        result = sizer.compute_stake(probability=0.8, payout_ratio=0.9, account_balance=0.0)
+        assert result.stake == 0
+
+    def test_kelly_max_stake_cap(self):
+        """Test that Kelly stake is capped by max_stake."""
+        sizer = KellyPositionSizer(base_stake=100.0, safety_factor=1.0, max_stake=10.0)
+        # High confidence should suggest large stake
+        result = sizer.compute_stake(probability=0.9, payout_ratio=1.0)
+        # Kelly = 0.9 - 0.1/1.0 = 0.8. 80% of 100 = 80.
+        assert result.stake == 10.0
+        assert "capped" in result.reason.lower()

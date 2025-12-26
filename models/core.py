@@ -63,10 +63,10 @@ class DerivOmniModel(nn.Module):
         logger.info("Initializing DerivOmniModel...")
 
         # Dimensions for embeddings
-        temp_dim = 64
-        spat_dim = 64
+        temp_dim = settings.hyperparams.temporal_embed_dim
+        spat_dim = settings.hyperparams.spatial_embed_dim
         vol_dim = settings.hyperparams.latent_dim
-        fusion_out = 256
+        fusion_out = settings.hyperparams.fusion_output_dim
         
         # Get usage flag (defaults to True if not in settings, but we added it)
         # Get usage flag (defaults to True if not in settings, but we added it)

@@ -14,8 +14,9 @@ Example:
 import asyncio
 import logging
 import random
+import time
 from collections.abc import AsyncGenerator
-from collections.abc import AsyncGenerator
+from enum import Enum
 from typing import Any, Callable, cast
 
 from deriv_api import APIError, DerivAPI
@@ -23,6 +24,119 @@ from deriv_api import APIError, DerivAPI
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+# I01: Circuit Breaker States
+class CircuitState(Enum):
+    """Circuit breaker states for connection resilience."""
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Blocking all attempts (failures exceeded threshold)
+    HALF_OPEN = "half_open"  # Allowing probe attempt
+
+
+class CircuitBreaker:
+    """
+    I01 Fix: Circuit breaker pattern for graceful degradation.
+    
+    Prevents cascade failures by temporarily blocking operations
+    after repeated failures, allowing time for recovery.
+    
+    States:
+        CLOSED: Normal operation, requests flow through
+        OPEN: Blocking requests, waiting for cooldown
+        HALF_OPEN: Allowing one probe request to test recovery
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        initial_cooldown: float = 60.0,
+        max_cooldown: float = 300.0,
+        on_state_change: Callable[[CircuitState], None] | None = None,
+    ):
+        """
+        Initialize circuit breaker.
+        
+        Args:
+            failure_threshold: Consecutive failures before opening circuit
+            initial_cooldown: Initial cooldown period in seconds
+            max_cooldown: Maximum cooldown period in seconds
+            on_state_change: Optional callback when state changes
+        """
+        self.failure_threshold = failure_threshold
+        self.initial_cooldown = initial_cooldown
+        self.max_cooldown = max_cooldown
+        self.on_state_change = on_state_change
+        
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time: float = 0.0
+        self._current_cooldown = initial_cooldown
+    
+    @property
+    def state(self) -> CircuitState:
+        """Get current circuit state, auto-transitioning if cooldown elapsed."""
+        if self._state == CircuitState.OPEN:
+            elapsed = time.monotonic() - self._last_failure_time
+            if elapsed >= self._current_cooldown:
+                self._set_state(CircuitState.HALF_OPEN)
+        return self._state
+    
+    def _set_state(self, new_state: CircuitState) -> None:
+        """Set state and notify callback."""
+        if new_state != self._state:
+            old_state = self._state
+            self._state = new_state
+            logger.info(f"Circuit breaker: {old_state.value} → {new_state.value}")
+            if self.on_state_change:
+                try:
+                    self.on_state_change(new_state)
+                except Exception as e:
+                    logger.error(f"Circuit state change callback error: {e}")
+    
+    def record_success(self) -> None:
+        """Record a successful operation, resetting the circuit."""
+        self._failure_count = 0
+        self._current_cooldown = self.initial_cooldown
+        self._set_state(CircuitState.CLOSED)
+    
+    def record_failure(self) -> None:
+        """Record a failed operation."""
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+        
+        if self._failure_count >= self.failure_threshold:
+            self._set_state(CircuitState.OPEN)
+            # Exponential backoff for cooldown
+            self._current_cooldown = min(
+                self._current_cooldown * 2, 
+                self.max_cooldown
+            )
+            logger.warning(
+                f"Circuit breaker opened after {self._failure_count} failures. "
+                f"Cooldown: {self._current_cooldown:.0f}s"
+            )
+    
+    def should_allow_request(self) -> bool:
+        """Check if a request should be allowed."""
+        current_state = self.state  # This may auto-transition
+        if current_state == CircuitState.CLOSED:
+            return True
+        elif current_state == CircuitState.HALF_OPEN:
+            return True  # Allow probe
+        else:  # OPEN
+            return False
+    
+    async def wait_if_open(self) -> None:
+        """Wait for cooldown if circuit is open."""
+        while self.state == CircuitState.OPEN:
+            remaining = self._current_cooldown - (time.monotonic() - self._last_failure_time)
+            if remaining > 0:
+                logger.info(f"Circuit open, waiting {remaining:.0f}s for cooldown...")
+                await asyncio.sleep(min(remaining, 10))  # Check every 10s max
+            else:
+                break
+
 
 
 class DerivClient:
@@ -34,6 +148,7 @@ class DerivClient:
     - **Robust Connection**: Automatic reconnection with exponential backoff.
     - **Streaming Recovery**: Detects stale streams and reconnects automatically.
     - **Error Handling**: Wraps API errors with context for upstream handling.
+    - **Circuit Breaker** (I01): Graceful degradation when connectivity is lost.
     """
 
     def __init__(self, settings: Settings):
@@ -44,6 +159,23 @@ class DerivClient:
         self.token = settings.deriv_api_token
         self._keep_alive_task: asyncio.Task | None = None
         self._reconnect_lock = asyncio.Lock()
+        
+        # I01 Fix: Circuit breaker for graceful degradation
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            initial_cooldown=60.0,
+            max_cooldown=300.0,
+            on_state_change=self._on_circuit_state_change,
+        )
+    
+    def _on_circuit_state_change(self, new_state: CircuitState) -> None:
+        """Handle circuit breaker state changes."""
+        if new_state == CircuitState.OPEN:
+            logger.warning("🔴 Circuit breaker OPEN - connection degraded, entering cooldown")
+        elif new_state == CircuitState.HALF_OPEN:
+            logger.info("🟡 Circuit breaker HALF-OPEN - attempting recovery probe")
+        elif new_state == CircuitState.CLOSED:
+            logger.info("🟢 Circuit breaker CLOSED - connection recovered")
 
     @property
     def is_connected(self) -> bool:
@@ -277,6 +409,7 @@ class DerivClient:
         - Automatic reconnection on stream errors or completion
         - Stale data detection if no ticks received for stale_timeout seconds
         - Exponential backoff on reconnection attempts
+        - I01: Circuit breaker for graceful degradation
 
         Args:
             stale_timeout: Seconds without ticks before triggering reconnect
@@ -288,6 +421,9 @@ class DerivClient:
             ConnectionError: If reconnection fails after max attempts
         """
         while True:  # Outer reconnection loop
+            # I01 Fix: Wait if circuit is open
+            await self._circuit_breaker.wait_if_open()
+            
             if not self.api:
                 raise RuntimeError("Client not connected")
 
@@ -295,6 +431,9 @@ class DerivClient:
 
             try:
                 source = await self.api.subscribe({"ticks": self.symbol})
+                
+                # I01: Record success on subscription
+                self._circuit_breaker.record_success()
 
                 # RxPY to async generator adapter
                 queue: asyncio.Queue = asyncio.Queue()
@@ -345,9 +484,16 @@ class DerivClient:
 
             except Exception as e:
                 logger.error(f"Tick stream subscription error: {e}")
+                # I01: Record failure
+                self._circuit_breaker.record_failure()
 
             # Attempt reconnection
             if not await self._reconnect():
+                # I01: Record failure on reconnection failure
+                self._circuit_breaker.record_failure()
+                if self._circuit_breaker.state == CircuitState.OPEN:
+                    logger.error("Circuit breaker open - will retry after cooldown")
+                    continue  # Continue loop, wait_if_open will block
                 raise ConnectionError("Failed to reconnect tick stream after multiple attempts")
 
     async def stream_candles(
@@ -375,6 +521,9 @@ class DerivClient:
             ConnectionError: If reconnection fails after max attempts
         """
         while True:  # Outer reconnection loop
+            # I01 Fix: Wait if circuit is open
+            await self._circuit_breaker.wait_if_open()
+            
             if not self.api:
                 raise RuntimeError("Client not connected")
 
@@ -392,6 +541,9 @@ class DerivClient:
                         "granularity": interval,
                     }
                 )
+                
+                # I01: Record success on subscription
+                self._circuit_breaker.record_success()
 
                 queue: asyncio.Queue = asyncio.Queue()
                 stream_ended = False
@@ -442,9 +594,16 @@ class DerivClient:
 
             except Exception as e:
                 logger.error(f"Candle stream subscription error: {e}")
+                # I01: Record failure
+                self._circuit_breaker.record_failure()
 
             # Attempt reconnection
             if not await self._reconnect():
+                # I01: Record failure on reconnection failure  
+                self._circuit_breaker.record_failure()
+                if self._circuit_breaker.state == CircuitState.OPEN:
+                    logger.error("Circuit breaker open - will retry after cooldown")
+                    continue  # Continue loop, wait_if_open will block
                 raise ConnectionError("Failed to reconnect candle stream after multiple attempts")
 
     async def buy(

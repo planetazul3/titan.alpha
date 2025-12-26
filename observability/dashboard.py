@@ -26,6 +26,7 @@ Example:
 """
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,95 @@ from enum import Enum
 from typing import Any, Callable, cast
 
 logger = logging.getLogger(__name__)
+
+
+# R05: Rate Limiter for Dashboard API
+class RateLimiter:
+    """
+    R05 Fix: Simple sliding window rate limiter.
+    
+    Tracks requests per IP address within a sliding window
+    and blocks requests that exceed the limit.
+    
+    Attributes:
+        requests_per_minute: Maximum requests per minute per IP
+        window_seconds: Sliding window size in seconds
+    """
+    
+    def __init__(self, requests_per_minute: int = 60, window_seconds: int = 60):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            requests_per_minute: Max requests per minute per IP
+            window_seconds: Window size in seconds
+        """
+        self.limit = requests_per_minute
+        self.window = window_seconds
+        self._requests: dict[str, list[float]] = {}
+    
+    def is_allowed(self, client_ip: str) -> bool:
+        """
+        Check if request is allowed for the client IP.
+        
+        Args:
+            client_ip: Client IP address
+            
+        Returns:
+            True if allowed, False if rate limited
+        """
+        now = time.monotonic()
+        
+        # Initialize or clean old entries
+        if client_ip not in self._requests:
+            self._requests[client_ip] = []
+        
+        # Remove old entries outside window
+        self._requests[client_ip] = [
+            ts for ts in self._requests[client_ip] 
+            if now - ts < self.window
+        ]
+        
+        # Check limit
+        if len(self._requests[client_ip]) >= self.limit:
+            logger.warning(f"Rate limit exceeded for {client_ip}")
+            return False
+        
+        # Record request
+        self._requests[client_ip].append(now)
+        return True
+    
+    def get_remaining(self, client_ip: str) -> int:
+        """Get remaining requests for client IP."""
+        if client_ip not in self._requests:
+            return self.limit
+        
+        now = time.monotonic()
+        valid = [ts for ts in self._requests[client_ip] if now - ts < self.window]
+        return max(0, self.limit - len(valid))
+    
+    def cleanup(self) -> int:
+        """Remove stale entries. Returns number cleaned."""
+        now = time.monotonic()
+        cleaned = 0
+        empty_keys = []
+        
+        for ip, timestamps in self._requests.items():
+            new_list = [ts for ts in timestamps if now - ts < self.window]
+            cleaned += len(timestamps) - len(new_list)
+            if not new_list:
+                empty_keys.append(ip)
+            else:
+                self._requests[ip] = new_list
+        
+        for key in empty_keys:
+            del self._requests[key]
+        
+        return cleaned
+
+
+# Global rate limiter instance for dashboard API
+dashboard_rate_limiter = RateLimiter(requests_per_minute=60)
 
 
 class AlertSeverity(Enum):
@@ -519,6 +609,27 @@ class SystemHealthMonitor:
                 "recent": [a.to_dict() for a in health.active_alerts[:5]],
             },
             "auto_responses": self.auto_responder.get_recent_actions(5),
+        }
+    
+    def health_check_endpoint(self) -> dict[str, Any]:
+        """
+        R07 Fix: Minimal health check endpoint for orchestration systems.
+        
+        Returns a lightweight response suitable for load balancers,
+        Kubernetes probes, or monitoring systems.
+        
+        Returns:
+            Dictionary with status, healthy boolean, and timestamp
+        """
+        health = self.get_system_health()
+        
+        return {
+            "status": "ok" if health.is_healthy else "degraded",
+            "healthy": health.is_healthy,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "components_healthy": sum(1 for c in health.components.values() if c.healthy),
+            "components_total": len(health.components),
+            "active_alerts": len(health.active_alerts),
         }
 
 

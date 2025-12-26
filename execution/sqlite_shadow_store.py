@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from execution.shadow_store import SHADOW_STORE_SCHEMA_VERSION, ShadowTradeRecord
+from execution.migrations import MigrationRunner, get_shadow_store_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,12 @@ class SQLiteShadowStore:
         self._local = threading.local()
         self._write_lock = threading.Lock()
 
-        # Initialize schema
-        self._init_schema()
+        # Initialize schema via migrations
+        self._init_migrations()
 
         logger.info(
             f"SQLiteShadowStore initialized: {db_path} "
-            f"(schema v{SHADOW_STORE_SCHEMA_VERSION}, db v{SQLITE_SCHEMA_VERSION})"
+            f"(record v{SHADOW_STORE_SCHEMA_VERSION})"
         )
 
     @property
@@ -141,19 +142,19 @@ class SQLiteShadowStore:
                 conn.rollback()
                 raise
 
-    def _init_schema(self) -> None:
-        """Initialize database schema."""
-        with self._transaction() as conn:
-            conn.execute(self.CREATE_TABLE_SQL)
-            for idx_sql in self.CREATE_INDEXES_SQL:
-                conn.execute(idx_sql)
-            conn.execute(self.SCHEMA_VERSION_TABLE_SQL)
+    def _init_migrations(self) -> None:
+        """Initialize database schema via migrations."""
+        runner = MigrationRunner(str(self._db_path))
+        
+        # Register shadow store migrations
+        for version, steps in get_shadow_store_migrations().items():
+            runner.add_migration(version, steps)
+            
+        # Run migrations
+        runner.run()
 
-            # Store schema version
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
-                ("sqlite_schema_version", str(SQLITE_SCHEMA_VERSION)),
-            )
+        # Update SHADOW_STORE_SCHEMA_VERSION in schema_meta (record schema vs db schema)
+        with self._transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
                 ("record_schema_version", SHADOW_STORE_SCHEMA_VERSION),

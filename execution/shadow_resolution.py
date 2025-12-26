@@ -9,6 +9,12 @@ from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 from execution.barriers import BarrierCalculator
 from observability.shadow_logging import shadow_trade_logger
 
+try:
+    from opentelemetry import trace
+    TRACING_ENABLED = True
+except ImportError:
+    TRACING_ENABLED = False
+
 
 # Candle array column indices (must match data/buffer.py CandleData.to_array)
 CANDLE_COL_OPEN = 0
@@ -31,6 +37,37 @@ class ShadowTradeResolver:
     Assumption: Trades are 1-candle duration (expiration is 1 minute for '1m' timeframe).
     """
 
+    @staticmethod
+    def _parse_timeframe_to_seconds(timeframe: str) -> int:
+        """
+        I03 Fix: Parse timeframe string to seconds.
+        
+        Args:
+            timeframe: Timeframe string like "1m", "5m", "15m", "1h"
+            
+        Returns:
+            Interval in seconds
+        """
+        timeframe = timeframe.lower().strip()
+        
+        multipliers = {
+            's': 1,      # seconds
+            'm': 60,     # minutes
+            'h': 3600,   # hours
+            'd': 86400,  # days
+        }
+        
+        # Extract number and unit
+        if len(timeframe) < 2:
+            return 60  # Default to 1 minute
+            
+        try:
+            number = int(timeframe[:-1])
+            unit = timeframe[-1]
+            return number * multipliers.get(unit, 60)
+        except (ValueError, KeyError):
+            return 60  # Default to 1 minute
+
     def __init__(
         self,
         shadow_store: ShadowTradeStore,
@@ -39,6 +76,7 @@ class ShadowTradeResolver:
         default_touch_barrier_pct: float = 0.005,
         default_range_barrier_pct: float = 0.003,
         staleness_threshold_minutes: int = 5,
+        timeframe: str = "1m",  # I03 Fix: Configurable timeframe
     ):
         """
         Initialize the resolver.
@@ -50,6 +88,7 @@ class ShadowTradeResolver:
             default_touch_barrier_pct: Default barrier percentage for TOUCH/NO_TOUCH if not in trade (0.005 = 0.5%).
             default_range_barrier_pct: Default barrier percentage for STAYS_BETWEEN if not in trade (0.003 = 0.3%).
             staleness_threshold_minutes: Max time past expiration before trade is flagged stale (default 5).
+            timeframe: Candle timeframe for historical fetch (e.g., "1m", "5m", "1h").
         """
         self.store = shadow_store
         self.duration = timedelta(minutes=duration_minutes)
@@ -59,6 +98,16 @@ class ShadowTradeResolver:
         self.staleness_threshold = timedelta(minutes=staleness_threshold_minutes)
         self.barrier_calculator = BarrierCalculator()
         self.logger = logging.getLogger(__name__)
+        
+        # I03 Fix: Parse and store interval
+        self.candle_interval_seconds = self._parse_timeframe_to_seconds(timeframe)
+        
+        if TRACING_ENABLED:
+            self.tracer = trace.get_tracer(__name__)
+        else:
+            self.tracer = None
+            
+        self.logger.info(f"ShadowTradeResolver initialized with {timeframe} ({self.candle_interval_seconds}s) interval")
 
     async def resolve_trades(
         self,
@@ -83,6 +132,25 @@ class ShadowTradeResolver:
         Returns:
             Number of trades resolved in this pass.
         """
+        from config.constants import CONTRACT_TYPES
+        
+        if self.tracer:
+            with self.tracer.start_as_current_span("shadow_resolver.resolve_trades") as span:
+                res = await self._resolve_trades_internal(current_price, current_time, high_price, low_price)
+                span.set_attribute("current_price", current_price)
+                span.set_attribute("resolved_count", res)
+                return res
+        else:
+            return await self._resolve_trades_internal(current_price, current_time, high_price, low_price)
+
+    async def _resolve_trades_internal(
+        self,
+        current_price: float,
+        current_time: datetime,
+        high_price: float | None = None,
+        low_price: float | None = None,
+    ) -> int:
+        """Internal resolution logic moved from resolve_trades for tracing wrapper."""
         from config.constants import CONTRACT_TYPES
         
         # Ensure current_time is aware
@@ -152,7 +220,7 @@ class ShadowTradeResolver:
                 candles = await self.client.get_historical_candles_by_range(
                     start_time=min_ts, 
                     end_time=max_ts, 
-                    interval=60 # Assuming 1m candles
+                    interval=self.candle_interval_seconds  # I03 Fix: Use configurable interval
                 )
                 
                 # Map candles by epoch

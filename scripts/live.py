@@ -55,6 +55,19 @@ from observability.model_health import ModelHealthMonitor
 from execution.shadow_resolution import ShadowTradeResolver
 from execution.real_trade_tracker import RealTradeTracker
 
+# I02: Checkpoint verification utility
+from tools.verify_checkpoint import verify_checkpoint
+
+# R01: OpenTelemetry tracing
+try:
+    from opentelemetry import trace
+    from opentelemetry.trace import Status, StatusCode
+    TRACING_ENABLED = True
+    tracer = trace.get_tracer(__name__)
+except ImportError:
+    TRACING_ENABLED = False
+    tracer = None
+
 
 from utils.logging_setup import setup_logging
 
@@ -251,6 +264,26 @@ async def run_live_trading(args):
             logger.error(f"Failed to inspect checkpoint: {e}")
             # Fall through - will try to load normally and might fail
     
+    # I02 Fix: Checkpoint verification before loading
+    if checkpoint_path and checkpoint_path.exists() and not getattr(args, 'skip_checkpoint_verify', False):
+        console_log("Verifying checkpoint integrity...", "MODEL")
+        try:
+            if not verify_checkpoint(checkpoint_path):
+                console_log("FATAL: Checkpoint verification failed!", "ERROR")
+                logger.critical(
+                    f"[I02] Checkpoint verification failed for {checkpoint_path}. "
+                    f"Use --skip-checkpoint-verify to bypass (not recommended)."
+                )
+                return 1
+            console_log("Checkpoint verification passed", "SUCCESS")
+        except Exception as e:
+            console_log(f"Checkpoint verification error: {e}", "ERROR")
+            logger.error(f"[I02] Checkpoint verification error: {e}")
+            return 1
+    elif getattr(args, 'skip_checkpoint_verify', False):
+        console_log("WARNING: Checkpoint verification skipped by user request", "WARN")
+        logger.warning("[I02] Checkpoint verification skipped via --skip-checkpoint-verify")
+    
     # Initialize model with correct architecture
     console_log("Loading neural network model...", "MODEL")
     model = DerivOmniModel(settings).to(device)
@@ -312,7 +345,8 @@ async def run_live_trading(args):
         shadow_store, 
         duration_minutes=settings.shadow_trade.duration_minutes,
         client=client,
-        staleness_threshold_minutes=settings.shadow_trade.staleness_threshold_minutes
+        staleness_threshold_minutes=settings.shadow_trade.staleness_threshold_minutes,
+        timeframe=settings.trading.timeframe,  # I03 Fix: Use configured timeframe
     )
 
     # Initialize Observability Monitors
@@ -921,174 +955,190 @@ async def run_inference(
     import time
 
     inference_start = time.perf_counter()
+    
+    # R01: Create span for entire inference cycle if tracing enabled
+    span = None
+    if TRACING_ENABLED and tracer:
+        span = tracer.start_span("run_inference")
+        span.set_attribute("device", str(device))
 
-    # CANONICAL FEATURE PROCESSING - extract arrays from buffer
-    t_np = buffer.get_ticks_array()
-    c_np = buffer.get_candles_array()
+    try:
+        # CANONICAL FEATURE PROCESSING - extract arrays from buffer
+        t_np = buffer.get_ticks_array()
+        c_np = buffer.get_candles_array()
 
-    features = feature_builder.build(ticks=t_np, candles=c_np)
+        features = feature_builder.build(ticks=t_np, candles=c_np)
 
-    t_tensor = features["ticks"].unsqueeze(0).to(device)
-    c_tensor = features["candles"].unsqueeze(0).to(device)
-    v_tensor = features["vol_metrics"].unsqueeze(0).to(device)
+        t_tensor = features["ticks"].unsqueeze(0).to(device)
+        c_tensor = features["candles"].unsqueeze(0).to(device)
+        v_tensor = features["vol_metrics"].unsqueeze(0).to(device)
 
-    # Inference with timing
-    with torch.no_grad():
-        # print("Running model prediction...", flush=True) # Un-comment if needed
-        # C01: Offload synchronous model inference to thread pool to avoid blocking event loop
-        loop = asyncio.get_running_loop()
-        from functools import partial
-        
-        # Run prediction in executor
-        probs = await loop.run_in_executor(
-            None, 
-            partial(model.predict_probs, t_tensor, c_tensor, v_tensor)
-        )
-
-        # CRITICAL: Get reconstruction error for regime veto assessment
-        # This allows the regime authority to block trades during anomalous conditions
-        # Also offload this if it's heavy, though usually lighter than predict_probs
-        reconstruction_error = await loop.run_in_executor(
-            None,
-            lambda: model.get_volatility_anomaly_score(v_tensor).item()
-        )
-
-    # Record inference latency
-    inference_latency = time.perf_counter() - inference_start
-    metrics.record_inference_latency(inference_latency)
-
-    # Record reconstruction error gauge
-    metrics.set_reconstruction_error(reconstruction_error)
-
-    sample_probs = {k: v.item() for k, v in probs.items()}
-    logger.info(f"Predictions: {sample_probs}")
-    logger.info(
-        f"Reconstruction error: {reconstruction_error:.4f} (latency: {inference_latency * 1000:.1f}ms)"
-    )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # CALIBRATION MONITORING: Track errors for graceful degradation
-    # If errors are persistently high, activate shadow-only mode
-    # ══════════════════════════════════════════════════════════════════════════
-    if calibration_monitor is not None:
-        calibration_monitor.record(reconstruction_error)
-        calibration_monitor.recover_if_healthy()
-
-    # Get entry price (last completed candle close for accurate context)
-    # Candle format: [open, high, low, close, volume, timestamp]
-    entry_price = float(c_np[-1, 3]) if len(c_np) > 0 else float(t_np[-1])
-
-    # Decision with FULL CONTEXT CAPTURE via process_with_context
-    # This stores tick/candle windows in ShadowTradeStore for:
-    #   1. Accurate outcome resolution
-    #   2. Retraining on production data
-    real_trades = await engine.process_with_context(
-        probs=sample_probs,
-        reconstruction_error=reconstruction_error,
-        tick_window=t_np,
-        candle_window=c_np,
-        entry_price=entry_price,
-        market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()},
-    )
-
-    # Record regime assessment (check engine statistics for last decision)
-    stats = engine.get_statistics()
-    if stats.get("vetoed_count", 0) > 0:
-        # Check if this inference was vetoed
-        metrics.record_regime_assessment("VETO")
-    else:
-        metrics.record_regime_assessment("TRUSTED")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SHADOW-ONLY MODE: If calibration is poor, skip real trades but keep shadow
-    # This protects the account while still learning from production data
-    # ══════════════════════════════════════════════════════════════════════════
-    if calibration_monitor is not None and calibration_monitor.should_skip_real_trades():
-        if real_trades:
-            logger.warning(
-                f"[SHADOW-ONLY] Skipping {len(real_trades)} real trade(s) due to calibration issues. "
-                f"Trades logged as shadow only."
-            )
-            metrics.record_trade_attempt(outcome="blocked_shadow_only", contract_type="all")
-        real_trades = []  # Clear real trades, but shadows are already logged
-
-    logger.info(f"Real trades: {len(real_trades)}")
-
-    # Execute trades via abstraction (broker-isolated)
-    for signal in real_trades:
-        logger.info(f"EXECUTING: {signal}")
-        
-        # ATOMIC EXECUTION SAFETY: Record intent BEFORE API call
-        # If app crashes after API succeeds but before confirmation,
-        # the trade will be in ATTEMPTING state for investigation
-        intent_id = None
-        stake = settings.trading.stake_amount
-        contract_type = getattr(signal, "contract_type", "unknown")
-        
-        if trade_tracker and hasattr(trade_tracker, '_store'):
-            import uuid
-            intent_id = f"intent_{uuid.uuid4().hex[:16]}"
-            trade_tracker._store.prepare_trade_intent(
-                intent_id=intent_id,
-                direction=signal.direction,
-                entry_price=entry_price,
-                stake=stake,
-                probability=signal.probability,
-                contract_type=str(contract_type),
-            )
-        
-        exec_start = time.perf_counter()
-        result = await executor.execute(signal)
-        exec_latency = time.perf_counter() - exec_start
-
-        # Record execution latency
-        metrics.record_execution_latency(exec_latency)
-
-        if result.success:
-            logger.info(f"Trade executed: contract_id={result.contract_id}")
-            metrics.record_trade_attempt(outcome="executed", contract_type=contract_type)
+        # Inference with timing
+        with torch.no_grad():
+            # print("Running model prediction...", flush=True) # Un-comment if needed
+            # C01: Offload synchronous model inference to thread pool to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            from functools import partial
             
-            # ATOMIC EXECUTION SAFETY: Confirm trade with real contract ID
-            if trade_tracker and result.contract_id:
-                if intent_id:
-                    # Update ATTEMPTING -> CONFIRMED with real contract_id
-                    trade_tracker._store.confirm_trade(intent_id, result.contract_id)
-                
-                # Continue with normal trade registration flow
-                await trade_tracker.register_trade(
-                    contract_id=result.contract_id,
+            # Run prediction in executor
+            probs = await loop.run_in_executor(
+                None, 
+                partial(model.predict_probs, t_tensor, c_tensor, v_tensor)
+            )
+
+            # CRITICAL: Get reconstruction error for regime veto assessment
+            # This allows the regime authority to block trades during anomalous conditions
+            # Also offload this if it's heavy, though usually lighter than predict_probs
+            reconstruction_error = await loop.run_in_executor(
+                None,
+                lambda: model.get_volatility_anomaly_score(v_tensor).item()
+            )
+
+            if span:
+                span.set_attribute("reconstruction_error", reconstruction_error)
+
+        # Record inference latency
+        inference_latency = time.perf_counter() - inference_start
+        metrics.record_inference_latency(inference_latency)
+
+        # Record reconstruction error gauge
+        metrics.set_reconstruction_error(reconstruction_error)
+
+        sample_probs = {k: v.item() for k, v in probs.items()}
+        logger.info(f"Predictions: {sample_probs}")
+        logger.info(
+            f"Reconstruction error: {reconstruction_error:.4f} (latency: {inference_latency * 1000:.1f}ms)"
+        )
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # CALIBRATION MONITORING: Track errors for graceful degradation
+        # If errors are persistently high, activate shadow-only mode
+        # ══════════════════════════════════════════════════════════════════════════
+        if calibration_monitor is not None:
+            calibration_monitor.record(reconstruction_error)
+            calibration_monitor.recover_if_healthy()
+
+        # Get entry price (last completed candle close for accurate context)
+        # Candle format: [open, high, low, close, volume, timestamp]
+        entry_price = float(c_np[-1, 3]) if len(c_np) > 0 else float(t_np[-1])
+
+        # Decision with FULL CONTEXT CAPTURE via process_with_context
+        # This stores tick/candle windows in ShadowTradeStore for:
+        #   1. Accurate outcome resolution
+        #   2. Retraining on production data
+        real_trades = await engine.process_with_context(
+            probs=sample_probs,
+            reconstruction_error=reconstruction_error,
+            tick_window=t_np,
+            candle_window=c_np,
+            entry_price=entry_price,
+            market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()},
+        )
+
+        # Record regime assessment (check engine statistics for last decision)
+        stats = engine.get_statistics()
+        if stats.get("vetoed_count", 0) > 0:
+            # Check if this inference was vetoed
+            metrics.record_regime_assessment("VETO")
+        else:
+            metrics.record_regime_assessment("TRUSTED")
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # SHADOW-ONLY MODE: If calibration is poor, skip real trades but keep shadow
+        # This protects the account while still learning from production data
+        # ══════════════════════════════════════════════════════════════════════════
+        if calibration_monitor is not None and calibration_monitor.should_skip_real_trades():
+            if real_trades:
+                logger.warning(
+                    f"[SHADOW-ONLY] Skipping {len(real_trades)} real trade(s) due to calibration issues. "
+                    f"Trades logged as shadow only."
+                )
+                metrics.record_trade_attempt(outcome="blocked_shadow_only", contract_type="all")
+            real_trades = []  # Clear real trades, but shadows are already logged
+
+        logger.info(f"Real trades: {len(real_trades)}")
+
+        # Execute trades via abstraction (broker-isolated)
+        for signal in real_trades:
+            logger.info(f"EXECUTING: {signal}")
+            
+            # ATOMIC EXECUTION SAFETY: Record intent BEFORE API call
+            # If app crashes after API succeeds but before confirmation,
+            # the trade will be in ATTEMPTING state for investigation
+            intent_id = None
+            stake = settings.trading.stake_amount
+            contract_type = getattr(signal, "contract_type", "unknown")
+            
+            if trade_tracker and hasattr(trade_tracker, '_store'):
+                import uuid
+                intent_id = f"intent_{uuid.uuid4().hex[:16]}"
+                trade_tracker._store.prepare_trade_intent(
+                    intent_id=intent_id,
                     direction=signal.direction,
                     entry_price=entry_price,
                     stake=stake,
                     probability=signal.probability,
                     contract_type=str(contract_type),
                 )
-        else:
-            logger.error(f"Trade failed: {result.error}")
             
-            # ATOMIC EXECUTION SAFETY: Remove ATTEMPTING record on failure
-            # The trade never executed, so no phantom risk
-            if intent_id and trade_tracker and hasattr(trade_tracker, '_store'):
-                trade_tracker._store.remove_trade(intent_id)
-            
-            # Categorize the failure
-            if "rate limit" in (result.error or "").lower():
-                metrics.record_trade_attempt(
-                    outcome="blocked_rate_limit", contract_type=contract_type
-                )
-            elif "kill switch" in (result.error or "").lower():
-                metrics.record_trade_attempt(
-                    outcome="blocked_kill_switch", contract_type=contract_type
-                )
-            elif "loss limit" in (result.error or "").lower():
-                metrics.record_trade_attempt(outcome="blocked_pnl_cap", contract_type=contract_type)
-            else:
-                metrics.record_trade_attempt(outcome="failed", contract_type=contract_type)
+            exec_start = time.perf_counter()
+            result = await executor.execute(signal)
+            exec_latency = time.perf_counter() - exec_start
 
-    # Return reconstruction error for startup validation if requested
-    if return_recon_error:
-        return reconstruction_error
-    return None
+            # Record execution latency
+            metrics.record_execution_latency(exec_latency)
+
+            if result.success:
+                logger.info(f"Trade executed: contract_id={result.contract_id}")
+                metrics.record_trade_attempt(outcome="executed", contract_type=contract_type)
+                
+                # ATOMIC EXECUTION SAFETY: Confirm trade with real contract ID
+                if trade_tracker and result.contract_id:
+                    if intent_id:
+                        # Update ATTEMPTING -> CONFIRMED with real contract_id
+                        trade_tracker._store.confirm_trade(intent_id, result.contract_id)
+                    
+                    # Continue with normal trade registration flow
+                    await trade_tracker.register_trade(
+                        contract_id=result.contract_id,
+                        direction=signal.direction,
+                        entry_price=entry_price,
+                        stake=stake,
+                        probability=signal.probability,
+                        contract_type=str(contract_type),
+                    )
+            else:
+                logger.error(f"Trade failed: {result.error}")
+                
+                # ATOMIC EXECUTION SAFETY: Remove ATTEMPTING record on failure
+                # The trade never executed, so no phantom risk
+                if intent_id and trade_tracker and hasattr(trade_tracker, '_store'):
+                    trade_tracker._store.remove_trade(intent_id)
+                
+                # Categorize the failure
+                if "rate limit" in (result.error or "").lower():
+                    metrics.record_trade_attempt(
+                        outcome="blocked_rate_limit", contract_type=contract_type
+                    )
+                elif "kill switch" in (result.error or "").lower():
+                    metrics.record_trade_attempt(
+                        outcome="blocked_kill_switch", contract_type=contract_type
+                    )
+                elif "loss limit" in (result.error or "").lower():
+                    metrics.record_trade_attempt(outcome="blocked_pnl_cap", contract_type=contract_type)
+                else:
+                    metrics.record_trade_attempt(outcome="failed", contract_type=contract_type)
+
+        # Return reconstruction error for startup validation if requested
+        if return_recon_error:
+            return reconstruction_error
+        return None
+        
+    finally:
+        # R01: Close span with final attributes
+        if span:
+            span.set_attribute("inference_latency_ms", (time.perf_counter() - inference_start) * 1000)
+            span.end()
 
 
 if __name__ == "__main__":
@@ -1104,6 +1154,11 @@ if __name__ == "__main__":
     parser.add_argument("--test", action="store_true", help="Test connection only, don't trade")
     parser.add_argument(
         "--shadow-only", action="store_true", help="Run in shadow mode (no real trades)"
+    )
+    # I02: Checkpoint verification bypass (for development/debugging only)
+    parser.add_argument(
+        "--skip-checkpoint-verify", action="store_true", 
+        help="Skip checkpoint verification (not recommended for production)"
     )
     # Compounding / Position Sizing Arguments
     parser.add_argument(

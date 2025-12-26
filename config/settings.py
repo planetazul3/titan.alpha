@@ -120,6 +120,11 @@ class ModelHyperparams(BaseModel):
     fusion_dropout: float = Field(default=0.2, description="Dropout rate for expert fusion layer", ge=0.0, lt=1.0)
     head_dropout: float = Field(default=0.1, description="Dropout rate for contract heads", ge=0.0, lt=1.0)
     
+    # R03: Externalize Embedding Dimensions
+    temporal_embed_dim: int = Field(default=64, description="Temporal expert embedding dimension", gt=0)
+    spatial_embed_dim: int = Field(default=64, description="Spatial expert embedding dimension", gt=0)
+    fusion_output_dim: int = Field(default=256, description="Fusion layer output dimension", gt=0)
+    
     regime_caution_threshold: float = Field(default=0.2, description="Regime caution threshold", gt=0)
     regime_veto_threshold: float = Field(default=0.5, description="Regime veto threshold", gt=0)
 
