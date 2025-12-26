@@ -29,6 +29,7 @@ Example:
 """
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -366,6 +367,7 @@ class CompoundingPositionSizer:
         # State tracking
         self._current_streak = 0
         self._next_stake = base_stake
+        self._lock = threading.Lock()
     
     def compute_stake(
         self,
@@ -382,34 +384,35 @@ class CompoundingPositionSizer:
           - If yes, use the compounded _next_stake (limited by caps).
           - If no, RESET to base_stake (confidence not high enough to risk profits).
         """
-        # 1. Check Confidence Safety Reset
-        # If we have profits on the table but the model is unsure, take the profit now.
-        if self._current_streak > 0 and probability < self.min_confidence_to_compound:
-            logger.info(
-                f"Compounding reset due to low confidence ({probability:.2f} < {self.min_confidence_to_compound}). "
-                f"Banking profits from {self._current_streak} streak."
-            )
-            self.reset_streak()
-            # Note: reset_streak sets _next_stake to base_stake
+        with self._lock:
+            # 1. Check Confidence Safety Reset
+            # If we have profits on the table but the model is unsure, take the profit now.
+            if self._current_streak > 0 and probability < self.min_confidence_to_compound:
+                logger.info(
+                    f"Compounding reset due to low confidence ({probability:.2f} < {self.min_confidence_to_compound}). "
+                    f"Banking profits from {self._current_streak} streak."
+                )
+                self._reset_streak_locked()
+                # Note: reset_streak sets _next_stake to base_stake
 
-        # 2. Check Max Stake Cap (Safety)
-        final_stake = min(self._next_stake, self.max_stake_cap)
-        if final_stake < self._next_stake:
-            reason = f"Streak {self._current_streak}/{self.max_consecutive_wins} (Capped at ${self.max_stake_cap})"
-        else:
-            if self._current_streak == 0:
-                reason = f"Base Stake (Streak 0)"
+            # 2. Check Max Stake Cap (Safety)
+            final_stake = min(self._next_stake, self.max_stake_cap)
+            if final_stake < self._next_stake:
+                reason = f"Streak {self._current_streak}/{self.max_consecutive_wins} (Capped at ${self.max_stake_cap})"
             else:
-                reason = f"Compounding: Streak {self._current_streak}/{self.max_consecutive_wins} (Prob {probability:.2f})"
+                if self._current_streak == 0:
+                    reason = f"Base Stake (Streak 0)"
+                else:
+                    reason = f"Compounding: Streak {self._current_streak}/{self.max_consecutive_wins} (Prob {probability:.2f})"
 
-        return PositionSizeResult(
-            stake=round(final_stake, 2),
-            kelly_fraction=0.0, # Not applicable
-            adjusted_fraction=0.0,
-            confidence_multiplier=1.0,
-            drawdown_multiplier=1.0,
-            reason=reason,
-        )
+            return PositionSizeResult(
+                stake=round(final_stake, 2),
+                kelly_fraction=0.0, # Not applicable
+                adjusted_fraction=0.0,
+                confidence_multiplier=1.0,
+                drawdown_multiplier=1.0,
+                reason=reason,
+            )
 
     def record_outcome(self, pnl: float, won: bool) -> None:
         """
@@ -419,48 +422,55 @@ class CompoundingPositionSizer:
             pnl: Profit/Loss amount (positive for win, negative for loss).
             won: Boolean indicating win status.
         """
-        if not won:
-            # Loss: Reset immediately to base stake
-            logger.info(f"Streak broken at {self._current_streak}. Resetting to base stake.")
-            self.reset_streak()
-            return
+        with self._lock:
+            if not won:
+                # Loss: Reset immediately to base stake
+                logger.info(f"Streak broken at {self._current_streak}. Resetting to base stake.")
+                self._reset_streak_locked()
+                return
 
-        # Trade Won
-        current_stake_used = self._next_stake
-        
-        # Increment streak
-        self._current_streak += 1
-
-        # Check if we hit the limit
-        if self._current_streak >= self.max_consecutive_wins:
-            logger.info(f"Max streak of {self.max_consecutive_wins} reached! Banking profits. Resetting.")
-            self.reset_streak()
-        else:
-            # Calculate next stake
-            if self.streak_multiplier:
-                # Explicit multiplier (e.g. 2x, 1.5x)
-                # Next stake = Base Stake * (Multiplier ^ Streak) ??? 
-                # OR is it Previous Stake * Multiplier? -> "2x options". Usually means 2x previous.
-                # Standard implementation: Previous * Multiplier.
-                self._next_stake = current_stake_used * self.streak_multiplier
-            else:
-                # Reinvest Principle + Profit (Standard Compounding)
-                # New Stake = Old Stake + Profit (P&L)
-                self._next_stake = current_stake_used + pnl
+            # Trade Won
+            current_stake_used = self._next_stake
             
-            logger.debug(
-                f"Win recorded. Compounding to level {self._current_streak}. "
-                f"Next stake: ${self._next_stake:.2f}"
-            )
+            # Increment streak
+            self._current_streak += 1
+
+            # Check if we hit the limit
+            if self._current_streak >= self.max_consecutive_wins:
+                logger.info(f"Max streak of {self.max_consecutive_wins} reached! Banking profits. Resetting.")
+                self._reset_streak_locked()
+            else:
+                # Calculate next stake
+                if self.streak_multiplier:
+                    # Explicit multiplier (e.g. 2x, 1.5x)
+                    # Next stake = Base Stake * (Multiplier ^ Streak) ??? 
+                    # OR is it Previous Stake * Multiplier? -> "2x options". Usually means 2x previous.
+                    # Standard implementation: Previous * Multiplier.
+                    self._next_stake = current_stake_used * self.streak_multiplier
+                else:
+                    # Reinvest Principle + Profit (Standard Compounding)
+                    # New Stake = Old Stake + Profit (P&L)
+                    self._next_stake = current_stake_used + pnl
+                
+                logger.debug(
+                    f"Win recorded. Compounding to level {self._current_streak}. "
+                    f"Next stake: ${self._next_stake:.2f}"
+                )
 
     def reset_streak(self) -> None:
         """Force reset to base settings."""
+        with self._lock:
+            self._reset_streak_locked()
+
+    def _reset_streak_locked(self) -> None:
+        """Internal uncached reset."""
         self._current_streak = 0
         self._next_stake = self.base_stake
 
     def get_current_streak(self) -> int:
         """Return current win streak count."""
-        return self._current_streak
+        with self._lock:
+            return self._current_streak
     
     def suggest_stake_for_signal(self, signal: Any, **kwargs) -> float:
         """Convenience method."""
@@ -506,46 +516,49 @@ class MartingalePositionSizer:
         
         self._loss_streak = 0
         self._next_stake = base_stake
+        self._lock = threading.Lock()
 
     def compute_stake(self, probability: float = 0.5, **kwargs) -> PositionSizeResult:
         """Compute stake based on loss streak."""
         
-        # Apply strict max stake cap
-        final_stake = min(self._next_stake, self.max_stake_cap)
-        if final_stake < self._next_stake:
-            reason = f"Martingale (Loss Streak {self._loss_streak}) - Capped at ${self.max_stake_cap}"
-        else:
-            if self._loss_streak == 0:
-                reason = "Martingale Base Stake"
+        with self._lock:
+            # Apply strict max stake cap
+            final_stake = min(self._next_stake, self.max_stake_cap)
+            if final_stake < self._next_stake:
+                reason = f"Martingale (Loss Streak {self._loss_streak}) - Capped at ${self.max_stake_cap}"
             else:
-                reason = f"Martingale Recovery (Loss Streak {self._loss_streak})"
+                if self._loss_streak == 0:
+                    reason = "Martingale Base Stake"
+                else:
+                    reason = f"Martingale Recovery (Loss Streak {self._loss_streak})"
 
-        return PositionSizeResult(
-            stake=round(final_stake, 2),
-            kelly_fraction=0.0,
-            adjusted_fraction=0.0,
-            confidence_multiplier=1.0,
-            drawdown_multiplier=1.0,
-            reason=reason,
-        )
+            return PositionSizeResult(
+                stake=round(final_stake, 2),
+                kelly_fraction=0.0,
+                adjusted_fraction=0.0,
+                confidence_multiplier=1.0,
+                drawdown_multiplier=1.0,
+                reason=reason,
+            )
 
     def record_outcome(self, pnl: float, won: bool) -> None:
         """Update state: Reset on Win, Increase on Loss."""
-        if won:
-            logger.info(f"Martingale: Win at streak {self._loss_streak}. Resetting to base.")
-            self._loss_streak = 0
-            self._next_stake = self.base_stake
-        else:
-            # Loss
-            self._loss_streak += 1
-            if self._loss_streak >= self.max_streak:
-                logger.info(f"Martingale: Max loss streak {self.max_streak} hit. Resetting to base (Stop Loss).")
+        with self._lock:
+            if won:
+                logger.info(f"Martingale: Win at streak {self._loss_streak}. Resetting to base.")
                 self._loss_streak = 0
                 self._next_stake = self.base_stake
             else:
-                # Double down
-                self._next_stake = self._next_stake * self.multiplier
-                logger.info(f"Martingale: Loss recorded. Increasing stake to ${self._next_stake:.2f}")
+                # Loss
+                self._loss_streak += 1
+                if self._loss_streak >= self.max_streak:
+                    logger.info(f"Martingale: Max loss streak {self.max_streak} hit. Resetting to base (Stop Loss).")
+                    self._loss_streak = 0
+                    self._next_stake = self.base_stake
+                else:
+                    # Double down
+                    self._next_stake = self._next_stake * self.multiplier
+                    logger.info(f"Martingale: Loss recorded. Increasing stake to ${self._next_stake:.2f}")
 
     def suggest_stake_for_signal(self, signal: Any, **kwargs) -> float:
         """Convenience method."""
