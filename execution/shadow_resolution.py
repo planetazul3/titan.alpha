@@ -29,10 +29,6 @@ class ShadowTradeResolver:
     Assumption: Trades are 1-candle duration (expiration is 1 minute for '1m' timeframe).
     """
 
-    # Maximum time past expiration where we trust current_price as valid.
-    # Trades expiring longer than this ago are flagged as unresolvable without history.
-    STALENESS_THRESHOLD = timedelta(minutes=5)
-
     def __init__(
         self,
         shadow_store: ShadowTradeStore,
@@ -40,6 +36,7 @@ class ShadowTradeResolver:
         client: Any = None,
         default_touch_barrier_pct: float = 0.005,
         default_range_barrier_pct: float = 0.003,
+        staleness_threshold_minutes: int = 5,
     ):
         """
         Initialize the resolver.
@@ -50,12 +47,14 @@ class ShadowTradeResolver:
             client: DerivClient instance for fetching historical data (optional).
             default_touch_barrier_pct: Default barrier percentage for TOUCH/NO_TOUCH if not in trade (0.005 = 0.5%).
             default_range_barrier_pct: Default barrier percentage for STAYS_BETWEEN if not in trade (0.003 = 0.3%).
+            staleness_threshold_minutes: Max time past expiration before trade is flagged stale (default 5).
         """
         self.store = shadow_store
         self.duration = timedelta(minutes=duration_minutes)
         self.client = client
         self.default_touch_barrier_pct = default_touch_barrier_pct
         self.default_range_barrier_pct = default_range_barrier_pct
+        self.staleness_threshold = timedelta(minutes=staleness_threshold_minutes)
         self.logger = logging.getLogger(__name__)
 
     async def resolve_trades(self, current_price: float, current_time: datetime) -> int:
@@ -93,7 +92,7 @@ class ShadowTradeResolver:
             
             if current_time >= expiration_time:
                 staleness = current_time - expiration_time
-                if staleness > self.STALENESS_THRESHOLD:
+                if staleness > self.staleness_threshold:
                     # Collect as potentially stale
                     stale_trades.append(trade)
                 else:

@@ -246,6 +246,9 @@ class ShadowTradeConfig(BaseModel):
     min_probability_track: float = Field(
         default=0.45, description="Minimum probability to track shadow trade", ge=0.0, le=1.0
     )
+    staleness_threshold_minutes: int = Field(
+        default=5, description="Trades older than this are flagged as stale/unresolvable", ge=1, le=60
+    )
 
 
 class HeartbeatConfig(BaseModel):
