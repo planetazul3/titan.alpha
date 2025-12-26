@@ -186,6 +186,17 @@ async def run_live_trading(args):
     logger.info(f"Starting live trading for {settings.trading.symbol}")
     logger.info(f"Device: {device}")
 
+    # M13: Disk Usage Management
+    # Perform cleanup at startup to prevent unbounded growth
+    try:
+        from utils.logging_setup import cleanup_logs
+        deleted_logs = cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
+        if deleted_logs > 0:
+            console_log(f"Cleaned up {deleted_logs} old log files", "INFO")
+            logger.info(f"Deleted {deleted_logs} old log files (> {settings.system.log_retention_days} days)")
+    except Exception as e:
+        logger.error(f"Log cleanup failed: {e}")
+
     # ══════════════════════════════════════════════════════════════════════
     # STRUCTURED METRICS - for production observability
     # Records: inference latency, trade outcomes, regime assessments, P&L
@@ -289,6 +300,15 @@ async def run_live_trading(args):
     # SQLite-backed shadow store for FULL CONTEXT CAPTURE
     # This enables the continual learning pipeline by storing tick/candle windows
     shadow_store = SQLiteShadowStore(Path("data_cache/shadow_trades.db"))
+    
+    # M13: DB Pruning
+    try:
+        pruned_count = shadow_store.prune(retention_days=settings.system.db_retention_days)
+        if pruned_count > 0:
+             console_log(f"Pruned {pruned_count} old shadow records", "INFO")
+    except Exception as e:
+        logger.error(f"DB pruning failed: {e}")
+        
     console_log("Shadow store ready (SQLite)", "SUCCESS")
 
     # Regime veto authority (can block all trades during anomalous conditions)

@@ -56,3 +56,37 @@ def setup_logging(script_name: str = "app", log_level: int = logging.INFO) -> tu
     logger.info(f"Logging initialized. Writing to console and {log_file}")
     
     return logger, log_dir, log_file
+
+
+def cleanup_logs(log_dir: Path, retention_days: int = 7) -> int:
+    """
+    Remove log files older than retention period.
+    
+    Args:
+        log_dir: Directory containing logs
+        retention_days: Retention period in days
+        
+    Returns:
+        Number of files deleted
+    """
+    import time
+    
+    if not log_dir.exists():
+        return 0
+        
+    cutoff_time = time.time() - (retention_days * 86400)
+    deleted_count = 0
+    
+    try:
+        for log_file in log_dir.glob("*.log"):
+            try:
+                if log_file.is_file() and log_file.stat().st_mtime < cutoff_time:
+                    log_file.unlink()
+                    deleted_count += 1
+            except Exception as e:
+                # Log to stderr since logger might not be setup or is restricted
+                print(f"Failed to delete old log {log_file}: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"Error during log cleanup: {e}", file=sys.stderr)
+        
+    return deleted_count

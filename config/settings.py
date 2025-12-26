@@ -302,6 +302,22 @@ class ObservabilityConfig(BaseModel):
     )
 
 
+class SystemConfig(BaseModel):
+    """System resource management configuration.
+    
+    Attributes:
+        log_retention_days: Number of days to keep log files
+        db_retention_days: Number of days to keep shadow trade records
+    """
+    
+    log_retention_days: int = Field(
+        default=7, description="Log file retention in days", ge=1, le=365
+    )
+    db_retention_days: int = Field(
+        default=30, description="Database record retention in days", ge=1, le=365
+    )
+
+
 class Settings(BaseSettings):
     """
     Main application settings loaded from environment variables.
@@ -335,6 +351,7 @@ class Settings(BaseSettings):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    system: SystemConfig = Field(default_factory=SystemConfig)
 
     environment: str = Field(default="development", description="Deployment environment")
     seed: int = Field(default=DEFAULT_SEED, description="Random seed for reproducibility")

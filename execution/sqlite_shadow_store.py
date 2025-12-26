@@ -287,6 +287,40 @@ class SQLiteShadowStore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self.query(**kwargs))
 
+    def prune(self, retention_days: int = 30) -> int:
+        """
+        Prune records older than retention period.
+        
+        Args:
+            retention_days: Number of days to keep records
+            
+        Returns:
+            Number of deleted records
+        """
+        from datetime import timedelta
+        
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        cutoff_iso = cutoff_date.isoformat()
+        
+        with self._transaction() as conn:
+            # Delete old records
+            cursor = conn.execute(
+                "DELETE FROM shadow_trades WHERE timestamp < ?", 
+                (cutoff_iso,)
+            )
+            deleted_count = cursor.rowcount
+            
+        # Reclaim space
+        if deleted_count > 0:
+            try:
+                with self._get_connection() as conn:
+                    conn.execute("VACUUM")
+                logger.info(f"Pruned {deleted_count} shadow trades older than {retention_days} days")
+            except Exception as e:
+                logger.warning(f"Failed to VACUUM after prune: {e}")
+                
+        return deleted_count
+
     def query(
         self,
         start: datetime | None = None,
