@@ -299,7 +299,7 @@ async def run_live_trading(args):
 
     # SQLite-backed shadow store for FULL CONTEXT CAPTURE
     # This enables the continual learning pipeline by storing tick/candle windows
-    shadow_store = SQLiteShadowStore(Path("data_cache/shadow_trades.db"))
+    shadow_store = SQLiteShadowStore(Path(settings.system.system_db_path))
     
     # M13: DB Pruning
     try:
@@ -497,7 +497,8 @@ async def run_live_trading(args):
 
         # State file for crash recovery (prevents bypass of risk limits via restarts)
         # Using SQLite for ACID compliance
-        safety_state_file = Path("data_cache/safety_state.db")
+        # L05: Unified DB path to prevent split-brain state
+        safety_state_file = Path(settings.system.system_db_path)
 
         # C06: Inject stake resolver for safety checks
         def stake_resolver(symbol: str, metadata: dict) -> float:

@@ -40,6 +40,8 @@ class SQLiteSafetyStateStore:
         """Create tables if they don't exist."""
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS kv_store (
                         key TEXT PRIMARY KEY,
@@ -64,6 +66,7 @@ class SQLiteSafetyStateStore:
         """Get simple key-value pair."""
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
                 cursor = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
                 row = cursor.fetchone()
                 return row[0] if row else default
@@ -153,6 +156,7 @@ class SQLiteSafetyStateStore:
         """Persist risk metrics."""
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
                 ts = time.time()
                 data = [
                     ("risk_current_drawdown", str(drawdown), ts),

@@ -316,6 +316,9 @@ class SystemConfig(BaseModel):
     db_retention_days: int = Field(
         default=30, description="Database record retention in days", ge=1, le=365
     )
+    system_db_path: str = Field(
+        default="data_cache/trading_state.db", description="Unified system database path"
+    )
 
 
 class Settings(BaseSettings):
