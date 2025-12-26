@@ -576,14 +576,9 @@ async def run_live_trading(args):
 
         async def process_candles():
             """Process candle events from normalized MarketEventBus."""
-            import time  # For cooldown timing
             
             nonlocal candle_count, inference_count
             first_candle = True
-            
-            # Inference cooldown
-            inference_cooldown_seconds = 60
-            last_inference_time = 0.0
             
             async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
                 try:
@@ -610,11 +605,6 @@ async def run_live_trading(args):
                         )
                         first_candle = False
 
-                    # Check if cooldown has passed since last inference
-                    current_time = time.time()
-                    time_since_last_inference = current_time - last_inference_time
-                    cooldown_ready = time_since_last_inference >= inference_cooldown_seconds
-                    
                     # H07: Stale Data Check
                     # Prevent trading on old data if system lags
                     now_utc = datetime.now(timezone.utc)
@@ -628,11 +618,12 @@ async def run_live_trading(args):
                         console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
                         continue
 
-                    # Run inference only when: candle closed + buffer ready + cooldown passed
-                    if is_new_candle and buffer.is_ready() and cooldown_ready:
+                    # Run inference only when: candle closed + buffer ready
+                    # M01: Removed flaky wall-clock cooldown. Event-driven is_new_candle is sufficient.
+                    if is_new_candle and buffer.is_ready():
                         console_log(
                             f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
-                            f"(cooldown: {time_since_last_inference:.1f}s, latency: {latency:.1f}s)",
+                            f"(latency: {latency:.1f}s)",
                             "MODEL",
                         )
                         logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
@@ -651,7 +642,6 @@ async def run_live_trading(args):
                                 trade_tracker=real_trade_tracker,
                             )
                             inference_count += 1
-                            last_inference_time = current_time  # Reset cooldown
                         except Exception as inf_e:
                             logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
                             metrics.record_error("inference_failure")
