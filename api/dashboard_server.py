@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.models.responses import (
@@ -29,6 +29,8 @@ from api.models.responses import (
     ShadowTradeStats,
     TradingMetrics,
 )
+from api.auth import get_api_key
+from fastapi import Depends
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -294,7 +296,7 @@ app.add_middleware(
 # =============================================================================
 
 
-@app.get("/api/health", response_model=HealthResponse)
+@app.get("/api/health", response_model=HealthResponse, dependencies=[Depends(get_api_key)])
 async def health_check():
     """Health check endpoint."""
     return HealthResponse(
@@ -303,7 +305,7 @@ async def health_check():
     )
 
 
-@app.get("/api/metrics/current", response_model=TradingMetrics)
+@app.get("/api/metrics/current", response_model=TradingMetrics, dependencies=[Depends(get_api_key)])
 async def get_metrics():
     """Get current trading metrics snapshot."""
     shadow_stats = get_shadow_trade_stats()
@@ -317,7 +319,7 @@ async def get_metrics():
     )
 
 
-@app.get("/api/shadow-trades", response_model=ShadowTradeList)
+@app.get("/api/shadow-trades", response_model=ShadowTradeList, dependencies=[Depends(get_api_key)])
 async def get_shadow_trades(limit: int = 100, offset: int = 0, before: str | None = None):
     """
     Get recent shadow trades.
@@ -386,7 +388,7 @@ async def get_shadow_trades(limit: int = 100, offset: int = 0, before: str | Non
         return ShadowTradeList(trades=[], count=0)
 
 
-@app.get("/api/shadow-trades/stats")
+@app.get("/api/shadow-trades/stats", dependencies=[Depends(get_api_key)])
 async def get_shadow_stats_by_contract():
     """Get shadow trade statistics grouped by contract type."""
     try:
@@ -422,7 +424,7 @@ async def get_shadow_stats_by_contract():
         return {"by_contract_type": {}, "error": str(e)}
 
 
-@app.get("/api/safety/state")
+@app.get("/api/safety/state", dependencies=[Depends(get_api_key)])
 async def get_safety():
     """Get current safety state."""
     return {"safety_state": get_safety_state()}
@@ -434,12 +436,15 @@ async def get_safety():
 
 
 @app.websocket("/ws/trading-stream")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     """
     WebSocket endpoint for real-time trading data streaming.
-
-    Clients connect here to receive automatic updates every 2 seconds.
     """
+    # Manual validation for WebSocket since global dependency doesn't always apply to WS upgrade automatically or cleanly
+    if token != settings.dashboard_api_key:
+        await websocket.close(code=1008) # Policy Violation
+        return
+
     await manager.connect(websocket)
 
     try:

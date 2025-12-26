@@ -361,6 +361,8 @@ class Settings(BaseSettings):
 
     deriv_api_token: str = Field(default="", description="Deriv API token for authentication")
     deriv_app_id: int = Field(default=1089, description="Deriv application ID")
+    
+    dashboard_api_key: str = Field(default="titan-admin", description="API key for dashboard access")
 
     def get_device(self) -> torch.device:
         """Resolve and return the compute device based on preference."""
