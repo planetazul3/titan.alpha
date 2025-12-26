@@ -1,4 +1,0 @@
-# file: /home/planetazul3/dtitan/python-deriv-api/deriv_api/subscription_manager.py
-# hypothesis_version: 6.148.7
-
-['buy', 'buy_key', 'contract_id', 'forget', 'forget_all', 'id', 'subscribe', 'subscription']

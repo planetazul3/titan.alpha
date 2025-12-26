@@ -10,3 +10,7 @@ checkpoints/
 .DS_Store
 .mypy_cache/
 .pytest_cache/
+.hypothesis/
+test_data/*.db
+test_data/*.db-shm
+test_data/*.db-wal

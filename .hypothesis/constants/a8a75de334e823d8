@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/data/buffer.py
-# hypothesis_version: 6.148.8
-
-[0.0, 1.0, 'CandleData', 'timestamp', 'volume']

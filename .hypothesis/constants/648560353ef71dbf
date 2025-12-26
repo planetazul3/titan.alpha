@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/training/checkpoint_manifest.py
-# hypothesis_version: 6.148.7
-
-['--abbrev-ref', '--porcelain', '.', '1.0', 'CheckpointManifest', 'DerivOmniModel', 'HEAD', 'best_val_loss', 'branch', 'cnn_filters', 'cpu', 'cuda', 'data_shapes', 'dirty', 'dropout_rate', 'epoch', 'extra_data', 'git', 'global_step', 'hyperparams', 'inf', 'latent_dim', 'learning_rate', 'lstm_hidden_size', 'manifest', 'model_state_dict', 'optimizer_state_dict', 'rev-parse', 'scaler_state_dict', 'scheduler_state_dict', 'sha', 'stake_amount', 'status', 'symbol', 'thresholds', 'trading', 'unknown']

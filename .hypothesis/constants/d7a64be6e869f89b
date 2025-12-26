@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/conftest.py
-# hypothesis_version: 6.148.7
-
-['markers', 'session']

@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/data/ingestion/client.py
-# hypothesis_version: 6.148.8
-
-[0.0, 10.0, 30.0, 120.0, 100, 180, 200, 1000, 'Authorizing...', 'Client not connected', 'Keep-alive ping sent', 'USD', 'adjust_start_time', 'amount', 'balance', 'basis', 'buy', 'candles', 'contract_id', 'contract_type', 'count', 'currency', 'duration', 'duration_unit', 'end', 'granularity', 'history', 'id', 'is_expired', 'is_sold', 'latest', 'lost', 'm', 'ohlc', 'open', 'ping', 'price', 'prices', 'profit', 'proposal', 'quote', 'scope', 'sold', 'stake', 'start', 'status', 'style', 'subscribe', 'symbol', 'tick', 'ticks', 'ticks_history', 'won']

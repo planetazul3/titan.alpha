@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/training/rl_trainer.py
-# hypothesis_version: 6.148.7
-
-[0.0003, 0.005, 0.99, 1.0, 256, 10000, 100000, 'actor', 'actor_loss', 'actor_optimizer', 'alpha', 'alpha_loss', 'alpha_optimizer', 'critic', 'critic_loss', 'critic_optimizer', 'memory_size', 'skipped', 'step_count', 'target_critic', 'temperature', 'update_count']

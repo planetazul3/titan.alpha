@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/safety_store.py
-# hypothesis_version: 6.148.8
-
-[0.0, '%Y-%m-%d', '0', '0.0', 'consecutive_losses', 'current_drawdown', 'peak_equity', 'risk_peak_equity']

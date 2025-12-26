@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/decision.py
-# hypothesis_version: 6.148.8
-
-[0.05, '+', 'append_async', 'barrier', 'barrier2', 'caution', 'demoted_by_caution', 'ignored', 'processed', 'real', 'regime_caution', 'regime_vetoed', 'shadow', 'signal_type', 'trust_state', 'trusted', 'unknown', 'value', 'veto']

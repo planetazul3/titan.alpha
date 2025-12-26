@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/models/core.py
-# hypothesis_version: 6.148.7
-
-[256, '_logit', '_prob', 'range', 'range_logit', 'rise_fall', 'rise_fall_logit', 'touch', 'touch_logit']

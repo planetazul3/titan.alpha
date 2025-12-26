@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/safety.py
-# hypothesis_version: 6.148.8
-
-[0.0, 1.0, 10.0, 50.0, 60.0, 'TradeSignal', 'consecutive_failures', 'daily_pnl', 'default', 'last_reset', 'metrics', 'stake', 'store', 'symbol', 'total_retries', 'trades_attempted', 'trades_executed', 'validation']

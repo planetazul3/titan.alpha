@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/execution/integration.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.1, 0.3, 0.35, 0.5, 0.9, 1.0, 10.0, 50.0, 'max_daily_loss', 'max_stake_per_trade', 'normal', 'unknown']
