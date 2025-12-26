@@ -53,6 +53,7 @@ class Trading(BaseModel):
     )
     barrier_offset: str = Field(default="+0.50", description="Barrier offset for Touch/No Touch and Range (High)")
     barrier2_offset: str = Field(default="-0.50", description="Barrier2 offset for Range (Low)")
+    stale_candle_threshold: float = Field(default=5.0, description="Max latency (s) before skipping candle", gt=0.0)
 
 
 class Thresholds(BaseModel):

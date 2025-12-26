@@ -347,8 +347,8 @@ class DecisionEngine:
             candle_window=candle_window,
             model_version=self.model_version,
             feature_schema_version=FEATURE_SCHEMA_VERSION,
-            barrier_level=float(signal.metadata["barrier"].replace("+", "")) if "barrier" in signal.metadata else None,
-            barrier2_level=float(signal.metadata["barrier2"].replace("+", "")) if "barrier2" in signal.metadata else None,
+            barrier_level=self._extract_barrier_value(signal.metadata, "barrier"),
+            barrier2_level=self._extract_barrier_value(signal.metadata, "barrier2"),
             metadata={
                 "signal_type": signal.signal_type,
                 "regime_vetoed": regime_vetoed,
@@ -367,3 +367,22 @@ class DecisionEngine:
             f"👻 SHADOW TRADE: {record.contract_type} {record.direction} "
             f"@ {record.probability:.3f} (ID: {record.trade_id[:8]})"
         )
+
+    def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:
+        """Safely extract and parse barrier value from metadata."""
+        if key not in metadata:
+            return None
+        
+        value = metadata[key]
+        if value is None:
+            return None
+            
+        try:
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                return float(value.replace("+", ""))
+            return None
+        except (ValueError, TypeError):
+             logger.warning(f"Failed to parse barrier value for {key}: {value}")
+             return None

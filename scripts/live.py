@@ -653,10 +653,11 @@ async def run_live_trading(args):
                     now_utc = datetime.now(timezone.utc)
                     latency = (now_utc - candle_event.timestamp).total_seconds()
                     
-                    if latency > 5.0:
+                    stale_threshold = settings.trading.stale_candle_threshold
+                    if latency > stale_threshold:
                         logger.warning(
                             f"[LATENCY] Skipping stale candle (closed {latency:.1f}s ago). "
-                            f"Threshold: 5.0s"
+                            f"Threshold: {stale_threshold:.1f}s"
                         )
                         console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
                         continue
