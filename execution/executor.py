@@ -130,11 +130,21 @@ class DerivTradeExecutor:
             TradeResult with execution outcome
         """
         try:
-            # 1. Determine stake size using the injected position sizer
+            # 1. Fetch current account balance for dynamic sizing
+            try:
+                balance = await self.client.get_balance()
+            except Exception as e:
+                logger.warning(f"Failed to fetch balance for sizing: {e}. Using static/fallback sizing.")
+                balance = None
+
+            # 2. Determine stake size using the injected position sizer
             # pass context (drawdown, balance, etc) if available in the future
-            amount = self.position_sizer.suggest_stake_for_signal(signal)
+            amount = self.position_sizer.suggest_stake_for_signal(
+                signal, 
+                account_balance=balance
+            )
             
-            # 2. Safety check: ensure amount > 0
+            # 3. Safety check: ensure amount > 0
             if amount <= 0:
                 logger.warning(f"Position sizer returned ${amount:.2f} (<=0). Skipping trade.")
                 return TradeResult(success=False, error="Zero stake amount")
