@@ -120,12 +120,13 @@ class DerivOmniModel(nn.Module):
                 'range_logit': (batch, 1)
         """
         candles_mask = masks.get("candles_mask") if masks else None
+        ticks_mask = masks.get("ticks_mask") if masks else None
         
         emb_vol = self.volatility.encode(vol_metrics)  # (batch, vol_dim)
         
         # Pass volatility embedding as static context to TemporalExpert (if using TFT)
         emb_temp = self.temporal(candles, mask=candles_mask, static_context=emb_vol)  # (batch, temp_dim)
-        emb_spat = self.spatial(ticks)  # (batch, spat_dim)
+        emb_spat = self.spatial(ticks, mask=ticks_mask)  # (batch, spat_dim)
 
         context = self.fusion(emb_temp, emb_spat, emb_vol)  # (batch, fusion_out)
 

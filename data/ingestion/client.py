@@ -545,7 +545,7 @@ class DerivClient:
 
     async def subscribe_contract(
         self, contract_id: str, on_update: Callable[[dict[str, Any]], None] | None = None, on_settled: Callable[[float, bool], None] | None = None
-    ) -> None:
+    ) -> bool:
         """
         Subscribe to real-time updates for a specific contract.
         
@@ -656,8 +656,10 @@ class DerivClient:
         # Wait for settlement with timeout (2 minutes for 1-min contracts + buffer)
         try:
             await asyncio.wait_for(settled.wait(), timeout=180)
+            return True  # Settled successfully
         except asyncio.TimeoutError:
             logger.warning(f"[CONTRACT] Subscription timeout for {contract_id}")
+            return False # Timed out
         finally:
             # CRITICAL: Dispose subscription to prevent memory leak
             # Without this, callbacks accumulate in memory (OOM after days/weeks)

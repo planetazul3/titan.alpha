@@ -162,11 +162,15 @@ class RealTradeTracker:
         
         for attempt in range(max_retries):
             try:
-                await self.client.subscribe_contract(
+                result = await self.client.subscribe_contract(
                     contract_id=contract_id,
                     on_update=None,  # Don't need intermediate updates
                     on_settled=on_settled,
                 )
+                
+                if not result:
+                     raise TimeoutError("Subscription timed out (180s)")
+                     
                 return  # Success - exit retry loop
             except Exception as e:
                 if attempt < max_retries - 1:
