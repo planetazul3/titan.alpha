@@ -31,7 +31,7 @@ from execution.shadow_store import SHADOW_STORE_SCHEMA_VERSION, ShadowTradeRecor
 logger = logging.getLogger(__name__)
 
 # SQLite database schema version
-SQLITE_SCHEMA_VERSION = 1
+SQLITE_SCHEMA_VERSION = 2
 
 
 class SQLiteShadowStore:
@@ -69,7 +69,9 @@ class SQLiteShadowStore:
         resolved_at TEXT,
         metadata TEXT,
         schema_version TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        barrier_level REAL,
+        barrier2_level REAL
     )
     """
 
@@ -171,8 +173,9 @@ class SQLiteShadowStore:
                     model_version, feature_schema_version,
                     tick_window, candle_window,
                     outcome, exit_price, resolved_at,
-                    metadata, schema_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata, schema_version, created_at,
+                    barrier_level, barrier2_level
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.trade_id,
@@ -193,6 +196,8 @@ class SQLiteShadowStore:
                     json.dumps(record.metadata),
                     record._schema_version,
                     record._created_at,
+                    record.barrier_level,
+                    record.barrier2_level,
                 ),
             )
 
@@ -433,6 +438,8 @@ class SQLiteShadowStore:
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             _schema_version=row["schema_version"],
             _created_at=row["created_at"],
+            barrier_level=row["barrier_level"] if "barrier_level" in row.keys() else None,
+            barrier2_level=row["barrier2_level"] if "barrier2_level" in row.keys() else None,
         )
 
     def get_by_id(self, trade_id: str) -> ShadowTradeRecord | None:

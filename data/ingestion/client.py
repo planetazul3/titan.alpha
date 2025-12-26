@@ -453,7 +453,8 @@ class DerivClient:
         amount: float, 
         duration: int, 
         duration_unit: str = "m",
-        barrier: str | None = None
+        barrier: str | None = None,
+        barrier2: str | None = None
     ) -> dict[str, Any]:
         """
         Execute a binary options trade on Deriv.

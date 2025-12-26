@@ -51,6 +51,8 @@ class Trading(BaseModel):
         gt=0.0,
         le=1.0
     )
+    barrier_offset: str = Field(default="+0.50", description="Barrier offset for Touch/No Touch and Range (High)")
+    barrier2_offset: str = Field(default="-0.50", description="Barrier2 offset for Range (Low)")
 
 
 class Thresholds(BaseModel):

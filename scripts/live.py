@@ -501,14 +501,14 @@ async def run_live_trading(args):
         safety_state_file = Path(settings.system.system_db_path)
 
         # C06: Inject stake resolver for safety checks
-        def stake_resolver(symbol: str, metadata: dict) -> float:
+        def stake_resolver(signal: Any) -> float:
             # Fallback for determining stake if missing in signal
             # We use the sizer's suggestion mechanism
-            return sizer.suggest_stake_for_signal(None)
+            return sizer.suggest_stake_for_signal(signal)
 
         executor = SafeTradeExecutor(
-            raw_executor, 
-            safety_config, 
+            inner_executor=raw_executor, 
+            config=safety_config, 
             state_file=safety_state_file,
             stake_resolver=stake_resolver
         )

@@ -46,7 +46,7 @@ class SafeTradeExecutor:
         inner_executor: TradeExecutor,
         config: ExecutionSafetyConfig,
         state_file: str | Path,
-        stake_resolver: Optional[Callable[[str, dict], float]] = None
+        stake_resolver: Optional[Callable[[TradeSignal], float]] = None
     ):
         """
         Initialize safe executor.
@@ -55,7 +55,7 @@ class SafeTradeExecutor:
             inner_executor: Raw execution implementation
             config: Safety limits configuration
             state_file: Path to SQLite state DB
-            stake_resolver: Function to resolve stake amount for a symbol (for pre-check)
+            stake_resolver: Function to resolve stake amount for a signal (for pre-check)
         """
         self.inner = inner_executor
         self.config = config
@@ -93,18 +93,15 @@ class SafeTradeExecutor:
              
         # 4. Check Stake Amount (if resolver provided)
         if self.stake_resolver:
-            # We don't have symbol easily in TradeSignal usually, unless in metadata
-            symbol = get_symbol_from_signal(signal)
-            # Dummy params for resolver if needed, or just get stake
-            # Assuming resolver signature: (symbol, context) -> float
             try:
-                stake = self.stake_resolver(symbol, {})
+                # FIX: Pass the full signal to the resolver to get the ACTUAL stake logic
+                stake = self.stake_resolver(signal)
                 if stake > self.config.max_stake_per_trade:
-                    msg = f"Stake {stake} exceeds safety limit {self.config.max_stake_per_trade}"
+                    msg = f"Stake {stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
                     return self._reject(msg)
             except Exception as e:
                  logger.error(f"Error resolving stake in safety check: {e}")
-                 # Fail safe or fail open? Fail safe -> reject
+                 # Fail safe -> reject
                  return self._reject(f"Stake resolution failed: {e}")
 
         # 5. Execute with Retries

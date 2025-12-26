@@ -84,8 +84,8 @@ def filter_signals(
     if "touch_prob" in model_outputs:
         prob = model_outputs["touch_prob"]
         sig_type = classify_probability(prob, thresholds)
-        # Default barrier for Touch: +0.5 relative to entry
-        barrier = "+0.50" 
+        # Use configured barrier offset
+        barrier = settings.trading.barrier_offset
         signals.append(
             TradeSignal(
                 signal_type=sig_type,
@@ -101,16 +101,10 @@ def filter_signals(
     if "range_prob" in model_outputs:
         prob = model_outputs["range_prob"]
         sig_type = classify_probability(prob, thresholds)
-        # Default barriers for Range: +/- 0.5 relative to entry
-        # API expects barrier (high) and barrier2 (low) ? Or just one?
-        # For Stays Between, usually barrier (high) and barrier2 (low)
-        # We start with +0.5. Executor might need handling relative barriers differently if API needs absolute.
-        # But 'barrier' param in DerivClient.buy handles relative if string starts with +/-, usually.
-        # Let's check DerivClient.buy logic later or assume standard API relative barrier string.
-        filters_barrier = "+0.50" # High barrier
-        # Note: Some exotic contracts need two barriers. The current TradeExecutor structure passes 'barrier'.
-        # We might need to encode both or change executor. 
-        # For now, sticking to single barrier injection as per instructions.
+        # Use configured barriers
+        barrier = settings.trading.barrier_offset
+        barrier2 = settings.trading.barrier2_offset
+        
         signals.append(
             TradeSignal(
                 signal_type=sig_type,
@@ -118,7 +112,11 @@ def filter_signals(
                 direction="STAYS_BETWEEN",
                 probability=prob,
                 timestamp=timestamp,
-                metadata={"symbol": settings.trading.symbol, "barrier": filters_barrier}
+                metadata={
+                    "symbol": settings.trading.symbol, 
+                    "barrier": barrier,
+                    "barrier2": barrier2
+                }
             )
         )
 

@@ -199,9 +199,10 @@ class DerivTradeExecutor:
 
             # Extract barrier from signal if present (required for Touch/No Touch and Range)
             barrier = signal.metadata.get("barrier")
+            barrier2 = signal.metadata.get("barrier2")
 
             # Execute via Deriv API
-            result = await self.client.buy(contract, amount, duration, duration_unit, barrier=barrier)
+            result = await self.client.buy(contract, amount, duration, duration_unit, barrier=barrier, barrier2=barrier2)
 
             self._executed_count += 1
 
