@@ -32,7 +32,21 @@ if command -v apt-get &> /dev/null; then
         sudo apt-get install -y build-essential wget
         
         cd /tmp
-        wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+        wget -q https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+        
+        # M18: Verify checksum
+        EXPECTED_HASH="9ff41efcb1c011a4b4b6dfc91610b06e39b1d7973ed5d4dee55029a0ac4dc651"
+        FILE_HASH=$(sha256sum ta-lib-0.4.0-src.tar.gz | cut -d' ' -f1)
+        
+        if [ "$FILE_HASH" != "$EXPECTED_HASH" ]; then
+            echo "ERROR: Checksum mismatch!"
+            echo "Expected: $EXPECTED_HASH"
+            echo "Got:      $FILE_HASH"
+            rm ta-lib-0.4.0-src.tar.gz
+            exit 1
+        fi
+        echo "Checksum verified."
+
         tar -xzf ta-lib-0.4.0-src.tar.gz
         cd ta-lib/
         ./configure --prefix=/usr
