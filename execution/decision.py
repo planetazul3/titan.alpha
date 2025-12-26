@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from config.constants import CONTRACT_TYPES
 from config.settings import Settings
 from data.features import FEATURE_SCHEMA_VERSION
 from execution.filters import filter_signals, get_actionable_signals
@@ -123,6 +124,18 @@ class DecisionEngine:
         # STEP 2: Filter probabilities into signals (only if regime allows)
         # ══════════════════════════════════════════════════════════════════════
         all_signals = filter_signals(probs, self.settings, timestamp)
+        
+        # R02: Validate contract types early
+        valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
+        validated_signals = []
+        for sig in all_signals:
+            if sig.contract_type in valid_contract_types:
+                validated_signals.append(sig)
+            else:
+                logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
+                self._stats["ignored"] += 1
+        all_signals = validated_signals
+        
         real_trades, shadow_trades = get_actionable_signals(all_signals)
 
         # ══════════════════════════════════════════════════════════════════════
