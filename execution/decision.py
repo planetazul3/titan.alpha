@@ -12,6 +12,7 @@ from execution.policy import ExecutionPolicy, VetoPrecedence  # Policy framework
 from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 from execution.signals import ShadowTrade, TradeSignal
+from observability.shadow_logging import shadow_trade_logger
 
 logger = logging.getLogger(__name__)
 
@@ -473,14 +474,23 @@ class DecisionEngine:
 
         if  hasattr(self.shadow_store, "append_async"):
              await self.shadow_store.append_async(record)
+             shadow_trade_logger.log_stored(record.trade_id)
         else:
              import asyncio
              assert self.shadow_store is not None  # Already checked at function start
              loop = asyncio.get_running_loop()
              await loop.run_in_executor(None, lambda: self.shadow_store.append(record))  # type: ignore[union-attr]
-        logger.info(
+        shadow_trade_logger.log_created(
+            trade_id=record.trade_id,
+            contract_type=record.contract_type,
+            direction=record.direction,
+            probability=record.probability,
+            metadata={"duration_minutes": duration_minutes}
+        )
+        # Keep debug log for console visibility if needed, or remove if redundant
+        logger.debug(
             f"👻 SHADOW TRADE: {record.contract_type} {record.direction} "
-            f"@ {record.probability:.3f} (ID: {record.trade_id[:8]}, duration={duration_minutes}m)"
+            f"@ {record.probability:.3f} (ID: {record.trade_id[:8]})"
         )
 
     def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:

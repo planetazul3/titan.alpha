@@ -6,6 +6,8 @@ from typing import List, Optional, Any
 
 from config.constants import CONTRACT_TYPES
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
+from execution.barriers import BarrierCalculator
+from observability.shadow_logging import shadow_trade_logger
 
 
 # Candle array column indices (must match data/buffer.py CandleData.to_array)
@@ -55,6 +57,7 @@ class ShadowTradeResolver:
         self.default_touch_barrier_pct = default_touch_barrier_pct
         self.default_range_barrier_pct = default_range_barrier_pct
         self.staleness_threshold = timedelta(minutes=staleness_threshold_minutes)
+        self.barrier_calculator = BarrierCalculator()
         self.logger = logging.getLogger(__name__)
 
     async def resolve_trades(
@@ -219,6 +222,13 @@ class ShadowTradeResolver:
             simulated_pnl = 0.95 if outcome else -1.0
             outcome_str = "✅ WIN" if outcome else "❌ LOSS"
             
+            shadow_trade_logger.log_resolved(
+                trade_id=trade.trade_id,
+                outcome=outcome,
+                exit_price=exit_price,
+            )
+            
+            # Legacy log for console/debug
             self.logger.info(
                 f"{outcome_str} | {trade.direction} @ {trade.probability:.1%} confidence | "
                 f"{trade.entry_price:.2f} → {exit_price:.2f} ({price_change_pct:+.2f}%) | "
@@ -230,10 +240,8 @@ class ShadowTradeResolver:
         expiration_time = trade.timestamp + self.duration
         staleness = datetime.now(timezone.utc) - expiration_time
         
-        self.logger.warning(
-            f"⚠️ Trade {trade.trade_id[:8]} expired {staleness.total_seconds()/60:.1f} min ago - "
-            f"marking as STALE (excluded from training)"
-        )
+        # Structured log
+        shadow_trade_logger.log_stale(trade.trade_id, reason="expired_unresolved")
         # H08: Async DB update
         await self.store.mark_stale_async(
             trade_id=trade.trade_id,
@@ -319,18 +327,26 @@ class ShadowTradeResolver:
                     )
                     return None
 
-                # C02: Use stored barrier levels if available, else default
+                # C02 & R05: Use BarrierCalculator
                 if trade.barrier_level is not None:
-                    offset = abs(trade.barrier_level)
-                    upper_barrier = trade.entry_price + offset
-                    lower_barrier = trade.entry_price - offset
+                    levels = self.barrier_calculator.calculate(
+                        entry_price=trade.entry_price,
+                        contract_type=CONTRACT_TYPES.TOUCH_NO_TOUCH,
+                        barrier_offset=trade.barrier_level
+                    )
                 else:
                     # Fallback to percentage
                     self.logger.debug(
                         f"Using default barrier pct {self.default_touch_barrier_pct} for trade {trade.trade_id}"
                     )
-                    upper_barrier = trade.entry_price * (1 + self.default_touch_barrier_pct)
-                    lower_barrier = trade.entry_price * (1 - self.default_touch_barrier_pct)
+                    levels = self.barrier_calculator.calculate_from_percentage(
+                        entry_price=trade.entry_price,
+                        contract_type=CONTRACT_TYPES.TOUCH_NO_TOUCH,
+                        barrier_pct=self.default_touch_barrier_pct
+                    )
+                
+                upper_barrier = levels.upper
+                lower_barrier = levels.lower
 
                 # I04 Fix: Directional validation for barrier touches
                 # For TOUCH trades, we need to check if barrier was touched in the correct direction
@@ -407,17 +423,29 @@ class ShadowTradeResolver:
                     )
                     return None
 
-                # C02: Use stored barrier levels
+                # C02 & R05: Use BarrierCalculator
                 if trade.barrier_level is not None and trade.barrier2_level is not None:
-                    upper_band = trade.entry_price + trade.barrier_level
-                    lower_band = trade.entry_price + trade.barrier2_level
+                    levels = self.barrier_calculator.calculate(
+                        entry_price=trade.entry_price,
+                        contract_type=CONTRACT_TYPES.STAYS_BETWEEN,
+                        barrier_offset=trade.barrier_level,
+                        barrier2_offset=trade.barrier2_level
+                    )
                 else:
                     # Fallback to percentage
                     self.logger.debug(
                         f"Using default range pct {self.default_range_barrier_pct} for trade {trade.trade_id}"
                     )
-                    upper_band = trade.entry_price * (1 + self.default_range_barrier_pct)
-                    lower_band = trade.entry_price * (1 - self.default_range_barrier_pct)
+                    levels = self.barrier_calculator.calculate_from_percentage(
+                        entry_price=trade.entry_price,
+                        contract_type=CONTRACT_TYPES.STAYS_BETWEEN,
+                        barrier_pct=self.default_range_barrier_pct
+                        # Note: calculate_from_percentage uses barrier_pct for range logic too if barrier2 not distinguished
+                        # or we should update calculate_from_percentage to accept separate range pct
+                    )
+                
+                upper_band = levels.upper
+                lower_band = levels.lower
 
                 # Price stayed in range if ALL highs below upper and ALL lows above lower
                 stayed_in = bool(

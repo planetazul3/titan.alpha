@@ -326,7 +326,8 @@ async def run_live_trading(args):
     resolver = ShadowTradeResolver(
         shadow_store, 
         duration_minutes=settings.shadow_trade.duration_minutes,
-        client=client
+        client=client,
+        staleness_threshold_minutes=settings.shadow_trade.staleness_threshold_minutes
     )
 
     # Initialize Observability Monitors
