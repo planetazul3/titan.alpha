@@ -7,6 +7,15 @@ from typing import List, Optional, Any
 from config.constants import CONTRACT_TYPES
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 
+
+# Candle array column indices (must match data/buffer.py CandleData.to_array)
+CANDLE_COL_OPEN = 0
+CANDLE_COL_HIGH = 1
+CANDLE_COL_LOW = 2
+CANDLE_COL_CLOSE = 3
+CANDLE_COL_VOLUME = 4
+CANDLE_COL_TIMESTAMP = 5
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +33,14 @@ class ShadowTradeResolver:
     # Trades expiring longer than this ago are flagged as unresolvable without history.
     STALENESS_THRESHOLD = timedelta(minutes=5)
 
-    def __init__(self, shadow_store: ShadowTradeStore, duration_minutes: int = 1, client: Any = None):
+    def __init__(
+        self,
+        shadow_store: ShadowTradeStore,
+        duration_minutes: int = 1,
+        client: Any = None,
+        default_touch_barrier_pct: float = 0.005,
+        default_range_barrier_pct: float = 0.003,
+    ):
         """
         Initialize the resolver.
 
@@ -32,10 +48,14 @@ class ShadowTradeResolver:
             shadow_store: Store containing shadow trades.
             duration_minutes: Trade duration in minutes (default 1).
             client: DerivClient instance for fetching historical data (optional).
+            default_touch_barrier_pct: Default barrier percentage for TOUCH/NO_TOUCH if not in trade (0.005 = 0.5%).
+            default_range_barrier_pct: Default barrier percentage for STAYS_BETWEEN if not in trade (0.003 = 0.3%).
         """
         self.store = shadow_store
         self.duration = timedelta(minutes=duration_minutes)
         self.client = client
+        self.default_touch_barrier_pct = default_touch_barrier_pct
+        self.default_range_barrier_pct = default_range_barrier_pct
         self.logger = logging.getLogger(__name__)
 
     async def resolve_trades(self, current_price: float, current_time: datetime) -> int:
@@ -198,62 +218,105 @@ class ShadowTradeResolver:
             True (Win), False (Loss), or None (Unknown/Error)
         """
         import numpy as np
-        
+
         try:
             if trade.contract_type == CONTRACT_TYPES.RISE_FALL:
                 if trade.direction == "CALL":
                     return exit_price > trade.entry_price
                 elif trade.direction == "PUT":
                     return exit_price < trade.entry_price
-            
+
             elif trade.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
                 # TOUCH/NO_TOUCH requires checking High/Low from candle period
                 if trade.candle_window and len(trade.candle_window) > 0:
                     candles = np.array(trade.candle_window)
-                    high_prices = candles[:, 1]  # Column 1 = High
-                    low_prices = candles[:, 2]   # Column 2 = Low
-                    
-                    # Use 0.5% barrier from entry price (configurable in future)
-                    barrier_pct = 0.005
-                    upper_barrier = trade.entry_price * (1 + barrier_pct)
-                    lower_barrier = trade.entry_price * (1 - barrier_pct)
-                    
+
+                    # Validate shape (must have at least columns 0-3 for OHLC)
+                    if candles.ndim < 2 or candles.shape[1] < 4:
+                        self.logger.warning(
+                            f"Invalid candle_window shape {candles.shape} for trade {trade.trade_id}. "
+                            f"Expected at least 4 columns (OHLC)."
+                        )
+                        return None
+
+                    high_prices = candles[:, CANDLE_COL_HIGH]
+                    low_prices = candles[:, CANDLE_COL_LOW]
+
+                    # C02: Use stored barrier levels if available, else default
+                    if trade.barrier_level is not None:
+                        # barrier_level is usually high barrier offset, barrier2_level is low barrier offset
+                        # Assuming symmetric around entry if only one is provided, or barrier_level is the 'touch' distance
+                        # The report says: "Calculate upper_barrier as entry_price plus barrier_level. For lower_barrier, use the negative of the absolute barrier distance."
+                        offset = abs(trade.barrier_level)
+                        upper_barrier = trade.entry_price + offset
+                        lower_barrier = trade.entry_price - offset
+                    else:
+                        # Fallback to percentage
+                        self.logger.debug(
+                            f"Using default barrier pct {self.default_touch_barrier_pct} for trade {trade.trade_id}"
+                        )
+                        upper_barrier = trade.entry_price * (1 + self.default_touch_barrier_pct)
+                        lower_barrier = trade.entry_price * (1 - self.default_touch_barrier_pct)
+
                     # Check if any high/low touched the barriers
-                    touched = bool(np.any(high_prices >= upper_barrier) or 
-                                   np.any(low_prices <= lower_barrier))
-                    
+                    touched = bool(
+                        np.any(high_prices >= upper_barrier) or np.any(low_prices <= lower_barrier)
+                    )
+
                     if trade.direction == "TOUCH":
                         return touched
                     elif trade.direction == "NO_TOUCH":
                         return not touched
                 else:
-                    self.logger.warning(f"TOUCH trade {trade.trade_id[:8]} missing candle_window")
+                    self.logger.warning(
+                        f"TOUCH trade {trade.trade_id[:8]} missing candle_window"
+                    )
                     return None
-            
+
             elif trade.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
                 # STAYS_BETWEEN: price must stay within ±band of entry
                 if trade.candle_window and len(trade.candle_window) > 0:
                     candles = np.array(trade.candle_window)
-                    high_prices = candles[:, 1]
-                    low_prices = candles[:, 2]
-                    
-                    # Use 0.3% band (configurable in future)
-                    band_pct = 0.003
-                    upper_band = trade.entry_price * (1 + band_pct)
-                    lower_band = trade.entry_price * (1 - band_pct)
-                    
+
+                    # Validate shape
+                    if candles.ndim < 2 or candles.shape[1] < 4:
+                        self.logger.warning(
+                            f"Invalid candle_window shape {candles.shape} for trade {trade.trade_id}. "
+                            f"Expected at least 4 columns (OHLC)."
+                        )
+                        return None
+
+                    high_prices = candles[:, CANDLE_COL_HIGH]
+                    low_prices = candles[:, CANDLE_COL_LOW]
+
+                    # C02: Use stored barrier levels
+                    if trade.barrier_level is not None and trade.barrier2_level is not None:
+                        # barrier_level is usually high barrier offset, barrier2_level is low barrier offset
+                        upper_band = trade.entry_price + trade.barrier_level
+                        lower_band = trade.entry_price + trade.barrier2_level
+                    else:
+                        # Fallback
+                        self.logger.debug(
+                            f"Using default range pct {self.default_range_barrier_pct} for trade {trade.trade_id}"
+                        )
+                        upper_band = trade.entry_price * (1 + self.default_range_barrier_pct)
+                        lower_band = trade.entry_price * (1 - self.default_range_barrier_pct)
+
                     # Price stayed in range if ALL highs below upper and ALL lows above lower
-                    stayed_in = bool(np.all(high_prices <= upper_band) and 
-                                     np.all(low_prices >= lower_band))
+                    stayed_in = bool(
+                        np.all(high_prices <= upper_band) and np.all(low_prices >= lower_band)
+                    )
                     return stayed_in
                 else:
-                    self.logger.warning(f"RANGE trade {trade.trade_id[:8]} missing candle_window")
+                    self.logger.warning(
+                        f"RANGE trade {trade.trade_id[:8]} missing candle_window"
+                    )
                     return None
-            
+
             # Unsupported contract type
             self.logger.warning(f"Unsupported contract type: {trade.contract_type}")
             return None
-            
+
         except Exception as e:
             self.logger.error(f"Error determining outcome for {trade.trade_id}: {e}")
             return None
