@@ -17,7 +17,7 @@ class TemporalExpert(nn.Module):
     def __init__(self, settings: Settings, embedding_dim: int = 64, use_tft: bool = True, static_dim: int = 0):
         super().__init__()
 
-        input_size = 10  # Candle features from preprocessor
+        input_size = settings.data_shapes.feature_dim_candles
         hidden_size = settings.hyperparams.lstm_hidden_size
         self.use_tft = use_tft
         self.static_dim = static_dim

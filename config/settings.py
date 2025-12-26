@@ -146,6 +146,12 @@ class DataShapes(BaseModel):
     sequence_length_candles: int = Field(
         ..., description="Candle sequence length", ge=MIN_SEQUENCE_LENGTH
     )
+    feature_dim_candles: int = Field(
+        default=10, description="Number of feature channels per candle", ge=1
+    )
+    feature_dim_ticks: int = Field(
+        default=1, description="Number of feature channels per tick", ge=1
+    )
     warmup_steps: int = Field(
         default=50, description="Warmup steps for technical indicators", ge=0
     )
