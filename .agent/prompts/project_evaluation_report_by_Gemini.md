@@ -20,54 +20,27 @@ The following critical issues identified in previous audits have been **successf
 | **Idempotency** | ✅ **Fixed** | `DerivTradeExecutor` checks for existing open contracts with matching parameters before retrying execution. |
 | **Precision** | ✅ **Fixed** | `RealTradeTracker` uses `Decimal` for P&L accumulation. |
 | **Barrier Execution** | ✅ **Fixed** | `DerivTradeExecutor` extracts `barrier` from signal metadata and passes it to `client.buy`. |
+| **Pending Trade Leak** | ✅ **Fixed** | `RealTradeTracker` handles subscription timeouts by removing trades from the pending list. |
+| **Spatial Masking** | ✅ **Fixed** | `SpatialExpert` now accepts and applies attention masks to prevent padding artifacts. |
 
 ---
 
-## 2. NEW CRITICAL ISSUES (DEEP DIVE)
 
-### 1. Pending Trade Leak on Subscription Timeout
-**Problem Description:**
-In `execution/real_trade_tracker.py`, the `_watch_contract` method calls `client.subscribe_contract`.
-In `data/ingestion/client.py`, `subscribe_contract` enforces a hard timeout of 180 seconds. If the contract does not settle within this window (e.g., network lag or long-duration trade), `subscribe_contract` catches the `TimeoutError`, logs a warning, and returns successfully (without raising).
-Back in `RealTradeTracker`, the code assumes a return means the trade is handled. However, since `on_settled` was never called (due to timeout), the trade remains in `self._pending_trades` indefinitely.
-**Impact:**
-Trades that exceed 3 minutes or experience network timeouts become "zombie trades" in the tracker. They are never marked as resolved, leading to:
-- **Memory Leak:** `_pending_trades` grows indefinitely.
-- **Incorrect Statistics:** Win/Loss counts and P&L are under-reported.
-- **State Drift:** The system thinks it has more open exposure than it actually does.
-**Solution Implementation:**
-- **Step 1:** In `data/ingestion/client.py`, modify `subscribe_contract` to return a boolean (`True` if settled, `False` if timed out) or raise a specific `SubscriptionTimeoutError`.
-- **Step 2:** In `RealTradeTracker._watch_contract`, check this return value. If timed out, implement a fallback polling mechanism (call `get_open_contracts` or `proposal_open_contract` once) to check status before giving up, or mark as "unknown" and remove from pending.
 
-### 2. Spatial Expert Ignores Attention Mask
-**Problem Description:**
-In `models/core.py`, the `forward` method accepts a `masks` dictionary. It correctly passes `candles_mask` to the `TemporalExpert`.
-However, it **fails to pass** `ticks_mask` to the `SpatialExpert`.
-```python
-# models/core.py
-emb_spat = self.spatial(ticks)  # No mask passed
-```
-The `SpatialExpert` (in `models/spatial.py`) uses `AdditiveAttention` for pooling. Without the mask, the attention mechanism considers zero-padding (used for variable length tick sequences) as valid data points.
-**Impact:**
-The model learns to attend to padding zeros, distorting the spatial features. This is particularly damaging for the `SpatialExpert` which analyzes price geometry; a sequence of zeros looks like a flat line price crash/stabilization, introducing noise into the embedding.
-**Solution Implementation:**
-- **Step 1:** Update `SpatialExpert.forward` signature to accept `mask`.
-- **Step 2:** Pass `mask` to `self.attention` inside `SpatialExpert`.
-- **Step 3:** Update `DerivOmniModel.forward` to extract `ticks_mask` and pass it to `self.spatial`.
+### Verification Records (12-26 Update)
+
+| Issue | Status | Verification Evidence |
+| :--- | :--- | :--- |
+| **Pending Trade Leak** | ✅ **Fixed** | Verified timeout handling logic removes stagnant keys. |
+| **Spatial Masking** | ✅ **Fixed** | Verified `SpatialExpert` output is invariant to padding. |
+| **Missing Metadata** | ✅ **Fixed** | Verified `TradeSignal` contains symbol metadata using `verify_filters.py`. |
+
+All identified minor issues have been resolved.
 
 ---
 
 ## 3. FINAL VERDICT
 
-The system is **100% Production Ready**. All identified critical flaws, including pending trade leaks and spatial masking issues, have been resolved and verified.
+The system architecture is **Production Ready**. All critical safety, logic, and data integrity issues have been resolved. The codebase demonstrates robust error handling, correct asynchronous patterns, and strict separation of concerns.
 
-**System Status:** 🟢 **APPROVED FOR DEPLOYMENT**
-
----
-
-### Verification Records (12-26 Update 2)
-
-| Issue | Status | Verification Evidence |
-| :--- | :--- | :--- |
-| **Pending Trade Leak** | ✅ **Fixed** | Verified timeout handling logic removes stagnant keys from memory. Unit test `verify_pending_leak.py` confirmed removal. |
-| **Spatial Masking** | ✅ **Fixed** | Verified `SpatialExpert` output is invariant to padding values. Unit test `verify_spatial_masking.py` passed with 0.0 diff. |
+**Deployment Status:** **APPROVED**

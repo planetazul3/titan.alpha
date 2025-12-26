@@ -63,6 +63,7 @@ def filter_signals(
                     direction="CALL",
                     probability=prob_call,
                     timestamp=timestamp,
+                    metadata={"symbol": settings.trading.symbol, "barrier": None}
                 )
             )
         else:
@@ -75,6 +76,7 @@ def filter_signals(
                     direction="PUT",
                     probability=prob_put,
                     timestamp=timestamp,
+                    metadata={"symbol": settings.trading.symbol, "barrier": None}
                 )
             )
 
@@ -89,6 +91,7 @@ def filter_signals(
                 direction="TOUCH",  # Or similar
                 probability=prob,
                 timestamp=timestamp,
+                metadata={"symbol": settings.trading.symbol}
             )
         )
 
@@ -103,6 +106,7 @@ def filter_signals(
                 direction="STAYS_BETWEEN",
                 probability=prob,
                 timestamp=timestamp,
+                metadata={"symbol": settings.trading.symbol}
             )
         )
 
