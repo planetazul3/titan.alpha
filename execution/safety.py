@@ -225,6 +225,16 @@ class SafeTradeExecutor:
         """Alias for register_outcome - called by RealTradeTracker."""
         await self.register_outcome(pnl)
 
+    def get_safety_statistics(self) -> dict:
+        """Get current safety statistics."""
+        # Note: Some stats require async store access, so we return what's easily available
+        # or just placeholders for the keys live.py expects.
+        return {
+            "kill_switch": self.config.kill_switch_enabled,
+            "max_trades_per_min": self.config.max_trades_per_minute,
+            "max_daily_loss": self.config.max_daily_loss
+        }
+
 
 def get_symbol_from_signal(signal: TradeSignal) -> str:
     """Extract symbol from signal metadata if available."""

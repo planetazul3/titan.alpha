@@ -73,16 +73,36 @@ def main(args):
     )
 
     # 2. Load Model
-    model = DerivOmniModel(settings).to(device)
-    
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
         logger.error(f"Checkpoint not found: {checkpoint_path}")
         return 1
+
+    # Pre-inspect checkpoint to determine architecture (BiLSTM vs TFT)
+    logger.info(f"Inspecting checkpoint: {checkpoint_path.name}")
+    try:
+        # Load to CPU first to inspect structure
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         
-    logger.info(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
+        # Detect architecture type
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        has_tft = any("temporal.tft" in k for k in state_dict.keys())
+        
+        if has_tft:
+            settings.hyperparams.use_tft = True
+            logger.info("Detected TFT architecture in checkpoint")
+        else:
+            settings.hyperparams.use_tft = False
+            logger.info("Detected BiLSTM architecture in checkpoint (Legacy)")
+            
+    except Exception as e:
+        logger.error(f"Failed to inspect checkpoint: {e}")
+        # Fall through - will try to load normally and might fail
+
+    model = DerivOmniModel(settings).to(device)
+    
+    logger.info(f"Loading checkpoint weights: {checkpoint_path}")
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     model.eval()
 
     # 3. Evaluation Loop

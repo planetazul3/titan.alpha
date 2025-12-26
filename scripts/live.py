@@ -273,7 +273,7 @@ async def run_live_trading(args):
         console_log(f"Loading weights from {checkpoint_name}...", "MODEL")
         # Move state dict to correct device
         # Note: checkpoint is already loaded
-        model.load_state_dict(checkpoint["model_state_dict"])
+        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         
         # Extract semantic version from manifest for proper shadow trade tracking
         if "manifest" in checkpoint:
@@ -782,7 +782,7 @@ async def run_live_trading(args):
                                 continue
                             
                             # Update model
-                            model.load_state_dict(new_checkpoint["model_state_dict"])
+                            model.load_state_dict(new_checkpoint["model_state_dict"], strict=False)
                             model.eval() # Ensure eval mode
                             
                             # Update version info

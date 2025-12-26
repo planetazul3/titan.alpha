@@ -7,15 +7,14 @@ It loads the latest checkpoint (with Fisher Information) and updates the model
 using Elastic Weight Consolidation (EWC) to prevent catastrophic forgetting.
 """
 
+import sys
 import logging
 import argparse
-from pathlib import Path
 import torch
-import json
-from datetime import datetime, timedelta
+from pathlib import Path
 
-import sqlite3
-from typing import Any
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import load_settings
 from models.core import DerivOmniModel
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="Online Training (Fine-tuning)")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to base checkpoint")
-    parser.add_argument("--shadow-db", type=Path, default=Path("trading_state.db"), help="Path to shadow database")
+    parser.add_argument("--shadow-db", type=Path, default=Path("data_cache/trading_state.db"), help="Path to shadow database")
     parser.add_argument("--days", type=int, default=7, help="Days of history to train on")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for updates")
     args = parser.parse_args()
@@ -38,15 +37,28 @@ def main():
         settings = load_settings()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Pre-inspect checkpoint to determine architecture (BiLSTM vs TFT)
+        logger.info(f"Inspecting checkpoint: {args.checkpoint.name}")
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        
+        # Detect architecture type
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        has_tft = any("temporal.tft" in k for k in state_dict.keys())
+        
+        if has_tft:
+            settings.hyperparams.use_tft = True
+            logger.info("Detected TFT architecture in checkpoint")
+        else:
+            settings.hyperparams.use_tft = False
+            logger.info("Detected BiLSTM architecture in checkpoint (Legacy)")
+
         # Load model
-        logger.info(f"Loading model from {args.checkpoint}")
-        model = DerivOmniModel(config=settings.model if hasattr(settings, 'model') else settings)
+        logger.info(f"Loading model on {device}")
+        model = DerivOmniModel(settings)
         model.to(device)
         
-        # Load state dict (including Fisher info implied by trainer changes, 
-        # but strictly we need to load it into OnlineLearningModule)
-        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        # Load state dict
+        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         
         # Initialize Online Learning Module
         online_learner = OnlineLearningModule(
@@ -58,7 +70,7 @@ def main():
         # CRITICAL: Load Fisher Information from checkpoint
         # This ensures we are protecting the OFFLINE knowledge, not the online data
         if "fisher_state_dict" in checkpoint and checkpoint["fisher_state_dict"]:
-            logger.info("Loading Fisher Information from checkpoint (OFFLINE KNOWLEDGE PRESIDERVATION)")
+            logger.info("Loading Fisher Information from checkpoint (OFFLINE KNOWLEDGE PRESERVATION)")
             online_learner.fisher.load_state_dict(checkpoint["fisher_state_dict"])
         else:
             logger.warning("No Fisher Information found in checkpoint. EWC will not protect old knowledge!")

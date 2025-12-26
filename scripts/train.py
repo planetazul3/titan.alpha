@@ -8,15 +8,20 @@ handles data loading, and saves the final checkpoint with
 Fisher Information for Elastic Weight Consolidation (EWC).
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import logging
 import argparse
-from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, random_split
 
-from config.settings import get_settings
+from config.settings import load_settings
 from models.core import DerivOmniModel
-from data.dataset import DerivDataset  # Assuming this exists
+from data.dataset import DerivDataset  
 from training.trainer import Trainer, TrainerConfig
 
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +36,7 @@ def main():
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Checkpoint directory")
     args = parser.parse_args()
 
-    settings = get_settings()
+    settings = load_settings()
     
     # Load dataset
     logger.info(f"Loading data from {args.data_path}")
@@ -86,7 +91,7 @@ def main():
     )
     
     # Initialize model
-    model = DerivOmniModel(config=settings)
+    model = DerivOmniModel(settings)
     
     # Configure trainer
     config = TrainerConfig(
