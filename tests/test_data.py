@@ -156,11 +156,11 @@ class TestPreprocessors:
         with pytest.raises(ValueError, match="must have 6 columns"):
             pp.process(candles)
 
-    def test_volatility_extractor_output_shape(self):
+    def test_volatility_extractor_output_shape(self, mock_settings):
         """Test volatility metrics extractor output."""
         from data.processor import VolatilityMetricsExtractor
 
-        extractor = VolatilityMetricsExtractor()
+        extractor = VolatilityMetricsExtractor(mock_settings)
         candles = np.random.rand(100, 6).astype(np.float32) * 100 + 1
 
         result = extractor.extract(candles)

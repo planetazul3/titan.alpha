@@ -263,6 +263,27 @@ class HeartbeatConfig(BaseModel):
     )
 
 
+class NormalizationConfig(BaseModel):
+    """Normalization scaling factors.
+    
+    Factors derived empirically for synthetic indices.
+    Allows tuning scaling without code changes.
+    """
+    
+    norm_factor_volatility: float = Field(
+        default=20.0, description="Scaling factor for realized volatility", gt=0
+    )
+    norm_factor_atr: float = Field(
+        default=100.0, description="Scaling factor for ATR (percent of price)", gt=0
+    )
+    norm_factor_rsi_std: float = Field(
+        default=0.02, description="Scaling factor for RSI std (1/50)", gt=0
+    )
+    norm_factor_bb_width: float = Field(
+        default=10.0, description="Scaling factor for BB width", gt=0
+    )
+
+
 class ObservabilityConfig(BaseModel):
     """Observability and telemetry configuration.
     
@@ -312,6 +333,7 @@ class Settings(BaseSettings):
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     shadow_trade: ShadowTradeConfig = Field(default_factory=ShadowTradeConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     environment: str = Field(default="development", description="Deployment environment")

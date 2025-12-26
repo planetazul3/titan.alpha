@@ -256,6 +256,16 @@ class VolatilityMetricsExtractor:
     These metrics feed into the volatility autoencoder expert.
     """
 
+    def __init__(self, settings: Settings):
+        """
+        Initialize volatility extractor.
+
+        Args:
+            settings: Configuration settings containing normalization factors
+        """
+        self.settings = settings
+        logger.debug("VolatilityMetricsExtractor initialized with config settings")
+
     def extract(self, candles: np.ndarray) -> np.ndarray:
         """
         Extract aggregated volatility metrics for autoencoder input.
@@ -276,7 +286,7 @@ class VolatilityMetricsExtractor:
             ValueError: If candles has incorrect shape or insufficient data
 
         Example:
-            >>> extractor = VolatilityMetricsExtractor()
+            >>> extractor = VolatilityMetricsExtractor(settings)
             >>> metrics = extractor.extract(candles)
             >>> metrics.shape  # (4,)
             >>> assert 0 <= metrics.min() and metrics.max() <= 1
@@ -332,19 +342,21 @@ class VolatilityMetricsExtractor:
             # This ensures reconstruction error is in expected range for
             # regime veto thresholds (typically 0.1-0.3)
             # ═══════════════════════════════════════════════════════════════
+            
+            norm = self.settings.normalization
 
-            # Normalization factors (empirically derived for synthetic indices):
-            # - realized_vol: typically 0.001-0.05 -> multiply by 20 -> 0.02-1.0
-            # - atr_normalized: typically 0.001-0.01 -> multiply by 100 -> 0.1-1.0
-            # - rsi_std: typically 5-25 -> divide by 50 -> 0.1-0.5
-            # - bb_w_mean: typically 0.01-0.1 -> multiply by 10 -> 0.1-1.0
+            # Normalization factors loaded from settings
+            # - realized_vol: typically 0.001-0.05 -> * 20 -> 0.02-1.0
+            # - atr_normalized: typically 0.001-0.01 -> * 100 -> 0.1-1.0
+            # - rsi_std: typically 5-25 -> * 0.02 (1/50) -> 0.1-0.5
+            # - bb_w_mean: typically 0.01-0.1 -> * 10 -> 0.1-1.0
 
             metrics = np.array(
                 [
-                    realized_vol * 20.0,  # Scale up small volatility
-                    atr_normalized * 100.0,  # ATR as % of price, scaled
-                    rsi_std / 50.0,  # RSI std normalized
-                    bb_w_mean * 10.0,  # BB width scaled
+                    realized_vol * norm.norm_factor_volatility,
+                    atr_normalized * norm.norm_factor_atr,
+                    rsi_std * norm.norm_factor_rsi_std,
+                    bb_w_mean * norm.norm_factor_bb_width,
                 ]
             )
 

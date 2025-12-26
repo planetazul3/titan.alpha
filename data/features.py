@@ -118,7 +118,7 @@ class FeatureBuilder:
         # Create preprocessors (internal use only)
         self._tick_pp = TickPreprocessor(settings)
         self._candle_pp = CandlePreprocessor(settings)
-        self._vol_ext = VolatilityMetricsExtractor()
+        self._vol_ext = VolatilityMetricsExtractor(settings)
 
         # Define schema from settings
         self.schema = FeatureSchema(
