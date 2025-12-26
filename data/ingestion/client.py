@@ -473,9 +473,10 @@ class DerivClient:
         prop = await self.api.proposal(proposal_req)
         prop_id = prop["proposal"]["id"]
 
-        logger.info(f"Buying proposal {prop_id}...")
-        # price limit set above stake to ensure execution
-        buy = await self.api.buy({"buy": prop_id, "price": amount + 100})
+        logger.info(f"Buying proposal {prop_id} with max price: {amount}")
+        # M02: Strict slippage protection. For basis='stake', price should typically equal amount.
+        # We set limit exactly to amount to reject any unexpected premium/fees.
+        buy = await self.api.buy({"buy": prop_id, "price": amount})
 
         return cast(dict[str, Any], buy["buy"])
 
