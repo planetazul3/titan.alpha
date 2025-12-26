@@ -94,15 +94,18 @@ class SafeTradeExecutor:
         # 4. Check Stake Amount (if resolver provided)
         if self.stake_resolver:
             # We don't have symbol easily in TradeSignal usually, unless in metadata
-            # Assuming signal has some way to ID symbol or we pass dummy
-            # Logic: If stake > max_stake, cap or reject
-            # But signal object usually holds the trade intent. 
-            # We'll rely on inner executor's sizer mostly, but strictly cap here?
-            # Integration point: Logic inside inner executor does sizing. 
-            # We can't easily check stake BEFORE calling inner.execute() unless inner exposes it.
-            # But we can check AFTER if we wanted, but that's too late.
-            # Workaround: Trust inner sizer but rely on daily loss limit to catch big bads.
-            pass
+            symbol = get_symbol_from_signal(signal)
+            # Dummy params for resolver if needed, or just get stake
+            # Assuming resolver signature: (symbol, context) -> float
+            try:
+                stake = self.stake_resolver(symbol, {})
+                if stake > self.config.max_stake_per_trade:
+                    msg = f"Stake {stake} exceeds safety limit {self.config.max_stake_per_trade}"
+                    return self._reject(msg)
+            except Exception as e:
+                 logger.error(f"Error resolving stake in safety check: {e}")
+                 # Fail safe or fail open? Fail safe -> reject
+                 return self._reject(f"Stake resolution failed: {e}")
 
         # 5. Execute with Retries
         result = await self._execute_with_retry(signal)

@@ -27,6 +27,10 @@ The following critical issues identified in previous audits have been **successf
 
 
 
+
+---
+
+
 ### Verification Records (12-26 Update)
 
 | Issue | Status | Verification Evidence |
@@ -34,8 +38,8 @@ The following critical issues identified in previous audits have been **successf
 | **Pending Trade Leak** | ✅ **Fixed** | Verified timeout handling logic removes stagnant keys. |
 | **Spatial Masking** | ✅ **Fixed** | Verified `SpatialExpert` output is invariant to padding. |
 | **Missing Metadata** | ✅ **Fixed** | Verified `TradeSignal` contains symbol metadata using `verify_filters.py`. |
-
-All identified minor issues have been resolved.
+| **Missing Barrier** | ✅ **Fixed** | Verified `TradeSignal` contains barrier metadata for exotic contracts. |
+| **Safety Bypass** | ✅ **Fixed** | Verified `SafeTradeExecutor` rejects stakes exceeding `max_stake_per_trade`. |
 
 ---
 
