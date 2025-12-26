@@ -46,7 +46,7 @@ class SafeTradeExecutor:
         inner_executor: TradeExecutor,
         config: ExecutionSafetyConfig,
         state_file: str | Path,
-        stake_resolver: Optional[Callable[[TradeSignal], float]] = None
+        stake_resolver: Optional[Callable[[TradeSignal], float | Any]] = None  # Any for Coroutine
     ):
         """
         Initialize safe executor.
@@ -95,10 +95,20 @@ class SafeTradeExecutor:
         if self.stake_resolver:
             try:
                 # FIX: Pass the full signal to the resolver to get the ACTUAL stake logic
-                stake = self.stake_resolver(signal)
+                # Support both sync and async resolvers
+                if asyncio.iscoroutinefunction(self.stake_resolver):
+                    stake = await self.stake_resolver(signal)
+                else:
+                    stake = self.stake_resolver(signal)
+
                 if stake > self.config.max_stake_per_trade:
                     msg = f"Stake {stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
                     return self._reject(msg)
+                
+                # INJECTION: Store validated stake in signal metadata to prevent drift
+                # This ensures the inner executor uses exactly what we validated
+                signal.metadata["stake"] = stake
+                
             except Exception as e:
                  logger.error(f"Error resolving stake in safety check: {e}")
                  # Fail safe -> reject

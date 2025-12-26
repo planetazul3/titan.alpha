@@ -40,6 +40,8 @@ The following critical issues identified in previous audits have been **successf
 | **Missing Metadata** | ✅ **Fixed** | Verified `TradeSignal` contains symbol metadata using `verify_filters.py`. |
 | **Missing Barrier** | ✅ **Fixed** | Verified `TradeSignal` contains barrier metadata for exotic contracts. |
 | **Safety Bypass** | ✅ **Fixed** | Verified `SafeTradeExecutor` rejects stakes exceeding `max_stake_per_trade`. |
+| **Safety Divergence** | ✅ **Fixed** | Verified `DerivTradeExecutor` uses stake injected by `SafeTradeExecutor` based on real balance. |
+| **Shadow Barriers** | ✅ **Fixed** | Verified `ShadowTradeRecord` persists `barrier` and `barrier2` levels. |
 
 ---
 

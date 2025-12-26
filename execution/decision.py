@@ -347,10 +347,13 @@ class DecisionEngine:
             candle_window=candle_window,
             model_version=self.model_version,
             feature_schema_version=FEATURE_SCHEMA_VERSION,
+            barrier_level=float(signal.metadata["barrier"].replace("+", "")) if "barrier" in signal.metadata else None,
+            barrier2_level=float(signal.metadata["barrier2"].replace("+", "")) if "barrier2" in signal.metadata else None,
             metadata={
                 "signal_type": signal.signal_type,
                 "regime_vetoed": regime_vetoed,
                 **(metadata or {}),
+                **signal.metadata,  # Ensure all signal metadata is preserved
             },
         )
 

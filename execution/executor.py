@@ -137,12 +137,18 @@ class DerivTradeExecutor:
                 logger.warning(f"Failed to fetch balance for sizing: {e}. Using static/fallback sizing.")
                 balance = None
 
-            # 2. Determine stake size using the injected position sizer
-            # pass context (drawdown, balance, etc) if available in the future
-            amount = self.position_sizer.suggest_stake_for_signal(
-                signal, 
-                account_balance=balance
-            )
+            # 2. Determine stake size
+            # PRIORITY: Check if safety layer injected a validated stake
+            injected_stake = signal.metadata.get("stake")
+            
+            if injected_stake is not None:
+                amount = float(injected_stake)
+            else:
+                # Fallback: Calculate locally (only if not running under SafeTradeExecutor or legacy mode)
+                amount = self.position_sizer.suggest_stake_for_signal(
+                    signal, 
+                    account_balance=balance
+                )
             
             # 3. Safety check: ensure amount > 0
             if amount <= 0:

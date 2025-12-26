@@ -501,10 +501,19 @@ async def run_live_trading(args):
         safety_state_file = Path(settings.system.system_db_path)
 
         # C06: Inject stake resolver for safety checks
-        def stake_resolver(signal: Any) -> float:
-            # Fallback for determining stake if missing in signal
-            # We use the sizer's suggestion mechanism
-            return sizer.suggest_stake_for_signal(signal)
+        async def stake_resolver(signal: Any) -> float:
+            # SAFETY FIX: Fetch REAL balance to ensure sizing matches execution reality
+            try:
+                # We need to fetch balance just like the executor would
+                # but currently client is not directly accessible here easily?
+                # Actually client is available in scope
+                current_balance = await client.get_balance()
+                logger.debug(f"Safety check balance fetch: {current_balance}")
+            except Exception as e:
+                logger.warning(f"Safety check balance fetch failed: {e}. Using None (defaults).")
+                current_balance = None
+                
+            return sizer.suggest_stake_for_signal(signal, account_balance=current_balance)
 
         executor = SafeTradeExecutor(
             inner_executor=raw_executor, 
