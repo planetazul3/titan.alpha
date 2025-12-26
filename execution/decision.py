@@ -541,7 +541,15 @@ class DecisionEngine:
         )
 
     def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:
-        """Safely extract and parse barrier value from metadata."""
+        """
+        ID-002 Fix: Safely extract and parse barrier value from metadata.
+        
+        Handles:
+        - Floats/Ints
+        - Strings with '+' or '-' prefixes
+        - None values
+        - Invalid formats (returns None)
+        """
         if key not in metadata:
             return None
         
@@ -552,8 +560,15 @@ class DecisionEngine:
         try:
             if isinstance(value, (int, float)):
                 return float(value)
+            
             if isinstance(value, str):
-                return float(value.replace("+", ""))
+                # Clean string: remove extra spaces and ensure it looks like a number
+                # Strip '+' but keep '-'
+                clean_value = value.strip().replace("+", "")
+                if not clean_value:
+                    return None
+                return float(clean_value)
+                
             return None
         except (ValueError, TypeError):
              logger.warning(f"Failed to parse barrier value for {key}: {value}")

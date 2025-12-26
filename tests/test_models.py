@@ -26,6 +26,11 @@ def mock_settings():
     settings.hyperparams.lstm_hidden_size = 64
     settings.hyperparams.cnn_filters = 32
     settings.hyperparams.use_tft = False  # Test BiLSTM path by default
+    
+    # ID-001 Fix: Add missing embedding dimensions used in DerivOmniModel.__init__
+    settings.hyperparams.temporal_embed_dim = 64
+    settings.hyperparams.spatial_embed_dim = 64
+    settings.hyperparams.fusion_output_dim = 256
     return settings
 
 
