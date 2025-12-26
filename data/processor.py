@@ -348,12 +348,13 @@ class VolatilityMetricsExtractor:
                 ]
             )
 
+            # NaN handling - MUST be done before clip, otherwise clip(NaN) -> NaN persists
+            metrics = np.nan_to_num(metrics, nan=0.0, posinf=1.0, neginf=0.0)
+
             # Clip to [0, 1] to ensure stable autoencoder behavior
             metrics = np.clip(metrics, 0.0, 1.0)
-
-            # NaN handling
-            result = np.nan_to_num(metrics, nan=0.0, posinf=1.0, neginf=0.0)
-            return cast(np.ndarray, result.astype(np.float32))
+            
+            return cast(np.ndarray, metrics.astype(np.float32))
 
         except Exception as e:
             logger.error(f"Error extracting volatility metrics: {e}")
