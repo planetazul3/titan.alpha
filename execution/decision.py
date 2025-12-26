@@ -256,7 +256,7 @@ class DecisionEngine:
 
 
 
-    def process_with_context(
+    async def process_with_context(
         self,
         probs: dict[str, float],
         reconstruction_error: float,
@@ -296,7 +296,7 @@ class DecisionEngine:
         # Store shadow trades with full context to ShadowTradeStore
         if self.shadow_store:
             for sig in all_signals:
-                self._store_shadow_trade(
+                await self._store_shadow_trade_async(
                     signal=sig,
                     reconstruction_error=reconstruction_error,
                     regime_state=self._get_regime_state_string(regime_assessment),
@@ -315,7 +315,7 @@ class DecisionEngine:
             market_data=market_data,
         )
 
-    def _store_shadow_trade(
+    async def _store_shadow_trade_async(
         self,
         signal: TradeSignal,
         reconstruction_error: float,
@@ -327,7 +327,8 @@ class DecisionEngine:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """
-        Store a shadow trade with full context to ShadowTradeStore.
+        Store a shadow trade with full context to ShadowTradeStore (Async).
+
 
         Creates an immutable ShadowTradeRecord with everything needed
         for later outcome resolution.
@@ -353,7 +354,12 @@ class DecisionEngine:
             },
         )
 
-        self.shadow_store.append(record)
+        if  hasattr(self.shadow_store, "append_async"):
+             await self.shadow_store.append_async(record)
+        else:
+             import asyncio
+             loop = asyncio.get_running_loop()
+             await loop.run_in_executor(None, lambda: self.shadow_store.append(record))
         logger.info(
             f"👻 SHADOW TRADE: {record.contract_type} {record.direction} "
             f"@ {record.probability:.3f} (ID: {record.trade_id[:8]})"

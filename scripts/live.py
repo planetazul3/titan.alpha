@@ -1112,7 +1112,7 @@ async def run_inference(
     # This stores tick/candle windows in ShadowTradeStore for:
     #   1. Accurate outcome resolution
     #   2. Retraining on production data
-    real_trades = engine.process_with_context(
+    real_trades = await engine.process_with_context(
         probs=sample_probs,
         reconstruction_error=reconstruction_error,
         tick_window=t_np,

@@ -25,6 +25,7 @@ from tqdm.auto import tqdm
 
 from training.losses import MultiTaskLoss
 from training.metrics import TradingMetrics
+from training.online_learning import FisherInformation
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,9 @@ class Trainer:
 
         # Metrics tracker
         self.metrics = TradingMetrics()
+        
+        # EWC State
+        self.fisher_info: FisherInformation | None = None
 
         # TensorBoard
         self.writer = None
@@ -226,7 +230,13 @@ class Trainer:
         elapsed = time.time() - start_time
         logger.info(f"Training complete in {elapsed / 60:.1f} minutes")
 
-        # Save final model
+        # Compute Fisher Information on training data for EWC
+        logger.info("Computing Fisher Information for EWC...")
+        self.fisher_info = FisherInformation(self.model)
+        # Use a subset of training data for efficiency (e.g., 2000 samples)
+        self.fisher_info.compute(self.train_loader, self.criterion, num_samples=2000)
+
+        # Save final model with Fisher info
         self._save_checkpoint("final_model.pt")
 
         if self.writer:
@@ -347,9 +357,9 @@ class Trainer:
                 "epoch": self.current_epoch,
                 "global_step": self.global_step,
                 "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
                 "scaler_state_dict": self.scaler.state_dict(),  # Save AMP scaler state
+                "fisher_state_dict": self.fisher_info.state_dict() if self.fisher_info else None,
                 "best_val_loss": self.best_val_loss,
                 "config": self.config,
             },
@@ -368,6 +378,11 @@ class Trainer:
         # Load AMP scaler state if available
         if "scaler_state_dict" in checkpoint:
             self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+            
+        # Load Fisher info if available
+        if checkpoint.get("fisher_state_dict"):
+            self.fisher_info = FisherInformation(self.model)
+            self.fisher_info.load_state_dict(checkpoint["fisher_state_dict"])
 
         self.current_epoch = checkpoint["epoch"]
         self.global_step = checkpoint.get("global_step", 0)

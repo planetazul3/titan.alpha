@@ -43,6 +43,7 @@ class DerivClient:
         self.app_id = settings.deriv_app_id
         self.token = settings.deriv_api_token
         self._keep_alive_task: asyncio.Task | None = None
+        self._reconnect_lock = asyncio.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -144,25 +145,34 @@ class DerivClient:
         Returns:
             True if reconnection successful, False otherwise
         """
-        for attempt in range(max_attempts):
-            try:
-                logger.warning(f"Reconnection attempt {attempt + 1}/{max_attempts}")
-                await self.disconnect()  # Clean up old connection
-                
-                # M14: Jittered backoff
-                base_delay = 2**attempt
-                jitter = random.uniform(0.5 * base_delay, 1.5 * base_delay)
-                logger.info(f"Waiting {jitter:.2f}s before reconnecting...")
-                await asyncio.sleep(jitter)
-                
-                await self.connect()
-                logger.info("Reconnection successful")
-                return True
-            except Exception as e:
-                logger.error(f"Reconnection attempt {attempt + 1} failed: {e}")
+        if self._reconnect_lock.locked():
+             logger.info("Reconnection already in progress, waiting...")
 
-        logger.error(f"Failed to reconnect after {max_attempts} attempts")
-        return False
+        async with self._reconnect_lock:
+            # Double-check connection state after acquiring lock
+            if self.is_connected:
+                logger.info("Client already reconnected by another task")
+                return True
+
+            for attempt in range(max_attempts):
+                try:
+                    logger.warning(f"Reconnection attempt {attempt + 1}/{max_attempts}")
+                    await self.disconnect()  # Clean up old connection
+                    
+                    # M14: Jittered backoff
+                    base_delay = 2**attempt
+                    jitter = random.uniform(0.5 * base_delay, 1.5 * base_delay)
+                    logger.info(f"Waiting {jitter:.2f}s before reconnecting...")
+                    await asyncio.sleep(jitter)
+                    
+                    await self.connect()
+                    logger.info("Reconnection successful")
+                    return True
+                except Exception as e:
+                    logger.error(f"Reconnection attempt {attempt + 1} failed: {e}")
+
+            logger.error(f"Failed to reconnect after {max_attempts} attempts")
+            return False
 
     async def get_balance(self) -> float:
         """
@@ -312,21 +322,26 @@ class DerivClient:
                     logger.info("Tick stream completed")
                     queue.put_nowait(None)
 
-                source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
+                subscription = source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
 
-                while True:
-                    try:
-                        # Wait for tick with stale data timeout
-                        item = await asyncio.wait_for(queue.get(), timeout=stale_timeout)
-                        if item is None:
-                            logger.warning("Tick stream ended, attempting reconnection...")
+                try:
+                    while True:
+                        try:
+                            # Wait for tick with stale data timeout
+                            item = await asyncio.wait_for(queue.get(), timeout=stale_timeout)
+                            if item is None:
+                                logger.warning("Tick stream ended, attempting reconnection...")
+                                break  # Exit inner loop to trigger reconnection
+                            yield item
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"Stale data detected: no ticks for {stale_timeout}s, attempting reconnection..."
+                            )
                             break  # Exit inner loop to trigger reconnection
-                        yield item
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"Stale data detected: no ticks for {stale_timeout}s, attempting reconnection..."
-                        )
-                        break  # Exit inner loop to trigger reconnection
+                finally:
+                    if subscription:
+                        subscription.dispose()
+                        logger.debug("Disposed tick stream subscription")
 
             except Exception as e:
                 logger.error(f"Tick stream subscription error: {e}")
@@ -404,21 +419,26 @@ class DerivClient:
                     logger.info("Candle stream completed")
                     queue.put_nowait(None)
 
-                source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
+                subscription = source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
 
-                while True:
-                    try:
-                        # Wait for candle with stale data timeout
-                        item = await asyncio.wait_for(queue.get(), timeout=stale_timeout)
-                        if item is None:
-                            logger.warning("Candle stream ended, attempting reconnection...")
+                try:
+                    while True:
+                        try:
+                            # Wait for candle with stale data timeout
+                            item = await asyncio.wait_for(queue.get(), timeout=stale_timeout)
+                            if item is None:
+                                logger.warning("Candle stream ended, attempting reconnection...")
+                                break  # Exit inner loop to trigger reconnection
+                            yield item
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"Stale data detected: no candles for {stale_timeout}s, attempting reconnection..."
+                            )
                             break  # Exit inner loop to trigger reconnection
-                        yield item
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"Stale data detected: no candles for {stale_timeout}s, attempting reconnection..."
-                        )
-                        break  # Exit inner loop to trigger reconnection
+                finally:
+                    if subscription:
+                        subscription.dispose()
+                        logger.debug("Disposed candle stream subscription")
 
             except Exception as e:
                 logger.error(f"Candle stream subscription error: {e}")

@@ -170,6 +170,33 @@ class DerivTradeExecutor:
                 f"Executing {contract} trade: amount=${amount:.2f}, duration={duration}{duration_unit}"
             )
 
+            # D04: Idempotency Check
+            # Before executing, check if we verify a similar trade exists to prevent double execution on retries
+            try:
+                open_contracts = await self.client.get_open_contracts()
+                signal_ts = signal.timestamp.timestamp() if signal.timestamp else datetime.now(timezone.utc).timestamp()
+                
+                for c in open_contracts:
+                    # Check matching parameters
+                    if (c.get("underlying") == self.client.symbol and
+                        c.get("contract_type") == contract and
+                        not c.get("is_expired") and 
+                        not c.get("is_sold")):
+                        
+                        # Check timing (purchase time close to signal time)
+                        # We assume execution happens within 90s of signal generation
+                        purchase_time = c.get("purchase_time")
+                        if purchase_time and abs(purchase_time - signal_ts) < 90:
+                            logger.warning(f"Idempotency check: Found existing contract {c.get('contract_id')} matching signal.")
+                            return TradeResult(
+                                success=True,
+                                contract_id=str(c.get("contract_id")),
+                                entry_price=float(c.get("buy_price", amount)),
+                                timestamp=datetime.fromtimestamp(purchase_time, tz=timezone.utc)
+                            )
+            except Exception as e:
+                logger.warning(f"Idempotency check failed (proceeding with execution): {e}")
+
             # Execute via Deriv API
             result = await self.client.buy(contract, amount, duration, duration_unit)
 

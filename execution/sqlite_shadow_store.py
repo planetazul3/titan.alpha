@@ -198,6 +198,12 @@ class SQLiteShadowStore:
 
         logger.debug(f"Appended shadow trade: {record.trade_id}")
 
+    async def append_async(self, record: ShadowTradeRecord) -> None:
+        """Async append."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.append(record))
+
     def update_outcome(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float) -> bool:
         """
         Update a trade's outcome atomically.

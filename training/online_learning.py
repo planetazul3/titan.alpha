@@ -210,6 +210,19 @@ class FisherInformation:
         """Get optimal parameter values."""
         return self._optimal_params.get(name)
     
+    def state_dict(self) -> dict[str, Any]:
+        """Get state dictionary."""
+        return {
+            "fisher": self._fisher,
+            "optimal_params": self._optimal_params,
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Load state dictionary."""
+        self._fisher = state_dict["fisher"]
+        self._optimal_params = state_dict["optimal_params"]
+        logger.info(f"Loaded Fisher Information for {len(self._fisher)} parameters")
+
     def is_computed(self) -> bool:
         """Check if Fisher has been computed."""
         return len(self._fisher) > 0

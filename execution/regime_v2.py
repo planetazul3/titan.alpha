@@ -158,26 +158,31 @@ class HurstExponentEstimator:
             if n_windows < 1:
                 continue
             
-            rs_list = []
-            for i in range(n_windows):
-                segment = returns[i * window:(i + 1) * window]
-                
-                # Mean-adjusted cumulative deviation
-                mean_return = np.mean(segment)
-                cumdev = np.cumsum(segment - mean_return)
-                
-                # Range
-                r = np.max(cumdev) - np.min(cumdev)
-                
-                # Standard deviation
-                s = np.std(segment, ddof=1)
-                
-                if s > 0:
-                    rs_list.append(r / s)
+            # Vectorized R/S calculation
+            # Reshape into (n_windows, window) to process all segments in parallel
+            truncated_len = n_windows * window
+            segments = returns[:truncated_len].reshape(n_windows, window)
             
-            if rs_list:
+            # Mean of each segment
+            means = np.mean(segments, axis=1, keepdims=True)
+            
+            # Cumulative deviations from mean
+            deviations = segments - means
+            cumdev = np.cumsum(deviations, axis=1)
+            
+            # Range R
+            R = np.max(cumdev, axis=1) - np.min(cumdev, axis=1)
+            
+            # Standard deviation S
+            S = np.std(segments, axis=1, ddof=1)
+            
+            # Avoid division by zero
+            valid = S > 0
+            if np.any(valid):
+                # Average R/S for this window size
+                avg_rs = np.mean(R[valid] / S[valid])
                 window_sizes.append(window)
-                rs_values.append(np.mean(rs_list))
+                rs_values.append(avg_rs)
         
         if len(window_sizes) < 2:
             return 0.5
