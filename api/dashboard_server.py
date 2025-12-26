@@ -98,27 +98,47 @@ def readonly_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+# Caching for stats
+_stats_cache = {"data": None, "timestamp": 0.0}
+STATS_CACHE_TTL = 5.0  # seconds
+
 def get_shadow_trade_stats() -> ShadowTradeStats:
     """
     Get aggregate statistics from shadow trades database.
-
+    
+    Uses 5s caching to reduce database load.
     Returns default stats if database is unavailable.
     """
+    import time
+    global _stats_cache
+    
+    current_time = time.time()
+    if _stats_cache["data"] and (current_time - _stats_cache["timestamp"] < STATS_CACHE_TTL):
+        return _stats_cache["data"]
+
     try:
         with readonly_connection(SHADOW_DB_PATH) as conn:
             cursor = conn.cursor()
 
-            # Total trades
-            total = cursor.execute("SELECT COUNT(*) FROM shadow_trades").fetchone()[0]
+            # Total trades (fastest count)
+            total = cursor.execute("SELECT COUNT(trade_id) FROM shadow_trades").fetchone()[0]
+
+            if total == 0:
+                stats = ShadowTradeStats(
+                    total=0, resolved=0, unresolved=0, wins=0, losses=0,
+                    win_rate=0.0, simulated_pnl=0.0, roi=0.0
+                )
+                _stats_cache = {"data": stats, "timestamp": current_time}
+                return stats
 
             # Resolved trades (have outcome)
             resolved = cursor.execute(
-                "SELECT COUNT(*) FROM shadow_trades WHERE outcome IS NOT NULL"
+                "SELECT COUNT(trade_id) FROM shadow_trades WHERE outcome IS NOT NULL"
             ).fetchone()[0]
 
             # Wins
             wins = cursor.execute(
-                "SELECT COUNT(*) FROM shadow_trades WHERE outcome = 1"
+                "SELECT COUNT(trade_id) FROM shadow_trades WHERE outcome = 1"
             ).fetchone()[0]
 
             losses = resolved - wins
@@ -128,7 +148,7 @@ def get_shadow_trade_stats() -> ShadowTradeStats:
             simulated_pnl = (wins * PAYOUT_RATE) - losses
             roi = (simulated_pnl / total * 100) if total > 0 else 0.0
 
-            return ShadowTradeStats(
+            stats = ShadowTradeStats(
                 total=total,
                 resolved=resolved,
                 unresolved=total - resolved,
@@ -138,6 +158,10 @@ def get_shadow_trade_stats() -> ShadowTradeStats:
                 simulated_pnl=round(simulated_pnl, 2),
                 roi=round(roi, 2),
             )
+            
+            _stats_cache = {"data": stats, "timestamp": current_time}
+            return stats
+
     except FileNotFoundError:
         logger.warning(f"Shadow trades database not found: {SHADOW_DB_PATH}")
         return ShadowTradeStats(
@@ -289,30 +313,48 @@ async def get_metrics():
 
 
 @app.get("/api/shadow-trades", response_model=ShadowTradeList)
-async def get_shadow_trades(limit: int = 100, offset: int = 0):
+async def get_shadow_trades(limit: int = 100, offset: int = 0, before: str | None = None):
     """
     Get recent shadow trades.
-
+    
     Args:
         limit: Maximum number of trades to return (default: 100, max: 500)
-        offset: Number of trades to skip for pagination
+        offset: Legacy pagination (skip N records). Use 'before' for better performance.
+        before: Timestamp (ISO string) to fetch trades before. Efficient keyset pagination.
     """
     limit = min(limit, 500)  # Cap at 500 to prevent memory issues
 
     try:
         with readonly_connection(SHADOW_DB_PATH) as conn:
             cursor = conn.cursor()
-            rows = cursor.execute(
-                """
-                SELECT trade_id, timestamp, contract_type, direction,
-                       probability, entry_price, exit_price, outcome,
-                       reconstruction_error, regime_state
-                FROM shadow_trades
-                ORDER BY timestamp DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            ).fetchall()
+            
+            if before:
+                # Efficient keyset pagination using index
+                rows = cursor.execute(
+                    """
+                    SELECT trade_id, timestamp, contract_type, direction,
+                           probability, entry_price, exit_price, outcome,
+                           reconstruction_error, regime_state
+                    FROM shadow_trades
+                    WHERE timestamp < ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (before, limit),
+                ).fetchall()
+            else:
+                # Legacy offset pagination (slower for deep pages)
+                rows = cursor.execute(
+                    """
+                    SELECT trade_id, timestamp, contract_type, direction,
+                           probability, entry_price, exit_price, outcome,
+                           reconstruction_error, regime_state
+                    FROM shadow_trades
+                    ORDER BY timestamp DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                ).fetchall()
 
             trades = [
                 ShadowTrade(
