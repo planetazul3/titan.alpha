@@ -268,6 +268,16 @@ class TestLiveFlowIntegration:
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         shadow_store = SQLiteShadowStore(tmp_path / "shadow.db")
 
+        # Add missing mock settings for C02 and I01 fixes
+        mock_settings.shadow_trade = MagicMock()
+        mock_settings.shadow_trade.min_probability_track = 0.40
+        mock_settings.shadow_trade.duration_rise_fall = 1
+        mock_settings.shadow_trade.duration_touch = 5
+        mock_settings.shadow_trade.duration_range = 5
+        mock_settings.shadow_trade.duration_minutes = 1
+        mock_settings.trading.barrier_offset = "+0.50"
+        mock_settings.trading.barrier2_offset = "-0.50"
+
         engine = DecisionEngine(
             mock_settings,
             regime_veto=regime_veto,
@@ -282,11 +292,11 @@ class TestLiveFlowIntegration:
             "range_prob": 0.40,
         }
 
-        # Process with context for shadow capture
+        # Process with context for shadow capture (now async)
         tick_window = np.random.randn(100)
         candle_window = np.random.randn(50, 5)
 
-        engine.process_with_context(
+        await engine.process_with_context(
             probs=probs,
             reconstruction_error=0.05,
             tick_window=tick_window,

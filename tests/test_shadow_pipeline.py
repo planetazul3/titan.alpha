@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 
 class TestShadowTradeStore:
@@ -257,7 +258,8 @@ class TestPipelineIntegration:
             stats = store.get_statistics()
             assert stats["total_records"] == 1
 
-    def test_decision_engine_with_shadow_store(self):
+    @pytest.mark.asyncio
+    async def test_decision_engine_with_shadow_store(self):
         """Test DecisionEngine captures shadow trades with context."""
         from execution.decision import DecisionEngine
         from execution.regime import RegimeVeto
@@ -271,6 +273,16 @@ class TestPipelineIntegration:
             settings.thresholds.confidence_threshold_high = 0.75
             settings.thresholds.learning_threshold_min = 0.40
             settings.thresholds.learning_threshold_max = 0.60
+            # Add missing shadow_trade settings for I01 and C02 fixes
+            settings.shadow_trade.min_probability_track = 0.40
+            settings.shadow_trade.duration_rise_fall = 1
+            settings.shadow_trade.duration_touch = 5
+            settings.shadow_trade.duration_range = 5
+            settings.shadow_trade.duration_minutes = 1
+            # Add trading settings for filter_signals
+            settings.trading.symbol = "R_100"
+            settings.trading.barrier_offset = "+0.50"
+            settings.trading.barrier2_offset = "-0.50"
 
             regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
 
@@ -283,8 +295,8 @@ class TestPipelineIntegration:
             tick_window = np.random.rand(100).astype(np.float32) * 100 + 1
             candle_window = np.random.rand(50, 6).astype(np.float32) * 100 + 1
 
-            # Process with context
-            trades = engine.process_with_context(
+            # Process with context - now async
+            trades = await engine.process_with_context(
                 probs=probs,
                 reconstruction_error=0.05,  # Below caution threshold
                 tick_window=tick_window,

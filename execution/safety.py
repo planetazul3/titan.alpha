@@ -212,10 +212,18 @@ class SafeTradeExecutor:
         # PnL updates come from outcome resolution typically.
         # But we track *entry* count here.
 
-    # Hook for outcome tracking to update PnL
-    def register_outcome(self, pnl: float):
-        """Called by RealTradeTracker when trade closes."""
-        self.store.update_daily_pnl(pnl)
+    # Hook for outcome tracking to update P&L
+    async def register_outcome(self, pnl: float):
+        """Called by RealTradeTracker when trade closes.
+        
+        C04 Fix: Now async to prevent blocking I/O in event loop.
+        """
+        await self.store.update_daily_pnl_async(pnl)
+
+    # Alias for backward compatibility with RealTradeTracker
+    async def update_pnl(self, pnl: float):
+        """Alias for register_outcome - called by RealTradeTracker."""
+        await self.register_outcome(pnl)
 
 
 def get_symbol_from_signal(signal: TradeSignal) -> str:

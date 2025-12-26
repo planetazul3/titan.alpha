@@ -95,6 +95,9 @@ class ShadowTradeRecord:
     barrier_level: float | None = None
     barrier2_level: float | None = None
 
+    # C02 Fix: Per-trade duration for accurate resolution timing
+    duration_minutes: int = 1
+
     # Extra metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -117,6 +120,7 @@ class ShadowTradeRecord:
         feature_schema_version: str = "1.0",
         barrier_level: float | None = None,
         barrier2_level: float | None = None,
+        duration_minutes: int = 1,
         metadata: dict[str, Any] | None = None,
     ) -> "ShadowTradeRecord":
         """
@@ -146,6 +150,7 @@ class ShadowTradeRecord:
             else list(candle_window),
             barrier_level=barrier_level,
             barrier2_level=barrier2_level,
+            duration_minutes=duration_minutes,
             metadata=metadata or {},
         )
 
@@ -197,6 +202,7 @@ class ShadowTradeRecord:
             resolved_at=datetime.now(timezone.utc),
             barrier_level=self.barrier_level,
             barrier2_level=self.barrier2_level,
+            duration_minutes=self.duration_minutes,
             metadata=self.metadata,
             _schema_version=self._schema_version,
             _created_at=self._created_at,

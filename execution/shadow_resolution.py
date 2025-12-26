@@ -57,13 +57,21 @@ class ShadowTradeResolver:
         self.staleness_threshold = timedelta(minutes=staleness_threshold_minutes)
         self.logger = logging.getLogger(__name__)
 
-    async def resolve_trades(self, current_price: float, current_time: datetime) -> int:
+    async def resolve_trades(
+        self,
+        current_price: float,
+        current_time: datetime,
+        high_price: float | None = None,
+        low_price: float | None = None,
+    ) -> int:
         """
         Check unresolved trades and update outcomes if expired.
 
         Args:
             current_price: Current market price (e.g. candle close).
             current_time: Current timestamp (aware).
+            high_price: High price of current candle (for barrier checking).
+            low_price: Low price of current candle (for barrier checking).
 
         Returns:
             Number of trades resolved in this pass.
@@ -87,8 +95,9 @@ class ShadowTradeResolver:
         normal_resolutions: List[tuple[ShadowTradeRecord, float]] = []
 
         for trade in unresolved:
-            # Check if trade has expired
-            expiration_time = trade.timestamp + self.duration
+            # C02 Fix: Use per-trade duration instead of global default
+            trade_duration = timedelta(minutes=getattr(trade, 'duration_minutes', self.duration.total_seconds() / 60))
+            expiration_time = trade.timestamp + trade_duration
             
             if current_time >= expiration_time:
                 staleness = current_time - expiration_time
@@ -101,7 +110,7 @@ class ShadowTradeResolver:
 
         # 1. Resolve normal trades
         for trade, exit_price in normal_resolutions:
-            await self._apply_resolution_async(trade, exit_price, current_price)
+            await self._apply_resolution_async(trade, exit_price, current_price, high_price, low_price)
             resolved_count += 1
             if trade.outcome is not None:
                 if trade.outcome > 0: wins += 1
@@ -165,9 +174,16 @@ class ShadowTradeResolver:
 
         return resolved_count
 
-    async def _apply_resolution_async(self, trade: ShadowTradeRecord, exit_price: float, current_price_ref: float):
+    async def _apply_resolution_async(
+        self,
+        trade: ShadowTradeRecord,
+        exit_price: float,
+        current_price_ref: float,
+        high_price: float | None = None,
+        low_price: float | None = None,
+    ):
         """Apply resolution logic to a trade asynchronously."""
-        outcome = self._determine_outcome(trade, exit_price)
+        outcome = self._determine_outcome(trade, exit_price, high_price, low_price)
         
         if outcome is not None:
             # H08: Async DB update
@@ -205,13 +221,25 @@ class ShadowTradeResolver:
             exit_price=current_price # Use current price as fallback exit for db rec
         )
 
-    def _determine_outcome(self, trade: ShadowTradeRecord, exit_price: float) -> Optional[bool]:
+    def _determine_outcome(
+        self,
+        trade: ShadowTradeRecord,
+        exit_price: float,
+        high_price: float | None = None,
+        low_price: float | None = None,
+    ) -> Optional[bool]:
         """
         Determine win/loss based on contract type and direction.
 
         For RISE_FALL: Uses exit_price vs entry_price
-        For TOUCH/NO_TOUCH: Uses High/Low from candle_window to check barrier hits
-        For STAYS_BETWEEN: Uses High/Low from candle_window to check range containment
+        For TOUCH/NO_TOUCH: Uses passed high_price/low_price or candle_window to check barrier hits
+        For STAYS_BETWEEN: Uses passed high_price/low_price or candle_window to check range containment
+
+        Args:
+            trade: The shadow trade record
+            exit_price: Exit price (candle close)
+            high_price: High price of resolution candle (for barrier checking)
+            low_price: Low price of resolution candle (for barrier checking)
 
         Returns:
             True (Win), False (Loss), or None (Unknown/Error)
@@ -227,7 +255,15 @@ class ShadowTradeResolver:
 
             elif trade.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
                 # TOUCH/NO_TOUCH requires checking High/Low from candle period
-                if trade.candle_window and len(trade.candle_window) > 0:
+                # C03: Use passed high/low prices if available (preferred), fallback to candle_window
+                if high_price is not None and low_price is not None:
+                    # Use directly passed high/low for current resolution candle
+                    high_prices = np.array([high_price])
+                    low_prices = np.array([low_price])
+                    self.logger.debug(
+                        f"TOUCH resolution using passed OHLC: high={high_price:.5f}, low={low_price:.5f}"
+                    )
+                elif trade.candle_window and len(trade.candle_window) > 0:
                     candles = np.array(trade.candle_window)
 
                     # Validate shape (must have at least columns 0-3 for OHLC)
@@ -240,41 +276,64 @@ class ShadowTradeResolver:
 
                     high_prices = candles[:, CANDLE_COL_HIGH]
                     low_prices = candles[:, CANDLE_COL_LOW]
+                else:
+                    self.logger.warning(
+                        f"TOUCH trade {trade.trade_id[:8]} missing both passed prices and candle_window"
+                    )
+                    return None
 
-                    # C02: Use stored barrier levels if available, else default
-                    if trade.barrier_level is not None:
-                        # barrier_level is usually high barrier offset, barrier2_level is low barrier offset
-                        # Assuming symmetric around entry if only one is provided, or barrier_level is the 'touch' distance
-                        # The report says: "Calculate upper_barrier as entry_price plus barrier_level. For lower_barrier, use the negative of the absolute barrier distance."
-                        offset = abs(trade.barrier_level)
-                        upper_barrier = trade.entry_price + offset
-                        lower_barrier = trade.entry_price - offset
-                    else:
-                        # Fallback to percentage
-                        self.logger.debug(
-                            f"Using default barrier pct {self.default_touch_barrier_pct} for trade {trade.trade_id}"
-                        )
-                        upper_barrier = trade.entry_price * (1 + self.default_touch_barrier_pct)
-                        lower_barrier = trade.entry_price * (1 - self.default_touch_barrier_pct)
+                # C02: Use stored barrier levels if available, else default
+                if trade.barrier_level is not None:
+                    offset = abs(trade.barrier_level)
+                    upper_barrier = trade.entry_price + offset
+                    lower_barrier = trade.entry_price - offset
+                else:
+                    # Fallback to percentage
+                    self.logger.debug(
+                        f"Using default barrier pct {self.default_touch_barrier_pct} for trade {trade.trade_id}"
+                    )
+                    upper_barrier = trade.entry_price * (1 + self.default_touch_barrier_pct)
+                    lower_barrier = trade.entry_price * (1 - self.default_touch_barrier_pct)
 
-                    # Check if any high/low touched the barriers
+                # I04 Fix: Directional validation for barrier touches
+                # For TOUCH trades, we need to check if barrier was touched in the correct direction
+                barrier_direction = trade.metadata.get("barrier_direction") if trade.metadata else None
+                
+                if barrier_direction == "UP":
+                    # Only upper barrier matters for UP direction
+                    touched = bool(np.any(high_prices >= upper_barrier))
+                elif barrier_direction == "DOWN":
+                    # Only lower barrier matters for DOWN direction
+                    touched = bool(np.any(low_prices <= lower_barrier))
+                else:
+                    # Default: either barrier touch counts (symmetric)
                     touched = bool(
                         np.any(high_prices >= upper_barrier) or np.any(low_prices <= lower_barrier)
                     )
 
-                    if trade.direction == "TOUCH":
-                        return touched
-                    elif trade.direction == "NO_TOUCH":
-                        return not touched
-                else:
-                    self.logger.warning(
-                        f"TOUCH trade {trade.trade_id[:8]} missing candle_window"
+                # Log when barrier hit detected
+                if touched and high_price is not None:
+                    self.logger.debug(
+                        f"🎯 TOUCH barrier hit: high={high_price:.5f}, low={low_price:.5f}, "
+                        f"upper={upper_barrier:.5f}, lower={lower_barrier:.5f}, dir={barrier_direction}"
                     )
-                    return None
+
+                if trade.direction == "TOUCH":
+                    return touched
+                elif trade.direction == "NO_TOUCH":
+                    return not touched
 
             elif trade.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
                 # STAYS_BETWEEN: price must stay within ±band of entry
-                if trade.candle_window and len(trade.candle_window) > 0:
+                # C03: Use passed high/low prices if available (preferred), fallback to candle_window
+                if high_price is not None and low_price is not None:
+                    # Use directly passed high/low for current resolution candle
+                    high_prices = np.array([high_price])
+                    low_prices = np.array([low_price])
+                    self.logger.debug(
+                        f"RANGE resolution using passed OHLC: high={high_price:.5f}, low={low_price:.5f}"
+                    )
+                elif trade.candle_window and len(trade.candle_window) > 0:
                     candles = np.array(trade.candle_window)
 
                     # Validate shape
@@ -287,30 +346,37 @@ class ShadowTradeResolver:
 
                     high_prices = candles[:, CANDLE_COL_HIGH]
                     low_prices = candles[:, CANDLE_COL_LOW]
-
-                    # C02: Use stored barrier levels
-                    if trade.barrier_level is not None and trade.barrier2_level is not None:
-                        # barrier_level is usually high barrier offset, barrier2_level is low barrier offset
-                        upper_band = trade.entry_price + trade.barrier_level
-                        lower_band = trade.entry_price + trade.barrier2_level
-                    else:
-                        # Fallback
-                        self.logger.debug(
-                            f"Using default range pct {self.default_range_barrier_pct} for trade {trade.trade_id}"
-                        )
-                        upper_band = trade.entry_price * (1 + self.default_range_barrier_pct)
-                        lower_band = trade.entry_price * (1 - self.default_range_barrier_pct)
-
-                    # Price stayed in range if ALL highs below upper and ALL lows above lower
-                    stayed_in = bool(
-                        np.all(high_prices <= upper_band) and np.all(low_prices >= lower_band)
-                    )
-                    return stayed_in
                 else:
                     self.logger.warning(
-                        f"RANGE trade {trade.trade_id[:8]} missing candle_window"
+                        f"RANGE trade {trade.trade_id[:8]} missing both passed prices and candle_window"
                     )
                     return None
+
+                # C02: Use stored barrier levels
+                if trade.barrier_level is not None and trade.barrier2_level is not None:
+                    upper_band = trade.entry_price + trade.barrier_level
+                    lower_band = trade.entry_price + trade.barrier2_level
+                else:
+                    # Fallback to percentage
+                    self.logger.debug(
+                        f"Using default range pct {self.default_range_barrier_pct} for trade {trade.trade_id}"
+                    )
+                    upper_band = trade.entry_price * (1 + self.default_range_barrier_pct)
+                    lower_band = trade.entry_price * (1 - self.default_range_barrier_pct)
+
+                # Price stayed in range if ALL highs below upper and ALL lows above lower
+                stayed_in = bool(
+                    np.all(high_prices <= upper_band) and np.all(low_prices >= lower_band)
+                )
+                
+                # Log when range breach detected
+                if not stayed_in and high_price is not None:
+                    self.logger.debug(
+                        f"🎯 RANGE breach: high={high_price:.5f}, low={low_price:.5f}, "
+                        f"upper={upper_band:.5f}, lower={lower_band:.5f}"
+                    )
+                
+                return stayed_in
 
             # Unsupported contract type
             self.logger.warning(f"Unsupported contract type: {trade.contract_type}")

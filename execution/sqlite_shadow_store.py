@@ -31,7 +31,7 @@ from execution.shadow_store import SHADOW_STORE_SCHEMA_VERSION, ShadowTradeRecor
 logger = logging.getLogger(__name__)
 
 # SQLite database schema version
-SQLITE_SCHEMA_VERSION = 2
+SQLITE_SCHEMA_VERSION = 3  # C02: Added duration_minutes column
 
 
 class SQLiteShadowStore:
@@ -71,7 +71,8 @@ class SQLiteShadowStore:
         schema_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         barrier_level REAL,
-        barrier2_level REAL
+        barrier2_level REAL,
+        duration_minutes INTEGER DEFAULT 1
     )
     """
 
@@ -174,8 +175,8 @@ class SQLiteShadowStore:
                     tick_window, candle_window,
                     outcome, exit_price, resolved_at,
                     metadata, schema_version, created_at,
-                    barrier_level, barrier2_level
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    barrier_level, barrier2_level, duration_minutes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.trade_id,
@@ -198,6 +199,7 @@ class SQLiteShadowStore:
                     record._created_at,
                     record.barrier_level,
                     record.barrier2_level,
+                    record.duration_minutes,
                 ),
             )
 
@@ -440,6 +442,7 @@ class SQLiteShadowStore:
             _created_at=row["created_at"],
             barrier_level=row["barrier_level"] if "barrier_level" in row.keys() else None,
             barrier2_level=row["barrier2_level"] if "barrier2_level" in row.keys() else None,
+            duration_minutes=row["duration_minutes"] if "duration_minutes" in row.keys() else 1,
         )
 
     def get_by_id(self, trade_id: str) -> ShadowTradeRecord | None:

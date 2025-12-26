@@ -268,9 +268,9 @@ class TestSafeTradeExecutor:
         """Should track P&L updates."""
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=temp_state_file)
         
-        # update_pnl -> register_outcome
-        safe_executor.register_outcome(10.0)
-        safe_executor.register_outcome(-5.0)
+        # C04 Fix: register_outcome is now async
+        await safe_executor.register_outcome(10.0)
+        await safe_executor.register_outcome(-5.0)
         
         # Verify via store
         from execution.safety_store import SQLiteSafetyStateStore

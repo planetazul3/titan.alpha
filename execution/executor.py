@@ -156,15 +156,18 @@ class DerivTradeExecutor:
                 return TradeResult(success=False, error="Zero stake amount")
 
             if signal.contract_type == CONTRACT_TYPES.RISE_FALL:
-                duration = 1
+                # C02 Fix: Use centralized duration from settings
+                duration = self.settings.shadow_trade.duration_rise_fall
                 duration_unit = "m"
                 contract = "CALL" if signal.direction == "CALL" else "PUT"
             elif signal.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
-                duration = 5
+                # C02 Fix: Use centralized duration from settings
+                duration = self.settings.shadow_trade.duration_touch
                 duration_unit = "m"
                 contract = "ONETOUCH" if signal.direction == "TOUCH" else "NOTOUCH"
             elif signal.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
-                duration = 5
+                # C02 Fix: Use centralized duration from settings
+                duration = self.settings.shadow_trade.duration_range
                 duration_unit = "m"
                 contract = "RANGE" if signal.direction == "IN" else "UPORDOWN"
             else:

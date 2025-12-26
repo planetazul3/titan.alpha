@@ -236,6 +236,86 @@ class DecisionEngine:
 
         return kept, demoted
 
+    def _process_signals(
+        self,
+        all_signals: list[TradeSignal],
+        reconstruction_error: float,
+        regime_assessment: RegimeAssessmentProtocol,
+        timestamp: datetime,
+        market_data: dict[str, Any] | None = None,
+    ) -> list[TradeSignal]:
+        """
+        I02 Fix: Process pre-filtered signals without redundant filtering.
+        
+        This is the internal workhorse that handles already-filtered signals.
+        Used by process_with_context to avoid calling filter_signals twice.
+        """
+        # If vetoed, block all trades
+        if regime_assessment.is_vetoed():
+            self._stats["processed"] += 1
+            self._stats["regime_vetoed"] += 1
+            return []
+
+        # R02: Validate contract types
+        valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
+        validated_signals = []
+        for sig in all_signals:
+            if sig.contract_type in valid_contract_types:
+                validated_signals.append(sig)
+            else:
+                logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
+                self._stats["ignored"] += 1
+        all_signals = validated_signals
+
+        real_trades, shadow_trades = get_actionable_signals(all_signals)
+
+        # Apply caution filter if needed
+        if regime_assessment.requires_caution():
+            self._stats["regime_caution"] += 1
+            logger.info(
+                f"Regime caution active: demoting some trades. "
+                f"reconstruction_error={reconstruction_error:.4f}"
+            )
+            
+            # Move real trades to shadow if confidence isn't very high
+            filtered_real = []
+            for signal in real_trades:
+                caution_threshold = self.settings.thresholds.confidence_threshold_high + 0.05
+                if signal.probability >= caution_threshold:
+                    filtered_real.append(signal)
+                else:
+                    logger.info(f"Demoting CAUTION trade to shadow: {signal.probability:.3f}")
+                    shadow_trade = ShadowTrade(
+                        signal_type=signal.signal_type,
+                        contract_type=signal.contract_type,
+                        direction=signal.direction,
+                        probability=signal.probability,
+                        timestamp=signal.timestamp
+                    )
+                    shadow_trades.append(shadow_trade)
+            
+            real_trades = filtered_real
+            real_trades, demoted = self._apply_caution_filter(real_trades)
+            shadow_trades.extend(demoted)
+
+        # Feedback logging
+        if not real_trades and not shadow_trades and all_signals:
+            best_signal = max(all_signals, key=lambda s: s.probability)
+            logger.info(
+                f"No actionable trades. Best candidate: {best_signal.direction} "
+                f"({best_signal.contract_type}) @ {best_signal.probability:.3f} "
+                f"(Threshold: {self.settings.thresholds.learning_threshold_min:.3f})"
+            )
+
+        # Update statistics
+        self._stats["processed"] += 1
+        self._stats["real"] += len(real_trades)
+        self._stats["shadow"] += len(shadow_trades)
+        self._stats["ignored"] += len(all_signals) - len(real_trades) - len(shadow_trades)
+
+        return real_trades
+
+
     def get_regime_assessment(self, reconstruction_error: float) -> RegimeAssessmentProtocol:
         """
         Get regime assessment without processing (for external checks).
@@ -303,7 +383,7 @@ class DecisionEngine:
         # Get regime assessment
         regime_assessment = self.regime_veto.assess(reconstruction_error)
 
-        # Get all signals
+        # I02 Fix: Get all signals ONCE and reuse for both shadow storage and decision making
         all_signals = filter_signals(probs, self.settings, timestamp)
 
         # Store shadow trades with full context to ShadowTradeStore
@@ -320,10 +400,11 @@ class DecisionEngine:
                     metadata=market_data,
                 )
 
-        # Continue with normal processing
-        return self.process_model_output(
-            probs=probs,
+        # I02 Fix: Pass pre-filtered signals to avoid redundant filtering
+        return self._process_signals(
+            all_signals=all_signals,
             reconstruction_error=reconstruction_error,
+            regime_assessment=regime_assessment,
             timestamp=timestamp,
             market_data=market_data,
         )
@@ -349,6 +430,25 @@ class DecisionEngine:
         if not self.shadow_store:
             return
 
+        # I01 Fix: Only persist shadow trades exceeding minimum learning threshold
+        # This prevents database bloat from low-value signals
+        min_prob = self.settings.shadow_trade.min_probability_track
+        if signal.probability < min_prob:
+            logger.debug(
+                f"Skipping shadow trade storage: probability {signal.probability:.3f} < {min_prob:.3f}"
+            )
+            return
+
+        # C02 Fix: Determine duration based on contract type
+        if signal.contract_type == CONTRACT_TYPES.RISE_FALL:
+            duration_minutes = self.settings.shadow_trade.duration_rise_fall
+        elif signal.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
+            duration_minutes = self.settings.shadow_trade.duration_touch
+        elif signal.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
+            duration_minutes = self.settings.shadow_trade.duration_range
+        else:
+            duration_minutes = self.settings.shadow_trade.duration_minutes  # fallback default
+
         record = ShadowTradeRecord.create(
             contract_type=signal.contract_type,
             direction=signal.direction or "",
@@ -362,6 +462,7 @@ class DecisionEngine:
             feature_schema_version=FEATURE_SCHEMA_VERSION,
             barrier_level=self._extract_barrier_value(signal.metadata, "barrier"),
             barrier2_level=self._extract_barrier_value(signal.metadata, "barrier2"),
+            duration_minutes=duration_minutes,
             metadata={
                 "signal_type": signal.signal_type,
                 "regime_vetoed": regime_vetoed,
@@ -374,11 +475,12 @@ class DecisionEngine:
              await self.shadow_store.append_async(record)
         else:
              import asyncio
+             assert self.shadow_store is not None  # Already checked at function start
              loop = asyncio.get_running_loop()
-             await loop.run_in_executor(None, lambda: self.shadow_store.append(record))
+             await loop.run_in_executor(None, lambda: self.shadow_store.append(record))  # type: ignore[union-attr]
         logger.info(
             f"👻 SHADOW TRADE: {record.contract_type} {record.direction} "
-            f"@ {record.probability:.3f} (ID: {record.trade_id[:8]})"
+            f"@ {record.probability:.3f} (ID: {record.trade_id[:8]}, duration={duration_minutes}m)"
         )
 
     def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:

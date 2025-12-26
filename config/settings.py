@@ -236,12 +236,25 @@ class ShadowTradeConfig(BaseModel):
     Controls shadow trade tracking and resolution behavior.
     
     Attributes:
-        duration_minutes: Duration in minutes for shadow trade contracts
+        duration_minutes: Default duration in minutes for shadow trade contracts
+        duration_rise_fall: Duration for RISE_FALL contracts (minutes)
+        duration_touch: Duration for TOUCH/NO_TOUCH contracts (minutes)
+        duration_range: Duration for STAYS_BETWEEN contracts (minutes)
         min_probability_track: Minimum probability to track as shadow trade
     """
     
+    # C02 Fix: Centralized duration configuration per contract type
     duration_minutes: int = Field(
-        default=1, description="Shadow trade duration in minutes", ge=1, le=60
+        default=1, description="Default shadow trade duration in minutes", ge=1, le=60
+    )
+    duration_rise_fall: int = Field(
+        default=1, description="Duration for RISE_FALL contracts (minutes)", ge=1, le=60
+    )
+    duration_touch: int = Field(
+        default=5, description="Duration for TOUCH/NO_TOUCH contracts (minutes)", ge=1, le=60
+    )
+    duration_range: int = Field(
+        default=5, description="Duration for STAYS_BETWEEN contracts (minutes)", ge=1, le=60
     )
     min_probability_track: float = Field(
         default=0.45, description="Minimum probability to track shadow trade", ge=0.0, le=1.0

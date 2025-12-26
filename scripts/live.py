@@ -698,7 +698,9 @@ async def run_live_trading(args):
                         candle_time = candle_event.timestamp
                         resolved_count = await resolver.resolve_trades(
                             current_price=candle_event.close,
-                            current_time=candle_time
+                            current_time=candle_time,
+                            high_price=candle_event.high,
+                            low_price=candle_event.low,
                         )
                         if resolved_count > 0:
                             console_log(
