@@ -762,6 +762,22 @@ async def run_live_trading(args):
                             # Actually, torch.load can be slow for large models. Let's do it carefully.
                             new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
                             
+                            # R04: Validate architecture compatibility before loading
+                            current_keys = set(model.state_dict().keys())
+                            new_keys = set(new_checkpoint["model_state_dict"].keys())
+                            
+                            missing_keys = current_keys - new_keys
+                            unexpected_keys = new_keys - current_keys
+                            
+                            if missing_keys or unexpected_keys:
+                                logger.warning(
+                                    f"[HOT-RELOAD] Architecture mismatch detected! "
+                                    f"Missing: {len(missing_keys)}, Unexpected: {len(unexpected_keys)}"
+                                )
+                                console_log("Hot-reload skipped: architecture mismatch", "WARN")
+                                last_ckpt_mtime = current_mtime  # Don't keep retrying
+                                continue
+                            
                             # Update model
                             model.load_state_dict(new_checkpoint["model_state_dict"])
                             model.eval() # Ensure eval mode
@@ -773,7 +789,6 @@ async def run_live_trading(args):
                                 logger.info(f"[HOT-RELOAD] Loaded version: {new_version}")
                                 console_log(f"Model reloaded: v{new_version}", "SUCCESS")
                                 # Update engine's model version if possible (it's immutable usually, but maybe we can update it)
-                                # engine.model_version is public? No, it's used in prepare_trade_metadata.
                                 # Check decision engine implementation.
                                 if hasattr(engine, 'model_version'):
                                     engine.model_version = new_version
