@@ -1,13 +1,7 @@
-"""
-Persistent state store for safety and risk modules using SQLite.
-
-Ensures that critical safety counters (daily trades, loss limits) and
-risk metrics (drawdown, consecutive losses) survive application restarts.
-"""
-
 import sqlite3
 import logging
 import time
+import threading
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timezone
@@ -23,6 +17,7 @@ class SQLiteSafetyStateStore:
         daily_stats table: date (TEXT PRIMARY KEY), trade_count (INT), daily_pnl (REAL)
         
     We use SQLite for its reliability, ACID properties, and zero-conf nature.
+    R07: Uses thread-local connection pooling for high-frequency access.
     """
     
     def __init__(self, db_path: str | Path):
@@ -34,30 +29,41 @@ class SQLiteSafetyStateStore:
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # R07: Thread-local storage for connection pooling
+        self._local = threading.local()
+        
         self._init_db()
+    
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get thread-local database connection (R07: Connection Pooling)."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+        return self._local.conn
         
     def _init_db(self):
         """Create tables if they don't exist."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS kv_store (
-                        key TEXT PRIMARY KEY,
-                        value TEXT,
-                        updated_at REAL
-                    )
-                """)
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS daily_stats (
-                        date TEXT PRIMARY KEY,
-                        trade_count INTEGER DEFAULT 0,
-                        daily_pnl REAL DEFAULT 0.0,
-                        updated_at REAL
-                    )
-                """)
-                conn.commit()
+            conn = self._get_connection()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at REAL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_stats (
+                    date TEXT PRIMARY KEY,
+                    trade_count INTEGER DEFAULT 0,
+                    daily_pnl REAL DEFAULT 0.0,
+                    updated_at REAL
+                )
+            """)
+            conn.commit()
         except Exception as e:
             logger.error(f"Failed to initialize safety DB: {e}")
             raise
@@ -65,11 +71,10 @@ class SQLiteSafetyStateStore:
     def get_value(self, key: str, default: Any = None) -> str | None:
         """Get simple key-value pair."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA journal_mode=WAL")
-                cursor = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
-                row = cursor.fetchone()
-                return row[0] if row else default
+            conn = self._get_connection()
+            cursor = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
         except Exception as e:
             logger.error(f"DB Read Error (get_value): {e}")
             return default
@@ -77,12 +82,12 @@ class SQLiteSafetyStateStore:
     def set_value(self, key: str, value: str):
         """Set simple key-value pair."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
-                    (key, str(value), time.time())
-                )
-                conn.commit()
+            conn = self._get_connection()
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, str(value), time.time())
+            )
+            conn.commit()
         except Exception as e:
             logger.error(f"DB Write Error (set_value): {e}")
 
@@ -95,15 +100,15 @@ class SQLiteSafetyStateStore:
         """
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.execute(
-                    "SELECT trade_count, daily_pnl FROM daily_stats WHERE date = ?", 
-                    (today,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    return row[0], row[1]
-                return 0, 0.0
+            conn = self._get_connection()
+            cursor = conn.execute(
+                "SELECT trade_count, daily_pnl FROM daily_stats WHERE date = ?", 
+                (today,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0], row[1]
+            return 0, 0.0
         except Exception as e:
             logger.error(f"DB Read Error (get_daily_stats): {e}")
             return 0, 0.0
@@ -112,15 +117,15 @@ class SQLiteSafetyStateStore:
         """Increment daily trade counter for today."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
-                    VALUES (?, 1, 0.0, ?)
-                    ON CONFLICT(date) DO UPDATE SET
-                        trade_count = trade_count + 1,
-                        updated_at = excluded.updated_at
-                """, (today, time.time()))
-                conn.commit()
+            conn = self._get_connection()
+            conn.execute("""
+                INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
+                VALUES (?, 1, 0.0, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    trade_count = trade_count + 1,
+                    updated_at = excluded.updated_at
+            """, (today, time.time()))
+            conn.commit()
         except Exception as e:
             logger.error(f"DB Write Error (increment_daily_trade_count): {e}")
 
@@ -128,15 +133,15 @@ class SQLiteSafetyStateStore:
         """Add pnl to daily total."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
-                    VALUES (?, 0, ?, ?)
-                    ON CONFLICT(date) DO UPDATE SET
-                        daily_pnl = daily_pnl + excluded.daily_pnl,
-                        updated_at = excluded.updated_at
-                """, (today, pnl, time.time()))
-                conn.commit()
+            conn = self._get_connection()
+            conn.execute("""
+                INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
+                VALUES (?, 0, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    daily_pnl = daily_pnl + excluded.daily_pnl,
+                    updated_at = excluded.updated_at
+            """, (today, pnl, time.time()))
+            conn.commit()
         except Exception as e:
             logger.error(f"DB Write Error (update_daily_pnl): {e}")
             
@@ -155,19 +160,18 @@ class SQLiteSafetyStateStore:
     def update_risk_metrics(self, drawdown: float, losses: int, peak_equity: float):
         """Persist risk metrics."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA journal_mode=WAL")
-                ts = time.time()
-                data = [
-                    ("risk_current_drawdown", str(drawdown), ts),
-                    ("risk_consecutive_losses", str(losses), ts),
-                    ("risk_peak_equity", str(peak_equity), ts)
-                ]
-                conn.executemany(
-                    "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
-                    data
-                )
-                conn.commit()
+            conn = self._get_connection()
+            ts = time.time()
+            data = [
+                ("risk_current_drawdown", str(drawdown), ts),
+                ("risk_consecutive_losses", str(losses), ts),
+                ("risk_peak_equity", str(peak_equity), ts)
+            ]
+            conn.executemany(
+                "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+                data
+            )
+            conn.commit()
         except Exception as e:
             logger.error(f"DB Write Error (update_risk_metrics): {e}")
 
