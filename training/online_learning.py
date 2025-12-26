@@ -314,6 +314,7 @@ class OnlineLearningModule:
         update_interval: int = 100,
         min_experiences: int = 50,
         learning_rate: float = 1e-5,
+        update_interval_hours: float = 4.0,
     ):
         """
         Initialize online learning module.
@@ -326,11 +327,13 @@ class OnlineLearningModule:
             update_interval: Experiences between updates
             min_experiences: Minimum resolved experiences for update
             learning_rate: Learning rate for online updates
+            update_interval_hours: Time-based update trigger (hours)
         """
         self.model = model
         self.ewc_lambda = ewc_lambda
         self.update_interval = update_interval
         self.min_experiences = min_experiences
+        self.update_interval_hours = update_interval_hours
         
         # Create optimizer if not provided
         if optimizer is None:
@@ -350,10 +353,12 @@ class OnlineLearningModule:
         # State
         self._experiences_since_update = 0
         self._total_updates = 0
+        self._last_update_time: float | None = None
         
         logger.info(
             f"OnlineLearningModule initialized: "
-            f"ewc_lambda={ewc_lambda}, capacity={replay_capacity}"
+            f"ewc_lambda={ewc_lambda}, capacity={replay_capacity}, "
+            f"update_interval_hours={update_interval_hours}"
         )
     
     def register_task(
@@ -395,14 +400,30 @@ class OnlineLearningModule:
         """
         Check if it's time for an online update.
         
+        Uses a hybrid trigger: experience count OR time elapsed.
+        
         Returns:
             True if update should be performed
         """
+        import time
+        
         resolved = len(self.replay_buffer.get_resolved_experiences())
-        return (
-            self._experiences_since_update >= self.update_interval
-            and resolved >= self.min_experiences
-        )
+        if resolved < self.min_experiences:
+            return False
+        
+        # Experience-based trigger
+        experience_trigger = self._experiences_since_update >= self.update_interval
+        
+        # Time-based trigger (R03)
+        time_trigger = False
+        if self._last_update_time is not None:
+            elapsed_hours = (time.time() - self._last_update_time) / 3600.0
+            time_trigger = elapsed_hours >= self.update_interval_hours
+        else:
+            # First update - use experience trigger only
+            pass
+        
+        return experience_trigger or time_trigger
     
     def update(
         self,
@@ -492,8 +513,11 @@ class OnlineLearningModule:
             logger.error("All update steps failed")
             return {"skipped": True, "failed_steps": failed_steps}
         
+        import time
+        
         self._experiences_since_update = 0
         self._total_updates += 1
+        self._last_update_time = time.time()
         
         divisor = successful_steps if successful_steps > 0 else 1
         metrics = {
