@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/utils/seed.py
+# hypothesis_version: 6.148.7
+
+['PYTHONHASHSEED', 'cuda', 'numpy', 'python', 'torch']

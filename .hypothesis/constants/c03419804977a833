@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/observability/dashboard.py
+# hypothesis_version: 6.148.7
+
+[0.5, 100, 300, 1000, 'Kill switch active', 'Not connected', 'Not monitored', 'Operational', '_kill_switch_active', 'acknowledged', 'acknowledged_at', 'active', 'active_alerts', 'active_count', 'alert_id', 'alerts', 'auto_responses', 'by_severity', 'components', 'created_at', 'critical', 'error', 'executor', 'healthy', 'info', 'is_healthy', 'last_check', 'message', 'metadata', 'metrics', 'model', 'name', 'pause_trading', 'reason', 'recent', 'reduce_risk', 'resolved', 'resolved_at', 'scale', 'severity', 'source', 'status', 'timestamp', 'type', 'unhealthy', 'warning']

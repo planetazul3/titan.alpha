@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/buffer.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1.0, 'CandleData', 'timestamp', 'volume']

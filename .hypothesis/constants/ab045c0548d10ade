@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/models/heads.py
+# hypothesis_version: 6.148.7
+
+[0.1, 128, 'range', 'rise_fall', 'touch']

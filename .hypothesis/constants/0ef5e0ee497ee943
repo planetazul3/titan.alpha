@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/utils/device.py
+# hypothesis_version: 6.148.7
+
+['\nCUDA Details:', '\nDevice Information:', '=', 'auto', 'cpu', 'cpu_count', 'cuda', 'cuda_available', 'cuda_device_count', 'cuda_device_name', 'cuda_memory_reserved', 'cuda_total_memory', 'mps', 'mps_available', 'torch_version']

@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/integration.py
+# hypothesis_version: 6.148.8
+
+[0.0, 0.1, 0.3, 0.35, 0.5, 0.95, 1.0, 10.0, 50.0, 'item', 'max_daily_loss', 'max_stake_per_trade', 'normal', 'unknown']

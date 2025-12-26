@@ -1,0 +1,101 @@
+# .unifyignore
+# Ignore patterns for context unification (gitignore syntax)
+# This file controls what gets included when generating unified project context
+
+# Version control
+.git/
+.svn/
+.hg/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+dist/
+build/
+target/
+*.egg-info/
+
+# IDE and editor files
+.vscode/
+.idea/
+.settings/
+*.swp
+*.swo
+*~
+
+# Testing and coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+htmlcov/
+.coverage
+coverage/
+
+# Data directories and cache (NOT data/ - it contains source code!)
+logs/
+data_cache/
+checkpoints/
+# Exclude data artifacts inside data/ but NOT the Python source files
+data/*.csv
+data/*.parquet
+data/*.pkl
+
+# Large data files
+*.log
+*.csv
+*.json
+*.jsonl
+*.tsv
+*.parquet
+*.arrow
+*.feather
+*.hdf5
+*.h5
+
+# Binary and compiled files
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.msgpack
+*.db
+*.sqlite
+*.sqlite3
+
+# Model files
+*.model
+*.onnx
+*.pt
+*.pth
+
+# Media files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.mp3
+*.wav
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules (if any JavaScript)
+node_modules/

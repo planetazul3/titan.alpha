@@ -1,0 +1,95 @@
+
+name: DerivOmniModel CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        
+    - name: Install linters
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff mypy
+        
+    - name: Lint with ruff
+      run: |
+        ruff check . --exclude venv,python-deriv-api
+        
+    - name: Type check with mypy
+      run: |
+        mypy config/ data/ execution/ models/ training/ scripts/ --ignore-missing-imports
+      continue-on-error: true  # Don't fail build on type errors initially
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        
+    - name: Security scan with bandit
+      run: |
+        pip install bandit
+        bandit -r config/ data/ execution/ models/ training/ scripts/ -ll -ii
+      continue-on-error: true  # Report but don't fail on medium issues
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install pytest pytest-asyncio pytest-cov tensorboard
+        
+    - name: Install local Deriv API
+      run: |
+        pip install -e python-deriv-api
+        
+    - name: Test with pytest and coverage
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        pytest tests/ --cov=config --cov=data --cov=execution --cov=models --cov=training --cov-report=xml --cov-report=term-missing
+        
+    - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.11'
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.xml
+        fail_ci_if_error: false
+        verbose: true

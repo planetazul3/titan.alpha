@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/execution/rl_integration.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.02, 0.5, 0.6, 10.0, 1000.0, 1000, 'RLTradingIntegration', 'action', 'actor', 'avg_reward', 'cpu', 'experiences', 'medium', 'reward', 'rl_sizing_rate', 'rl_sizing_used', 'state', 'win_rate', 'won']

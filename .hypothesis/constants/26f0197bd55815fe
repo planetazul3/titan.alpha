@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/auto_features.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1e-10, 1e-08, 0.01, 100, 'approx_final', 'avg_mi', 'by_category', 'count', 'dominant_frequency', 'fourier', 'fourier_total_power', 'frequencies', 'inf', 'power_spectrum', 'technical', 'top_frequencies', 'top_powers', 'total', 'total_power', 'unknown', 'valid', 'wavelet']

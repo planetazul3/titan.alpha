@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/observability/inference_optimizer.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.2, 1000000.0, 100, 1000, 'baseline_latency', 'empty', 'fp16_available', 'hit_rate', 'hits', 'max_ms', 'max_size', 'mean_ms', 'min_ms', 'misses', 'model_params', 'model_size_mb', 'p50_ms', 'p95_ms', 'p99_ms', 'recommendations', 'samples', 'size', 'std_ms']

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.gemini/
+.agent/
+logs/
+data_cache/
+checkpoints/
+.DS_Store
+.mypy_cache/
+.pytest_cache/

@@ -1,0 +1,12 @@
+"""
+Comprehensive test suite for DerivOmniModel trading system.
+
+This package contains unit tests for all modules:
+- test_config: Configuration loading and validation
+- test_data: Data preprocessing and loading
+- test_models: Model forward pass and shapes
+- test_training: Training loop components
+- test_execution: Decision engine and signals
+
+Run with: pytest tests/ -v
+"""

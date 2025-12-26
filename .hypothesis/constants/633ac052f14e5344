@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/data/indicators.py
+# hypothesis_version: 6.148.8
+
+[0.0, 0.5, 1.0, 2.0, 50.0, 'ignore']

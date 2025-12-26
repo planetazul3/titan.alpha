@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/observability/__init__.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1.0, 2.5, 5.0, 10.0, 8000, '_', 'account_balance', 'account_balance_usd', 'buckets', 'contract_type', 'count', 'counters', 'daily_pnl', 'daily_pnl_usd', 'decision_latency', 'execution_latency', 'gauges', 'histograms', 'inference_latency', 'mean', 'name', 'outcome', 'reconstruction_error', 'regime_assessments', 'state', 'sum', 'timestamp', 'total', 'trades', 'trades_total', 'unknown', 'xtitan_daily_pnl_usd', 'xtitan_trades_total']

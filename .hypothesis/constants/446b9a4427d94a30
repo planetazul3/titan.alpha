@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/models/temporal.py
+# hypothesis_version: 6.148.7
+
+[128, 'silu']

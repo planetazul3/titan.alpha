@@ -1,0 +1,7 @@
+# Dashboard API Dependencies
+# Lightweight, separate from trading system
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+python-dotenv>=1.0.0

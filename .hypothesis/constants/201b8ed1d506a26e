@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/python-deriv-api/deriv_api/deriv_api.py
+# hypothesis_version: 6.148.8
+
+[1000, '&brand=', '&l=', '((?:\\w*://)*)(.*)', 'Closed by disconnect', 'EN', 'Extra response', '^deriv_api:', 'api_connect', 'app_id', 'brand', 'cache', 'close', 'connect', 'connection', 'contract_id', 'data', 'deriv api ended', 'deriv_api:', 'echo_req', 'endpoint', 'endpoint_url', 'error', 'forget subscription', 'get_by_msg_type', 'id', 'lang', 'message', 'middlewares', 'msg_type', 'name', 'req_id', 'request', 'response', 'send', 'sendIsCalled', 'sendWillBeCalled', 'send_message', 'storage', 'subscription', 'wait_data', 'ws.derivws.com', 'ws://', 'wss://']

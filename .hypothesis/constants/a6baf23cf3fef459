@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/config/constants.py
+# hypothesis_version: 6.148.7
+
+[2000, 'IGNORE', 'REAL_TRADE', 'RISE_FALL', 'SHADOW_TRADE', 'STAYS_BETWEEN', 'TOUCH_NO_TOUCH']
