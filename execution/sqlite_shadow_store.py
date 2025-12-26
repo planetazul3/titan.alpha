@@ -31,7 +31,7 @@ from execution.shadow_store import SHADOW_STORE_SCHEMA_VERSION, ShadowTradeRecor
 logger = logging.getLogger(__name__)
 
 # SQLite database schema version
-SQLITE_SCHEMA_VERSION = 3  # C02: Added duration_minutes column
+SQLITE_SCHEMA_VERSION = 4  # C01: Added resolution_context column
 
 
 class SQLiteShadowStore:
@@ -72,7 +72,8 @@ class SQLiteShadowStore:
         created_at TEXT NOT NULL,
         barrier_level REAL,
         barrier2_level REAL,
-        duration_minutes INTEGER DEFAULT 1
+        duration_minutes INTEGER DEFAULT 1,
+        resolution_context TEXT
     )
     """
 
@@ -175,8 +176,8 @@ class SQLiteShadowStore:
                     tick_window, candle_window,
                     outcome, exit_price, resolved_at,
                     metadata, schema_version, created_at,
-                    barrier_level, barrier2_level, duration_minutes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    barrier_level, barrier2_level, duration_minutes, resolution_context
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.trade_id,
@@ -200,6 +201,7 @@ class SQLiteShadowStore:
                     record.barrier_level,
                     record.barrier2_level,
                     record.duration_minutes,
+                    json.dumps(record.resolution_context),
                 ),
             )
 
@@ -293,6 +295,64 @@ class SQLiteShadowStore:
         import asyncio
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self.mark_stale(trade_id, exit_price))
+
+    def update_resolution_context(self, trade_id: str, high: float, low: float, close: float) -> bool:
+        """
+        C01 Fix: Append a resolution candle to a trade's resolution context.
+        
+        This accumulates OHLC data observed AFTER trade entry for path-dependent
+        contract resolution (TOUCH, RANGE).
+        
+        Args:
+            trade_id: Trade ID to update
+            high: High price of the candle
+            low: Low price of the candle
+            close: Close price of the candle
+            
+        Returns:
+            True if trade was found and updated
+        """
+        conn = self._get_connection()
+        
+        # First, get current resolution_context
+        cursor = conn.execute(
+            "SELECT resolution_context FROM shadow_trades WHERE trade_id = ?",
+            (trade_id,)
+        )
+        row = cursor.fetchone()
+        
+        if not row:
+            logger.warning(f"Trade not found for resolution context update: {trade_id}")
+            return False
+        
+        # Parse existing context and append new candle
+        current_context = json.loads(row["resolution_context"]) if row["resolution_context"] else []
+        current_context.append([high, low, close])
+        
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE shadow_trades
+                SET resolution_context = ?
+                WHERE trade_id = ?
+                """,
+                (json.dumps(current_context), trade_id),
+            )
+            
+            if cursor.rowcount > 0:
+                logger.debug(f"Updated resolution context for {trade_id}: {len(current_context)} candles")
+                return True
+            return False
+
+    async def update_resolution_context_async(
+        self, trade_id: str, high: float, low: float, close: float
+    ) -> bool:
+        """Async update resolution context."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.update_resolution_context(trade_id, high, low, close)
+        )
     
     async def query_async(self, **kwargs) -> list[ShadowTradeRecord]:
         """Async query."""
@@ -443,6 +503,7 @@ class SQLiteShadowStore:
             barrier_level=row["barrier_level"] if "barrier_level" in row.keys() else None,
             barrier2_level=row["barrier2_level"] if "barrier2_level" in row.keys() else None,
             duration_minutes=row["duration_minutes"] if "duration_minutes" in row.keys() else 1,
+            resolution_context=json.loads(row["resolution_context"]) if "resolution_context" in row.keys() and row["resolution_context"] else [],
         )
 
     def get_by_id(self, trade_id: str) -> ShadowTradeRecord | None:

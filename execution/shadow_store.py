@@ -98,6 +98,10 @@ class ShadowTradeRecord:
     # C02 Fix: Per-trade duration for accurate resolution timing
     duration_minutes: int = 1
 
+    # C01 Fix: Resolution context - accumulates candles AFTER trade entry
+    # Each entry is [high, low, close] from candles observed during trade duration
+    resolution_context: list[list[float]] = field(default_factory=list)
+
     # Extra metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -203,6 +207,44 @@ class ShadowTradeRecord:
             barrier_level=self.barrier_level,
             barrier2_level=self.barrier2_level,
             duration_minutes=self.duration_minutes,
+            resolution_context=self.resolution_context,
+            metadata=self.metadata,
+            _schema_version=self._schema_version,
+            _created_at=self._created_at,
+        )
+
+    def with_resolution_candle(
+        self, high: float, low: float, close: float
+    ) -> "ShadowTradeRecord":
+        """
+        C01 Fix: Create a new record with an additional resolution candle appended.
+
+        This accumulates OHLC data observed AFTER trade entry for path-dependent
+        contract resolution (TOUCH, RANGE).
+
+        Returns a NEW record (immutability preserved).
+        """
+        new_context = self.resolution_context + [[high, low, close]]
+        return ShadowTradeRecord(
+            trade_id=self.trade_id,
+            timestamp=self.timestamp,
+            contract_type=self.contract_type,
+            direction=self.direction,
+            probability=self.probability,
+            entry_price=self.entry_price,
+            reconstruction_error=self.reconstruction_error,
+            regime_state=self.regime_state,
+            model_version=self.model_version,
+            feature_schema_version=self.feature_schema_version,
+            tick_window=self.tick_window,
+            candle_window=self.candle_window,
+            outcome=self.outcome,
+            exit_price=self.exit_price,
+            resolved_at=self.resolved_at,
+            barrier_level=self.barrier_level,
+            barrier2_level=self.barrier2_level,
+            duration_minutes=self.duration_minutes,
+            resolution_context=new_context,
             metadata=self.metadata,
             _schema_version=self._schema_version,
             _created_at=self._created_at,

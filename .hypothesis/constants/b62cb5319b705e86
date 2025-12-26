@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/training/online_learning.py
+# hypothesis_version: 6.148.8
+
+[0.0, 1e-05, 0.4, 1.0, 4.0, 3600.0, 100, 1000, 'buffer_size', 'ewc_loss', 'failed_steps', 'fisher', 'fisher_computed', 'logit', 'num_experiences', 'optimal_params', 'resolved_experiences', 'rise_fall_logit', 'skipped', 'squeeze', 'task_loss', 'total_loss', 'total_updates', 'update_count']

@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/models/core.py
+# hypothesis_version: 6.148.8
+
+[256, '_logit', '_prob', 'candles_mask', 'range', 'range_logit', 'rise_fall', 'rise_fall_logit', 'ticks_mask', 'touch', 'touch_logit', 'use_tft']

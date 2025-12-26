@@ -67,6 +67,10 @@ class ShadowTradeResolver:
         """
         Check unresolved trades and update outcomes if expired.
 
+        C01 Fix: For path-dependent contracts (TOUCH, RANGE), accumulate candle
+        OHLC data in resolution_context AFTER trade entry, then use that data
+        for barrier checking at expiration.
+
         Args:
             current_price: Current market price (e.g. candle close).
             current_time: Current timestamp (aware).
@@ -76,15 +80,13 @@ class ShadowTradeResolver:
         Returns:
             Number of trades resolved in this pass.
         """
+        from config.constants import CONTRACT_TYPES
+        
         # Ensure current_time is aware
         if current_time.tzinfo is None:
             current_time = current_time.replace(tzinfo=timezone.utc)
 
         # Get unresolved trades
-        # Queries are still sync for now unless we change query() too, but query is usually fast or less frequent.
-        # However, plan said "Queries generally happen in background...".
-        # Let's keep query sync for now or upgrade it too?
-        # The hot path is update_outcome in loop.
         unresolved = self.store.query(unresolved_only=True)
         
         resolved_count = 0
@@ -93,6 +95,7 @@ class ShadowTradeResolver:
         
         stale_trades: List[ShadowTradeRecord] = []
         normal_resolutions: List[tuple[ShadowTradeRecord, float]] = []
+        active_trades: List[ShadowTradeRecord] = []  # C01: Trades still within duration
 
         for trade in unresolved:
             # C02 Fix: Use per-trade duration instead of global default
@@ -102,11 +105,27 @@ class ShadowTradeResolver:
             if current_time >= expiration_time:
                 staleness = current_time - expiration_time
                 if staleness > self.staleness_threshold:
-                    # Collect as potentially stale
                     stale_trades.append(trade)
                 else:
-                    # Normal resolution using current price
                     normal_resolutions.append((trade, current_price))
+            else:
+                # C01 Fix: Trade is still active (within duration window)
+                active_trades.append(trade)
+
+        # C01 Fix: Accumulate resolution context for active path-dependent trades
+        if high_price is not None and low_price is not None:
+            for trade in active_trades:
+                # Only accumulate for path-dependent contracts
+                if trade.contract_type in (CONTRACT_TYPES.TOUCH_NO_TOUCH, CONTRACT_TYPES.STAYS_BETWEEN,
+                                           "TOUCH_NO_TOUCH", "STAYS_BETWEEN"):
+                    if hasattr(self.store, 'update_resolution_context_async'):
+                        await self.store.update_resolution_context_async(
+                            trade.trade_id, high_price, low_price, current_price
+                        )
+                    elif hasattr(self.store, 'update_resolution_context'):
+                        self.store.update_resolution_context(
+                            trade.trade_id, high_price, low_price, current_price
+                        )
 
         # 1. Resolve normal trades
         for trade, exit_price in normal_resolutions:
@@ -255,18 +274,33 @@ class ShadowTradeResolver:
 
             elif trade.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
                 # TOUCH/NO_TOUCH requires checking High/Low from candle period
-                # C03: Use passed high/low prices if available (preferred), fallback to candle_window
+                # C01 Fix: Use resolution_context (post-entry candles) instead of candle_window (pre-entry)
+                # Priority: 1) resolution_context, 2) passed high/low, 3) candle_window (legacy fallback)
+                
+                # C01 Fix: Use resolution_context (post-entry candles) if available, and append current candle
+                all_highs = []
+                all_lows = []
+
+                if trade.resolution_context and len(trade.resolution_context) > 0:
+                     context = np.array(trade.resolution_context)
+                     all_highs.extend(context[:, 0].tolist())
+                     all_lows.extend(context[:, 1].tolist())
+
+                # Always include the current resolution candle if provided (it's the final candle)
                 if high_price is not None and low_price is not None:
-                    # Use directly passed high/low for current resolution candle
-                    high_prices = np.array([high_price])
-                    low_prices = np.array([low_price])
+                     all_highs.append(high_price)
+                     all_lows.append(low_price)
+
+                if all_highs:
+                    high_prices = np.array(all_highs)
+                    low_prices = np.array(all_lows)
                     self.logger.debug(
-                        f"TOUCH resolution using passed OHLC: high={high_price:.5f}, low={low_price:.5f}"
+                        f"TOUCH resolution using {len(high_prices)} candles (context + current)"
                     )
                 elif trade.candle_window and len(trade.candle_window) > 0:
+                    # Legacy fallback to candle_window (pre-entry data - less accurate)
                     candles = np.array(trade.candle_window)
 
-                    # Validate shape (must have at least columns 0-3 for OHLC)
                     if candles.ndim < 2 or candles.shape[1] < 4:
                         self.logger.warning(
                             f"Invalid candle_window shape {candles.shape} for trade {trade.trade_id}. "
@@ -276,9 +310,12 @@ class ShadowTradeResolver:
 
                     high_prices = candles[:, CANDLE_COL_HIGH]
                     low_prices = candles[:, CANDLE_COL_LOW]
+                    self.logger.warning(
+                        f"TOUCH trade {trade.trade_id[:8]} using legacy candle_window (pre-entry data)"
+                    )
                 else:
                     self.logger.warning(
-                        f"TOUCH trade {trade.trade_id[:8]} missing both passed prices and candle_window"
+                        f"TOUCH trade {trade.trade_id[:8]} missing resolution_context and candle_window"
                     )
                     return None
 
@@ -325,18 +362,33 @@ class ShadowTradeResolver:
 
             elif trade.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
                 # STAYS_BETWEEN: price must stay within ±band of entry
-                # C03: Use passed high/low prices if available (preferred), fallback to candle_window
+                # C01 Fix: Use resolution_context (post-entry candles) instead of candle_window (pre-entry)
+                # Priority: 1) resolution_context, 2) passed high/low, 3) candle_window (legacy fallback)
+                
+                # C01 Fix: Use resolution_context (post-entry candles) if available, and append current candle
+                all_highs = []
+                all_lows = []
+
+                if trade.resolution_context and len(trade.resolution_context) > 0:
+                     context = np.array(trade.resolution_context)
+                     all_highs.extend(context[:, 0].tolist())
+                     all_lows.extend(context[:, 1].tolist())
+
+                # Always include the current resolution candle if provided (it's the final candle)
                 if high_price is not None and low_price is not None:
-                    # Use directly passed high/low for current resolution candle
-                    high_prices = np.array([high_price])
-                    low_prices = np.array([low_price])
+                     all_highs.append(high_price)
+                     all_lows.append(low_price)
+
+                if all_highs:
+                    high_prices = np.array(all_highs)
+                    low_prices = np.array(all_lows)
                     self.logger.debug(
-                        f"RANGE resolution using passed OHLC: high={high_price:.5f}, low={low_price:.5f}"
+                        f"RANGE resolution using {len(high_prices)} candles (context + current)"
                     )
                 elif trade.candle_window and len(trade.candle_window) > 0:
+                    # Legacy fallback to candle_window (pre-entry data - less accurate)
                     candles = np.array(trade.candle_window)
 
-                    # Validate shape
                     if candles.ndim < 2 or candles.shape[1] < 4:
                         self.logger.warning(
                             f"Invalid candle_window shape {candles.shape} for trade {trade.trade_id}. "
@@ -346,9 +398,12 @@ class ShadowTradeResolver:
 
                     high_prices = candles[:, CANDLE_COL_HIGH]
                     low_prices = candles[:, CANDLE_COL_LOW]
+                    self.logger.warning(
+                        f"RANGE trade {trade.trade_id[:8]} using legacy candle_window (pre-entry data)"
+                    )
                 else:
                     self.logger.warning(
-                        f"RANGE trade {trade.trade_id[:8]} missing both passed prices and candle_window"
+                        f"RANGE trade {trade.trade_id[:8]} missing resolution_context and candle_window"
                     )
                     return None
 
