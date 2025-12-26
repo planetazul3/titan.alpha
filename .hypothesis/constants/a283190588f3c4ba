@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/data/shadow_dataset.py
-# hypothesis_version: 6.148.8
-
-[0.0, 1.0, 'CALL', 'PUT', 'RISE_FALL', 'candle_window', 'candles', 'contract_type', 'direction', 'eval', 'outcome', 'range', 'rise_fall', 'targets', 'tick_window', 'ticks', 'touch', 'train', 'vol_metrics']

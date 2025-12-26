@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/execution/decision.py
-# hypothesis_version: 6.148.7
-
-['demoted_by_caution', 'ignored', 'processed', 'real', 'regime_caution', 'regime_vetoed', 'shadow', 'signal_type', 'unknown']

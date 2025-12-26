@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/models/blocks.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.01, 0.1, 'bias', 'fan_out', 'relu', 'same', 'silu', 'weight_hh', 'weight_ih']

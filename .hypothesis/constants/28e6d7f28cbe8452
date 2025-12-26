@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/real_trade_tracker.py
-# hypothesis_version: 6.148.8
-
-[0.0, 1.0, '0.0', 'RISE_FALL', 'contract_id', 'contract_type', 'direction', 'entry_price', 'executed_at', 'losses', 'pending_trades', 'persisted_trades', 'probability', 'record_outcome', 'resolved_trades', 'stake', 'total_pnl', 'update_pnl', 'win_rate', 'wins']

@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/config/settings.py
-# hypothesis_version: 6.148.8
-
-[0.0, 0.02, 0.1, 0.2, 0.45, 0.5, 0.95, 1.0, 5.0, 10.0, 20.0, 50.0, 100.0, 100, 200, 300, 365, 600, 1089, '+0.50', '-0.50', '.env', '1m', 'BiLSTM hidden size', 'CNN filter count', 'Candle timeframe', 'Deriv application ID', 'Deriv trading symbol', 'Dropout probability', 'Thresholds', 'Tick sequence length', 'Training batch size', '__', 'after', 'auto', 'batch_size', 'cpu', 'cuda', 'development', 'dropout_rate', 'ignore', 'learning_rate', 'mps', 'production', 'titan-admin']

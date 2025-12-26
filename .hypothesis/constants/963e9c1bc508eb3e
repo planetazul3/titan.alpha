@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/sqlite_shadow_store.py
-# hypothesis_version: 6.148.8
-
-[0.0, 30.0, ' AND ', '1=1', 'No records to export', 'SQLiteShadowStore', 'VACUUM', '_schema_version', 'candle_window', 'conn', 'contract_type', 'created_at', 'direction', 'entry_price', 'exit_price', 'losses', 'metadata', 'model_version', 'outcome', 'outcome IS NOT NULL', 'outcome IS NULL', 'probability', 'reconstruction_error', 'regime_state', 'resolution_status', 'resolved_at', 'resolved_records', 'schema_version', 'sqlite', 'stale_error', 'storage_backend', 'tick_window', 'timestamp', 'timestamp < ?', 'timestamp >= ?', 'total_records', 'trade_id', 'unresolved_records', 'win_rate', 'wins']

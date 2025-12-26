@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/filters.py
-# hypothesis_version: 6.148.8
-
-[1.0, 'CALL', 'PUT', 'STAYS_BETWEEN', 'TOUCH', 'barrier', 'barrier2', 'range_prob', 'rise_fall_prob', 'symbol', 'touch_prob']

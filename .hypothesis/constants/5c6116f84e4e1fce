@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/execution/executor.py
-# hypothesis_version: 6.148.7
-
-[0.0, 100.0, 'CALL', 'IN', 'NOTOUCH', 'ONETOUCH', 'PUT', 'RANGE', 'RISE', 'TOUCH', 'UPORDOWN', 'buy', 'buy_price', 'contract_id', 'executed', 'failed', 'm', 'success_rate']

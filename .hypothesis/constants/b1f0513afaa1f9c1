@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/models/ensemble.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.4, 0.5, 0.6, 1.0, 100, '1.0.0', 'accuracy', 'checkpoint_path', 'equal', 'inf', 'is_primary', 'meta', 'model_id', 'models', 'num_models', 'performance', 'registered_at', 'score', 'strategy', 'training_metrics', 'unknown', 'version', 'weight', 'win_rate']

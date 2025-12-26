@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/pending_trade_store.py
-# hypothesis_version: 6.148.8
-
-[30.0, 'RISE_FALL', 'conn', 'contract_id', 'contract_type', 'direction', 'entry_price', 'executed_at', 'intent_id', 'metadata', 'probability', 'stake']

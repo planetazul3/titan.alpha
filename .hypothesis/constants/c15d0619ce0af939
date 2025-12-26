@@ -1,4 +1,0 @@
-# file: /home/planetazul3/x.titan/execution/shadow_store.py
-# hypothesis_version: 6.148.8
-
-[0.0, '.resolved.ndjson', '1.0', '2.0', 'No records to export', 'ShadowTradeRecord', '_schema_version', 'a', 'contract_type', 'direction', 'entry_price', 'exit_price', 'losses', 'model_version', 'outcome', 'probability', 'reconstruction_error', 'regime_state', 'resolution', 'resolved_at', 'resolved_records', 'schema_version', 'stale', 'timestamp', 'total_records', 'trade_id', 'unknown', 'unresolved_records', 'win_rate', 'wins']

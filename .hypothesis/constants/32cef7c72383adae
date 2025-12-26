@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/data/ingestion/versioning.py
-# hypothesis_version: 6.148.7
-
-[8192, '.metadata.json', '1.0.0', 'DatasetMetadata', 'epoch', 'rb', 'schema_version', 'sha256', 'w']

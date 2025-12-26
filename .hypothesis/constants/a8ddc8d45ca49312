@@ -1,4 +1,0 @@
-# file: /home/planetazul3/xtitan/execution/signals.py
-# hypothesis_version: 6.148.7
-
-[0.95, 'TradeSignal', 'entry_price', 'exit_price', 'outcome', 'pnl', 'timestamp', 'trade_id']
