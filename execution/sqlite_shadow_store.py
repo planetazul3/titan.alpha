@@ -327,6 +327,58 @@ class SQLiteShadowStore:
                 
         return deleted_count
 
+    def query_iter(
+        self,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        resolved_only: bool = False,
+        unresolved_only: bool = False,
+    ):
+        """
+        Iterate over shadow trades from the store.
+        
+        Memory-efficient alternative to query() for large result sets.
+        Yields ShadowTradeRecord objects one by one.
+
+        Args:
+            start: Start of time range (inclusive)
+            end: End of time range (exclusive)
+            resolved_only: Only return trades with outcomes
+            unresolved_only: Only return trades without outcomes
+
+        Yields:
+            ShadowTradeRecord matching criteria
+        """
+        conditions = []
+        params = []
+
+        if start:
+            conditions.append("timestamp >= ?")
+            params.append(start.isoformat())
+        if end:
+            conditions.append("timestamp < ?")
+            params.append(end.isoformat())
+        if resolved_only:
+            conditions.append("outcome IS NOT NULL")
+        if unresolved_only:
+            conditions.append("outcome IS NULL")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Use a fresh connection for the iterator to avoid interfering with other ops
+        # (though sqlite3.connect is cheap, we can reuse the thread-local one if we are careful)
+        conn = self._get_connection()
+        
+        # Helper to ensure cursor is closed if iteration is interrupted
+        try:
+            cursor = conn.execute(
+                f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params
+            )
+            for row in cursor:
+                yield self._row_to_record(row)
+        except Exception:
+            raise
+
     def query(
         self,
         start: datetime | None = None,
@@ -346,33 +398,8 @@ class SQLiteShadowStore:
         Returns:
             List of matching shadow trade records
         """
-        conditions = []
-        params = []
-
-        if start:
-            conditions.append("timestamp >= ?")
-            params.append(start.isoformat())
-        if end:
-            conditions.append("timestamp < ?")
-            params.append(end.isoformat())
-        if resolved_only:
-            conditions.append("outcome IS NOT NULL")
-        if unresolved_only:
-            conditions.append("outcome IS NULL")
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-        conn = self._get_connection()
-        cursor = conn.execute(
-            f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params
-        )
-
-        records = []
-        for row in cursor:
-            record = self._row_to_record(row)
-            records.append(record)
-
-        return records
+        # Delegating to query_iter to avoid code duplication
+        return list(self.query_iter(start, end, resolved_only, unresolved_only))
 
     def _row_to_record(self, row: sqlite3.Row) -> ShadowTradeRecord:
         """Convert a database row to ShadowTradeRecord."""

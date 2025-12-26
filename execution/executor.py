@@ -197,8 +197,11 @@ class DerivTradeExecutor:
             except Exception as e:
                 logger.warning(f"Idempotency check failed (proceeding with execution): {e}")
 
+            # Extract barrier from signal if present (required for Touch/No Touch and Range)
+            barrier = signal.metadata.get("barrier")
+
             # Execute via Deriv API
-            result = await self.client.buy(contract, amount, duration, duration_unit)
+            result = await self.client.buy(contract, amount, duration, duration_unit, barrier=barrier)
 
             self._executed_count += 1
 

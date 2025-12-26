@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="Train DerivOmniModel")
     parser.add_argument("--data-path", type=Path, required=True, help="Path to training data (parquet)")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs (overrides settings)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size (overrides settings)")
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate (overrides settings)")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Checkpoint directory")
     args = parser.parse_args()
 
@@ -35,25 +35,63 @@ def main():
     
     # Load dataset
     logger.info(f"Loading data from {args.data_path}")
-    dataset = DerivDataset(args.data_path)
+    dataset = DerivDataset(args.data_path, settings)
     
-    # Split train/val
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = random_split(
-        dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
+    # Temporal Split (Fix Data Leakage)
+    # We must ensure no overlap between train and val sequences
+    # Purge gap = candle_len + lookahead
+    # (Actually, just lookahead is strictly required if we want to predict FUTURE, 
+    # but considering sequence overlap, a gap of sequence_length is safer to ensure 
+    # absolutely no information leakage from future to past in the validation set)
+    
+    total_len = len(dataset)
+    train_size = int(0.8 * total_len)
+    
+    # Gap to ensure no overlap in sliding windows
+    # dataset.candle_len is the sequence length
+    gap = settings.data_shapes.sequence_length_candles + dataset.lookahead
+    
+    val_start = train_size + gap
+    
+    if val_start >= total_len:
+        logger.warning("Dataset too small for proper temporal split with gap! Reducing gap/train size.")
+        val_start = train_size # Fallback (risky but better than crashing)
+    
+    train_indices = list(range(0, train_size))
+    val_indices = list(range(val_start, total_len))
+    
+    train_dataset = torch.utils.data.Subset(dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(dataset, val_indices)
+    
+    logger.info(f"Temporal Split: Train={len(train_dataset)}, Val={len(val_dataset)} (Gap={gap})")
+    
+    # Use settings for hyperparameters unless overridden
+    batch_size = args.batch_size or settings.hyperparams.batch_size
+    lr = args.lr or settings.hyperparams.learning_rate
+    epochs = args.epochs or 50 # Default if not in settings (settings doesn't have epochs)
+    
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True, # Shuffle WITHIN the training set is fine
+        num_workers=4,
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=4,
+        pin_memory=True
     )
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
-    
     # Initialize model
-    model = DerivOmniModel(config=settings.model)
+    model = DerivOmniModel(config=settings)
     
     # Configure trainer
     config = TrainerConfig(
-        epochs=args.epochs,
-        learning_rate=args.lr,
+        epochs=epochs,
+        learning_rate=lr,
         checkpoint_dir=args.checkpoint_dir,
     )
     
