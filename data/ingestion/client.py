@@ -13,6 +13,7 @@ Example:
 
 import asyncio
 import logging
+import random
 from collections.abc import AsyncGenerator
 from collections.abc import AsyncGenerator
 from typing import Any, Callable, cast
@@ -42,6 +43,11 @@ class DerivClient:
         self.app_id = settings.deriv_app_id
         self.token = settings.deriv_api_token
         self._keep_alive_task: asyncio.Task | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is currently connected and authorized."""
+        return self.api is not None and self._keep_alive_task is not None and not self._keep_alive_task.done()
 
     async def connect(self, max_retries: int = 3) -> None:
         """
@@ -81,7 +87,11 @@ class DerivClient:
             except APIError as e:
                 logger.error(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(2**attempt)  # Exponential backoff
+                    # M14: Add jitter to prevent thundering herd
+                    base_delay = 2**attempt
+                    jitter = random.uniform(0.5 * base_delay, 1.5 * base_delay)
+                    logger.info(f"Retrying in {jitter:.2f}s...")
+                    await asyncio.sleep(jitter)
                 else:
                     raise
 
@@ -138,7 +148,13 @@ class DerivClient:
             try:
                 logger.warning(f"Reconnection attempt {attempt + 1}/{max_attempts}")
                 await self.disconnect()  # Clean up old connection
-                await asyncio.sleep(2**attempt)  # Exponential backoff: 1, 2, 4, 8, 16s
+                
+                # M14: Jittered backoff
+                base_delay = 2**attempt
+                jitter = random.uniform(0.5 * base_delay, 1.5 * base_delay)
+                logger.info(f"Waiting {jitter:.2f}s before reconnecting...")
+                await asyncio.sleep(jitter)
+                
                 await self.connect()
                 logger.info("Reconnection successful")
                 return True
