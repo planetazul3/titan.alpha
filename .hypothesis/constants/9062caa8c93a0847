@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/training/metrics.py
+# hypothesis_version: 6.148.8
+
+[0.0, 0.5, 0.9, 1.0, 'accuracy', 'auc', 'brier_score', 'f1', 'inf', 'positive_rate', 'precision', 'recall', 'total_samples', 'trapezoid', 'win_rate']

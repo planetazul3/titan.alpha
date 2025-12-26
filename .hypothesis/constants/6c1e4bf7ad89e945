@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/ingestion/historical.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.5, 1.0, 30.0, 3600, 5000, '%Y-%m', '*.parquet', 'candle_dir', 'candles', 'close', 'count', 'end', 'epoch', 'granularity', 'high', 'history', 'low', 'open', 'prices', 'quote', 'start', 'style', 'tick_dir', 'ticks', 'ticks_history', 'times']

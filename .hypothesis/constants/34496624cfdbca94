@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/ingestion/client.py
+# hypothesis_version: 6.148.7
+
+[10.0, 30.0, 120.0, 100, 200, 1000, 'Authorizing...', 'Client not connected', 'Keep-alive ping sent', 'USD', 'adjust_start_time', 'amount', 'balance', 'basis', 'buy', 'candles', 'contract_type', 'count', 'currency', 'duration', 'duration_unit', 'end', 'granularity', 'history', 'id', 'latest', 'ohlc', 'open', 'ping', 'price', 'prices', 'proposal', 'quote', 'scope', 'stake', 'start', 'style', 'symbol', 't', 'tick', 'ticks', 'ticks_history']

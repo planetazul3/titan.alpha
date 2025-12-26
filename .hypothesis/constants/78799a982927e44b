@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/events.py
+# hypothesis_version: 6.148.7
+
+[-1.0, -0.5, 0.0, 0.1, 0.3, 0.5, 1.0, 100.0, 100, 1000, 'index', 'replay', 'source']

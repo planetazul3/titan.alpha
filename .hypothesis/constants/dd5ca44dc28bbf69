@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/training/losses.py
+# hypothesis_version: 6.148.8
+
+[0.1, 0.25, 0.5, 1.0, 2.0, 'mean', 'none', 'range', 'range_logit', 'reconstruction', 'rise_fall', 'rise_fall_logit', 'total', 'touch', 'touch_logit']

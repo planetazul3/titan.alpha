@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/executor.py
+# hypothesis_version: 6.148.8
+
+[0.0, 100.0, 'CALL', 'IN', 'NOTOUCH', 'ONETOUCH', 'PUT', 'RANGE', 'TOUCH', 'UPORDOWN', 'Zero stake amount', 'barrier', 'barrier2', 'buy_price', 'contract_id', 'contract_type', 'executed', 'failed', 'is_expired', 'is_sold', 'm', 'purchase_time', 'stake', 'success_rate', 'underlying']

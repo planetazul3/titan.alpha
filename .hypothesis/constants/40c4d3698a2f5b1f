@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/models/policy.py
+# hypothesis_version: 6.148.8
+
+[0.0, 1e-06, 0.1, 0.2, 0.5, 1.0, 6.0, 10.0, 256, 'high', 'low', 'medium', 'range_prob', 'relu', 'rise_fall_prob', 'touch_prob']

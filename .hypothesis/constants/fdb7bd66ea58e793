@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/models/temporal_v2.py
+# hypothesis_version: 6.148.8
+
+[0.1, 128, 'candle_features', 'dropout', 'hidden_dim']

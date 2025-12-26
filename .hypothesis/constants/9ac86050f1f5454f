@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/execution/adaptive_risk.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1e-08, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0, 1.2, 1.5, 5.0, 20.0, 100.0, 100, 252, 'aggressive', 'conservative', 'daily_loss_limit', 'daily_pnl', 'drawdown', 'high', 'low', 'max_drawdown', 'max_stake', 'max_trades_per_hour', 'medium', 'normal', 'profit_factor', 'risk_level', 'sharpe_ratio', 'should_pause', 'trades_since_limit', 'win_rate']

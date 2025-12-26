@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/shadow_dataset.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.8, 1.0, 'CALL', 'RISE_FALL', 'STAYS_BETWEEN', 'ShadowTradeDataset', 'ShadowTradeRecord', 'TOUCH_NO_TOUCH', '_from_legacy', 'avg_probability', 'candle_window', 'candles', 'contract_type', 'contract_types', 'direction', 'directions', 'entry_price', 'exit_price', 'from_legacy', 'metadata', 'outcome', 'probability', 'range', 'reconstruction_error', 'regime_state', 'rise_fall', 'targets', 'tick_window', 'ticks', 'timestamp', 'total_samples', 'touch', 'trade_id', 'unknown', 'vol_metrics', 'win_rate']

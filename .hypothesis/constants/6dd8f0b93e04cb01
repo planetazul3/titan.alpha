@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/training/trainer.py
+# hypothesis_version: 6.148.8
+
+[0.0, 1e-06, 0.0001, 0.0005, 1.0, 1000000.0, 1000, 'LR', 'Loss/train', 'Loss/val', 'Trainer initialized:', 'Validation', 'best_checkpoint', 'best_model.pt', 'best_val_loss', 'candles', 'checkpoints', 'config', 'cpu', 'cuda', 'epoch', 'epochs_trained', 'final_model.pt', 'final_val_loss', 'global_step', 'inf', 'logs/tensorboard', 'loss', 'lr', 'model_state_dict', 'optimizer_state_dict', 'rise_fall', 'rise_fall_logit', 'scaler_state_dict', 'scheduler_state_dict', 'targets', 'ticks', 'total', 'vol_metrics', '🚀 TRAINING STARTING']

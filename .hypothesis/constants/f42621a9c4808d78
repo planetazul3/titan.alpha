@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/safety.py
+# hypothesis_version: 6.148.8
+
+[1.0, 20.0, 50.0, 60.0, 'Kill switch enabled', 'Rate limit exceeded', 'symbol', 'unknown']

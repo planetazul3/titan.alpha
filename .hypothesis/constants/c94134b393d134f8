@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/execution/position_sizer.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1e-08, 0.1, 0.3, 0.35, 0.5, 0.9, 1.0, 10.0, 'adjusted_fraction', 'drawdown_multiplier', 'high', 'kelly_fraction', 'normal', 'payout_ratio', 'probability', 'reason', 'stake']

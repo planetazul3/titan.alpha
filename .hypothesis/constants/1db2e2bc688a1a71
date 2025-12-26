@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/api/dashboard_server.py
+# hypothesis_version: 6.148.8
+
+[0.0, 5.0, 30.0, 100, 500, 1008, 8000, '*', '/api/health', '/api/metrics/current', '/api/safety/state', '/api/shadow-trades', '/ws/trading-stream', '0.0.0.0', '1.0.0', '__main__', 'by_contract_type', 'connected', 'contract_type', 'data', 'data_cache', 'direction', 'entry_price', 'error', 'exit_price', 'healthy', 'heartbeat', 'key', 'losses', 'metrics', 'no_data', 'outcome', 'probability', 'reconstruction_error', 'regime_state', 'safety_state', 'safety_state.db', 'shadow_trades', 'shadow_trades.db', 'system_status', 'timestamp', 'total', 'trade_id', 'type', 'value', 'win_rate', 'wins']

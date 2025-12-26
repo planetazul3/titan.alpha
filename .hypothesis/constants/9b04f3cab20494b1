@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/data/processor.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1.0, 10.0, 20.0, 50.0, 100.0, 'constant']

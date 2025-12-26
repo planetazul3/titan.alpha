@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/safety_store.py
+# hypothesis_version: 6.148.8
+
+[30.0, 'conn', 'last_reset', 'metrics', 'schema_version']

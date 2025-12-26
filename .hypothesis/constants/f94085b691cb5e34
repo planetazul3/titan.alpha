@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/data/dataset.py
+# hypothesis_version: 6.148.8
+
+[0.0, 0.003, 0.005, 1.0, 100.0, '*.parquet', '*_candles_*.parquet', '*_ticks_*.parquet', 'Tick epochs missing', 'candles', 'candles_*', 'close', 'epoch', 'eval', 'high', 'low', 'open', 'quote', 'range', 'right', 'rise_fall', 'targets', 'ticks', 'touch', 'train', 'vol_metrics']

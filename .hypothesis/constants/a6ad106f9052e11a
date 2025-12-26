@@ -1,0 +1,4 @@
+# file: /home/planetazul3/xtitan/config/settings.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.1, 0.5, 1.0, 10.0, 50.0, 1089, '.env', '1m', 'BiLSTM hidden size', 'CNN filter count', 'Candle timeframe', 'Deriv application ID', 'Deriv trading symbol', 'Dropout probability', 'Thresholds', 'Tick sequence length', 'Training batch size', '__', 'after', 'auto', 'batch_size', 'cpu', 'cuda', 'development', 'dropout_rate', 'ignore', 'learning_rate', 'mps', 'production']
