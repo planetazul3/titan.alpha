@@ -14,12 +14,13 @@ class TemporalExpert(nn.Module):
     Architecture: BiLSTM/TFT -> Attention -> MLP -> Embedding
     """
 
-    def __init__(self, settings: Settings, embedding_dim: int = 64, use_tft: bool = True):
+    def __init__(self, settings: Settings, embedding_dim: int = 64, use_tft: bool = True, static_dim: int = 0):
         super().__init__()
 
         input_size = 10  # Candle features from preprocessor
         hidden_size = settings.hyperparams.lstm_hidden_size
         self.use_tft = use_tft
+        self.static_dim = static_dim
 
         if self.use_tft:
             self.tft = TemporalFusionTransformer(
@@ -27,6 +28,7 @@ class TemporalExpert(nn.Module):
                 hidden_size=hidden_size,
                 num_heads=4,  # Standard default
                 dropout=settings.hyperparams.dropout_rate,
+                static_input_size=static_dim,
             )
             # TFT outputs hidden_size dimensions
             encoder_out_dim = hidden_size
@@ -48,18 +50,19 @@ class TemporalExpert(nn.Module):
             dropout=settings.hyperparams.dropout_rate,
         )
 
-    def forward(self, candles: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, candles: torch.Tensor, mask: torch.Tensor | None = None, static_context: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             candles: (batch, seq_len, features) normalized candle data
             mask: (batch, seq_len) attention mask (optional)
+            static_context: (batch, static_dim) static covariates (optional)
         Returns:
             embedding: (batch, embedding_dim) temporal representation
         """
         if self.use_tft:
             # TFT returns (output, attention_weights, feature_weights)
             # output: (batch, seq_len, hidden_size)
-            tft_out, _, _ = self.tft(candles, mask=mask)
+            tft_out, _, _ = self.tft(candles, mask=mask, static_covariates=static_context)
             
             # Use the last time step for embedding
             # (batch, hidden_size)

@@ -467,6 +467,7 @@ class TemporalFusionTransformer(nn.Module):
         num_heads: int = 4,
         num_lstm_layers: int = 1,
         dropout: float = 0.1,
+        static_input_size: int = 0,
     ):
         """
         Initialize TFT.
@@ -477,15 +478,18 @@ class TemporalFusionTransformer(nn.Module):
             num_heads: Number of attention heads
             num_lstm_layers: Number of LSTM layers
             dropout: Dropout rate
+            static_input_size: Dimension of static covariates (0 to disable)
         """
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.static_input_size = static_input_size
         
         # Variable Selection Network
         self.vsn = VariableSelectionNetwork(
             num_features=input_size,
             hidden_size=hidden_size,
+            context_size=static_input_size if static_input_size > 0 else None,
             dropout=dropout,
         )
         
@@ -504,7 +508,9 @@ class TemporalFusionTransformer(nn.Module):
         
         # GRN after LSTM
         self.post_lstm_grn = GatedResidualNetwork(
-            hidden_size, hidden_size, hidden_size, dropout=dropout
+            hidden_size, hidden_size, hidden_size, 
+            context_size=static_input_size if static_input_size > 0 else None,
+            dropout=dropout
         )
         
         # Interpretable Multi-Head Attention
@@ -516,23 +522,28 @@ class TemporalFusionTransformer(nn.Module):
         
         # Post-attention GRN
         self.post_attention_grn = GatedResidualNetwork(
-            hidden_size, hidden_size, hidden_size, dropout=dropout
+            hidden_size, hidden_size, hidden_size, 
+            context_size=static_input_size if static_input_size > 0 else None,
+            dropout=dropout
         )
         
         # Final output GRN
         self.output_grn = GatedResidualNetwork(
-            hidden_size, hidden_size, hidden_size, dropout=dropout
+            hidden_size, hidden_size, hidden_size, 
+            context_size=static_input_size if static_input_size > 0 else None,
+            dropout=dropout
         )
         
         # Layer norm
         self.layer_norm = nn.LayerNorm(hidden_size)
         
-        logger.info(f"TFT initialized: input={input_size}, hidden={hidden_size}, heads={num_heads}")
+        logger.info(f"TFT initialized: input={input_size}, hidden={hidden_size}, heads={num_heads}, static={static_input_size}")
     
     def forward(
         self, 
         x: torch.Tensor,
-        mask: torch.Tensor | None = None
+        mask: torch.Tensor | None = None,
+        static_covariates: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Apply TFT encoder.
@@ -540,6 +551,7 @@ class TemporalFusionTransformer(nn.Module):
         Args:
             x: Input features [batch, seq_len, input_size]
             mask: Optional attention mask [batch, seq_len]
+            static_covariates: Optional static features [batch, static_input_size]
         
         Returns:
             Tuple of:
@@ -548,14 +560,14 @@ class TemporalFusionTransformer(nn.Module):
             - Feature importance weights [batch, seq_len, num_features]
         """
         # Variable selection
-        selected, feature_weights = self.vsn(x)  # [batch, seq_len, hidden_size]
+        selected, feature_weights = self.vsn(x, context=static_covariates)  # [batch, seq_len, hidden_size]
         
         # LSTM encoding
         lstm_out, _ = self.lstm(selected)  # [batch, seq_len, hidden_size*2]
         lstm_out = self.lstm_gate(lstm_out)  # [batch, seq_len, hidden_size]
         
-        # Skip connection from VSN
-        lstm_out = self.post_lstm_grn(lstm_out) + selected
+        # Skip connection from VSN - Enriched with static context via GRN
+        lstm_out = self.post_lstm_grn(lstm_out, context=static_covariates) + selected
         
         # Self-attention for long-range patterns
         # H03: Pass mask to attention
@@ -568,11 +580,11 @@ class TemporalFusionTransformer(nn.Module):
 
         attention_out, attention_weights = self.attention(lstm_out, mask=attn_mask)
         
-        # Skip connection
-        attention_out = self.post_attention_grn(attention_out) + lstm_out
+        # Skip connection - Enriched with static context
+        attention_out = self.post_attention_grn(attention_out, context=static_covariates) + lstm_out
         
-        # Final processing
-        output = self.output_grn(attention_out)
+        # Final processing - Enriched with static context
+        output = self.output_grn(attention_out, context=static_covariates)
         output = self.layer_norm(output)
         
         # Return full sequence for multi-horizon forecasting

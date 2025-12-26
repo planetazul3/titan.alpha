@@ -69,9 +69,17 @@ class DerivOmniModel(nn.Module):
         fusion_out = 256
         
         # Get usage flag (defaults to True if not in settings, but we added it)
+        # Get usage flag (defaults to True if not in settings, but we added it)
         use_tft = getattr(settings.hyperparams, "use_tft", True)
 
-        self.temporal = TemporalExpert(settings, embedding_dim=temp_dim, use_tft=use_tft)
+        # M06: Pass volatility embedding as static context to TFT
+        # This allows the temporal model to adapt to the volatility regime
+        self.temporal = TemporalExpert(
+            settings, 
+            embedding_dim=temp_dim, 
+            use_tft=use_tft,
+            static_dim=vol_dim if use_tft else 0
+        )
         self.spatial = SpatialExpert(settings, embedding_dim=spat_dim)
 
         # Volatility expert input dim is 4 (realized_vol, atr_mean, rsi_std, bb_w_mean)
@@ -113,9 +121,11 @@ class DerivOmniModel(nn.Module):
         """
         candles_mask = masks.get("candles_mask") if masks else None
         
-        emb_temp = self.temporal(candles, mask=candles_mask)  # (batch, temp_dim)
-        emb_spat = self.spatial(ticks)  # (batch, spat_dim)
         emb_vol = self.volatility.encode(vol_metrics)  # (batch, vol_dim)
+        
+        # Pass volatility embedding as static context to TemporalExpert (if using TFT)
+        emb_temp = self.temporal(candles, mask=candles_mask, static_context=emb_vol)  # (batch, temp_dim)
+        emb_spat = self.spatial(ticks)  # (batch, spat_dim)
 
         context = self.fusion(emb_temp, emb_spat, emb_vol)  # (batch, fusion_out)
 
