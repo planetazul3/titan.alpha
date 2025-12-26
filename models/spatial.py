@@ -4,6 +4,7 @@ import torch.nn as nn
 
 from config.settings import Settings
 from models.blocks import Conv1DBlock
+from models.attention import AdditiveAttention
 
 
 class SpatialExpert(nn.Module):
@@ -30,7 +31,12 @@ class SpatialExpert(nn.Module):
         self.block2 = Conv1DBlock(base_channels, base_channels * 2, kernel_size=5)
         self.block3 = Conv1DBlock(base_channels * 2, base_channels * 4, kernel_size=15)
 
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.block3 = Conv1DBlock(base_channels * 2, base_channels * 4, kernel_size=15)
+
+        # M07: Replace Global Average Pooling with Attention Pooling
+        # This preserves temporal information and allows focusing on specific features
+        self.attention = AdditiveAttention(hidden_dim=base_channels * 4)
+        
         self.projector = nn.Linear(base_channels * 4, embedding_dim)
 
     def forward(self, ticks: torch.Tensor) -> torch.Tensor:
@@ -48,9 +54,13 @@ class SpatialExpert(nn.Module):
         x = self.block2(x)
         x = self.block3(x)
 
-        # Global Avg Pooling
-        x = self.pool(x)  # (batch, channels, 1)
-        x = x.squeeze(-1)  # (batch, channels)
+        # M07: Attention Pooling
+        # Transpose to (batch, seq_len, channels) for attention
+        x = x.permute(0, 2, 1)  
+        
+        # Apply attention pooling
+        # context: (batch, channels)
+        context, _ = self.attention(x)
 
-        embedding = self.projector(x)
+        embedding = self.projector(context)
         return cast(torch.Tensor, embedding)
