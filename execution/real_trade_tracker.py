@@ -15,6 +15,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -86,7 +87,7 @@ class RealTradeTracker:
         self._resolved_count = 0
         self._wins = 0
         self._losses = 0
-        self._total_pnl = 0.0
+        self._total_pnl = Decimal("0.0")
         
         logger.info(
             f"RealTradeTracker initialized (API mode): "
@@ -193,7 +194,8 @@ class RealTradeTracker:
         
         # Update stats
         self._resolved_count += 1
-        self._total_pnl += profit
+        # M16: Use Decimal for precision
+        self._total_pnl += Decimal(str(profit))
         if won:
             self._wins += 1
         else:
@@ -246,7 +248,7 @@ class RealTradeTracker:
             "wins": self._wins,
             "losses": self._losses,
             "win_rate": self._wins / self._resolved_count if self._resolved_count > 0 else 0,
-            "total_pnl": round(self._total_pnl, 2),
+            "total_pnl": float(self._total_pnl),
         }
 
     async def recover_pending_trades(self) -> int:
