@@ -39,7 +39,7 @@ from data.indicators import (
     stochastic,
 )
 from data.ingestion.client import DerivClient
-from data.ingestion.historical import HistoricalDataDownloader, download_months
+from data.ingestion.historical import download_months
 from data.loader import create_dataloaders
 from data.normalizers import (
     log_returns,
@@ -91,7 +91,6 @@ __all__ = [
     "create_dataloaders",
     # Data ingestion
     "DerivClient",
-    "HistoricalDataDownloader",
     "download_months",
     # Low-level preprocessors (deprecated, use FeatureBuilder)
     "TickPreprocessor",
