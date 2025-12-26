@@ -435,50 +435,71 @@ class OnlineLearningModule:
         total_task_loss = 0.0
         total_ewc_loss = 0.0
         
+        failed_steps = 0
+        successful_steps = 0
+
         for step in range(num_steps):
-            # Sample batch
-            batch = self.replay_buffer.sample(min(batch_size, len(resolved)))
-            
-            # Prepare tensors
-            ticks = torch.stack([e.ticks for e in batch])
-            candles = torch.stack([e.candles for e in batch])
-            vol_metrics = torch.stack([e.vol_metrics for e in batch])
-            outcomes = torch.tensor([e.outcome for e in batch], dtype=torch.float32)
-            
-            # Forward pass
-            outputs = self.model(ticks, candles, vol_metrics)
-            
-            # Task loss - use rise_fall_logit as primary
-            if isinstance(outputs, dict) and "rise_fall_logit" in outputs:
-                predictions = outputs["rise_fall_logit"].squeeze()
-            else:
-                predictions = outputs.squeeze() if hasattr(outputs, 'squeeze') else outputs
-            
-            task_loss = loss_fn(predictions, outcomes)
-            
-            # EWC penalty
-            ewc_penalty = self.ewc_loss(self.model, self.fisher)
-            
-            # Total loss
-            loss = task_loss + ewc_penalty
-            
-            # Backward and update
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            
-            total_loss += loss.item()
-            total_task_loss += task_loss.item()
-            total_ewc_loss += ewc_penalty.item()
+            try:
+                # Sample batch
+                batch = self.replay_buffer.sample(min(batch_size, len(resolved)))
+                
+                # Prepare tensors
+                ticks = torch.stack([e.ticks for e in batch])
+                candles = torch.stack([e.candles for e in batch])
+                vol_metrics = torch.stack([e.vol_metrics for e in batch])
+                outcomes = torch.tensor([e.outcome for e in batch], dtype=torch.float32)
+                
+                # Forward pass
+                outputs = self.model(ticks, candles, vol_metrics)
+                
+                # Task loss - use rise_fall_logit as primary
+                if isinstance(outputs, dict) and "rise_fall_logit" in outputs:
+                    predictions = outputs["rise_fall_logit"].squeeze()
+                else:
+                    predictions = outputs.squeeze() if hasattr(outputs, 'squeeze') else outputs
+                
+                task_loss = loss_fn(predictions, outcomes)
+                
+                # EWC penalty
+                ewc_penalty = self.ewc_loss(self.model, self.fisher)
+                
+                # Total loss
+                loss = task_loss + ewc_penalty
+                
+                # NaN/Inf Check
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning(f"Skipping step {step}: Loss is NaN/Inf")
+                    failed_steps += 1
+                    continue
+
+                # Backward and update
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                
+                total_loss += loss.item()
+                total_task_loss += task_loss.item()
+                total_ewc_loss += ewc_penalty.item()
+                successful_steps += 1
+                
+            except Exception as e:
+                logger.error(f"Error in online update step {step}: {e}")
+                failed_steps += 1
+                self.optimizer.zero_grad()
+        
+        if successful_steps == 0:
+            logger.error("All update steps failed")
+            return {"skipped": True, "failed_steps": failed_steps}
         
         self._experiences_since_update = 0
         self._total_updates += 1
         
+        divisor = successful_steps if successful_steps > 0 else 1
         metrics = {
-            "total_loss": total_loss / num_steps,
-            "task_loss": total_task_loss / num_steps,
-            "ewc_loss": total_ewc_loss / num_steps,
+            "total_loss": total_loss / divisor,
+            "task_loss": total_task_loss / divisor,
+            "ewc_loss": total_ewc_loss / divisor,
             "num_experiences": len(resolved),
             "update_count": self._total_updates,
         }
