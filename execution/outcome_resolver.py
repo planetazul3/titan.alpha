@@ -138,7 +138,9 @@ class OutcomeResolver:
         if trade.contract_type == "RISE_FALL":
             outcome = self._resolve_rise_fall(trade.entry_price, exit_price, trade.direction)
         elif trade.contract_type == "TOUCH_NO_TOUCH":
-            outcome = self._resolve_touch(trade.entry_price, window_ticks, trade.direction)
+            outcome = self._resolve_touch(
+                trade.entry_price, window_ticks, trade.direction, getattr(trade, "barrier_level", None)
+            )
         elif trade.contract_type == "STAYS_BETWEEN":
             outcome = self._resolve_range(trade.entry_price, window_ticks)
         else:
@@ -164,14 +166,28 @@ class OutcomeResolver:
             logger.warning(f"Unknown direction: {direction}")
             return False
 
-    def _resolve_touch(self, entry_price: float, window_ticks: np.ndarray, direction: str) -> bool:
+    def _resolve_touch(
+        self, entry_price: float, window_ticks: np.ndarray, direction: str, barrier_level: float | None = None
+    ) -> bool:
         """
         Resolve TOUCH_NO_TOUCH contract outcome.
 
         - TOUCH: Win if price touched barrier (moved > threshold)
         - NO_TOUCH: Win if price stayed within barrier
         """
-        barrier = entry_price * self.config.touch_barrier_percent
+        if barrier_level is not None:
+            # Absolute barrier checks
+            # Usually barrier is a delta (e.g. 1.5).
+            # If barrier is absolute, we'd need to know that.
+            # Assuming barrier_level stored IS the absolute distance or absolute price?
+            # Standard Deriv 'barrier' is usually an offset (+1.23) or absolute?
+            # For simplicity in this fix, we assume barrier_level is the ABSOLUTE DELTA from entry
+            # or we assume it's the target price.
+            # Let's align with the existing logic: existing uses 'barrier' as a delta (max_deviation > barrier).
+            # So if barrier_level is passed, treat it as the absolute delta threshold.
+            barrier = barrier_level
+        else:
+            barrier = entry_price * self.config.touch_barrier_percent
 
         max_deviation = np.max(np.abs(window_ticks - entry_price))
         touched = max_deviation > barrier

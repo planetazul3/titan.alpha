@@ -91,6 +91,9 @@ class ShadowTradeRecord:
     exit_price: float | None = None
     resolved_at: datetime | None = None
 
+    # Barrier level (M03: specific barrier for TOUCH/RANGE trades)
+    barrier_level: float | None = None
+
     # Extra metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -111,6 +114,7 @@ class ShadowTradeRecord:
         candle_window: np.ndarray,
         model_version: str = "unknown",
         feature_schema_version: str = "1.0",
+        barrier_level: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> "ShadowTradeRecord":
         """
@@ -138,6 +142,7 @@ class ShadowTradeRecord:
             candle_window=candle_window.tolist()
             if isinstance(candle_window, np.ndarray)
             else list(candle_window),
+            barrier_level=barrier_level,
             metadata=metadata or {},
         )
 
@@ -187,6 +192,7 @@ class ShadowTradeRecord:
             outcome=outcome,
             exit_price=exit_price,
             resolved_at=datetime.now(timezone.utc),
+            barrier_level=self.barrier_level,
             metadata=self.metadata,
             _schema_version=self._schema_version,
             _created_at=self._created_at,
