@@ -152,18 +152,37 @@ class SafeTradeExecutor:
 
     async def _execute_with_retry(self, signal: TradeSignal) -> TradeResult:
         """Execute with exponential backoff on transient errors."""
+        # Define retryable exceptions
+        # We try to import APIError dynamically to avoid hard dependency if possible, 
+        # or just assume it's available since this is part of the system.
+        retryable_errors: tuple[type[Exception], ...] = (
+            ConnectionError, 
+            TimeoutError, 
+            asyncio.TimeoutError
+        )
+        
+        try:
+            from deriv_api import APIError
+            retryable_errors += (APIError,)
+        except ImportError:
+            pass
+
         for attempt in range(self.config.max_retry_attempts):
             try:
                 result = await self.inner.execute(signal)
                 return result
-            except Exception as e:
-                # Decide if retryable? For now, assume network errs might be caught inside inner
-                # If inner raises, we catch here.
-                logger.error(f"Execution handling error (attempt {attempt+1}): {e}")
+            except retryable_errors as e:
+                # Retryable error
+                logger.warning(f"Transient execution error (attempt {attempt+1}): {e}")
                 if attempt < self.config.max_retry_attempts - 1:
                     await asyncio.sleep(self.config.retry_base_delay * (2 ** attempt))
                 else:
                     return TradeResult(success=False, error=str(e))
+            except Exception as e:
+                # M15: Non-retryable error (logic bug, validation, etc.) - Fail fast!
+                logger.error(f"Non-retryable execution error: {e}", exc_info=True)
+                return TradeResult(success=False, error=f"Permanent Error: {e}")
+                
         return TradeResult(success=False, error="Max retries exhausted")
 
     async def _record_trade(self, symbol: str, result: TradeResult):
