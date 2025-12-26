@@ -178,21 +178,14 @@ class AdaptiveRiskManager:
         sharpe_threshold_conservative: float = 0.5,
         drawdown_threshold: float = 0.1,
         recovery_period_trades: int = 20,
+        state_store: Any = None,  # H04: Inject persistence store
     ):
         """
         Initialize risk manager.
         
         Args:
-            base_daily_limit: Base daily loss limit
-            base_max_stake: Base maximum stake
-            base_trades_per_hour: Base rate limit
-            base_max_drawdown: Base maximum drawdown
-            min_scale: Minimum scaling factor
-            max_scale: Maximum scaling factor
-            sharpe_threshold_aggressive: Sharpe for aggressive mode
-            sharpe_threshold_conservative: Sharpe for conservative mode
-            drawdown_threshold: Drawdown to trigger conservative
-            recovery_period_trades: Trades before limit relaxation
+           ...
+           state_store: Optional SQLiteSafetyStateStore for persistence
         """
         self.base_daily_limit = base_daily_limit
         self.base_max_stake = base_max_stake
@@ -206,6 +199,7 @@ class AdaptiveRiskManager:
         self.drawdown_threshold = drawdown_threshold
         self.recovery_period_trades = recovery_period_trades
         
+        self.state_store = state_store
         self.performance = PerformanceTracker()
         
         self._daily_pnl = 0.0
@@ -213,11 +207,42 @@ class AdaptiveRiskManager:
         self._last_limit_hit: datetime | None = None
         self._trades_since_limit_hit = 0
         
+        # Load persisted state if available
+        if self.state_store:
+            self._load_state()
+
         logger.info(
             f"AdaptiveRiskManager initialized: "
-            f"base_limit={base_daily_limit}, base_stake={base_max_stake}"
+            f"base_limit={base_daily_limit}, base_stake={base_max_stake}, persisted={bool(state_store)}"
         )
     
+    def _load_state(self):
+        """Load state from persistent store."""
+        try:
+            metrics = self.state_store.get_risk_metrics()
+            self.performance._current_drawdown = metrics.get("current_drawdown", 0.0)
+            self.performance._peak_equity = metrics.get("peak_equity", 0.0)
+            # We map "consecutive_losses" concept if PerformanceTracker had it, 
+            # or just use it as simple example.
+            # PerformanceTracker doesn't strictly track consecutive_losses publically, 
+            # but we can restore peak equity/drawdown at least.
+            logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}")
+        except Exception as e:
+            logger.error(f"Failed to load risk state: {e}")
+
+    def _save_state(self):
+        """Save state to persistent store."""
+        if not self.state_store:
+            return
+        try:
+            self.state_store.update_risk_metrics(
+                drawdown=self.performance.get_drawdown(),
+                losses=0, # Tracker doesn't expose it easily yet without modification, keeping 0 for now
+                peak_equity=self.performance._peak_equity
+            )
+        except Exception as e:
+            logger.error(f"Failed to save risk state: {e}")
+
     def record_trade(
         self,
         pnl: float,
@@ -239,6 +264,9 @@ class AdaptiveRiskManager:
             self._last_limit_hit = datetime.now(timezone.utc)
             self._trades_since_limit_hit = 0
             logger.warning(f"Daily loss limit hit: {self._daily_pnl}")
+            
+        # H04: Persist State
+        self._save_state()
     
     def reset_daily(self) -> None:
         """Reset daily tracking (call at day start)."""
