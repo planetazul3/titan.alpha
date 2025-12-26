@@ -7,7 +7,10 @@ Supports:
 - Label generation from price movements
 """
 
+import hashlib
+import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -97,21 +100,80 @@ class DerivDataset(Dataset):
         # Calculate number of samples
         self._calculate_indices()
 
+    def _get_cache_path(self, data_source: Path) -> Path:
+        """Get or create cache directory."""
+        cache_dir = data_source / ".cache"
+        cache_dir.mkdir(exist_ok=True)
+        return cache_dir
+
+    def _compute_hash(self, files: list[Path]) -> str:
+        """Compute hash of file states (names + mtimes + sizes)."""
+        hasher = hashlib.md5()
+        for f in sorted(files):
+            stat = f.stat()
+            # Include name, size, time
+            hasher.update(f"{f.name}:{stat.st_size}:{stat.st_mtime}".encode())
+        return hasher.hexdigest()
+
+    def _load_or_create_mmap(
+        self, 
+        name: str, 
+        files: list[Path], 
+        cache_dir: Path,
+        loader_func: Any,
+        dtype: Any
+    ) -> np.ndarray:
+        """
+        Load data from memory-mapped file, creating it if needed.
+        
+        Args:
+            name: Identifier for the data (e.g., 'ticks', 'candles')
+            files: List of source files
+            cache_dir: Directory to store cache
+            loader_func: Function that returns numpy array if cache miss
+            dtype: Expected data type
+            
+        Returns:
+            Memory-mapped numpy array
+        """
+        # compute hash of source files
+        source_hash = self._compute_hash(files)
+        cache_file = cache_dir / f"{name}_{source_hash}.npy"
+        
+        if cache_file.exists():
+            logger.info(f"Loading cached {name} from {cache_file}")
+            return np.load(cache_file, mmap_mode="r")
+            
+        logger.info(f"Cache miss for {name}. Loading from source and creating cache...")
+        data = loader_func(files)
+        
+        if not isinstance(data, np.ndarray):
+            data = np.array(data, dtype=dtype)
+        else:
+            data = data.astype(dtype)
+            
+        # Atomic write
+        temp_file = cache_file.with_suffix(".tmp.npy")
+        np.save(temp_file, data)
+        temp_file.rename(cache_file)
+        
+        logger.info(f"Created cache {cache_file} ({data.nbytes / 1e6:.1f} MB)")
+        
+        # Reload as mmap
+        return np.load(cache_file, mmap_mode="r")
+
     def _load_data(self, data_source: Path):
         """
-        Load tick and candle data from Parquet files.
+        Load tick and candle data using memory mapping.
 
         CANONICAL DATA PATH ENFORCEMENT:
         This is the ONLY way to load data for model consumption.
-
-        Supports both:
-        - Partitioned format: {symbol}/ticks/*.parquet, {symbol}/candles_*/*.parquet
-        - Legacy format: *_ticks_*.parquet, *_candles_*.parquet
         """
         if not HAS_PANDAS:
             raise RuntimeError("pandas required for Parquet loading")
 
         data_source = Path(data_source)
+        cache_dir = self._get_cache_path(data_source)
 
         # Try partitioned format first (new)
         tick_files, candle_files = self._find_parquet_files(data_source)
@@ -128,52 +190,55 @@ class DerivDataset(Dataset):
                 f"Run 'python scripts/download_data.py --months N' to download data."
             )
 
-        # Load ticks (may be multiple partitions)
-        logger.info(f"Loading ticks from {len(tick_files)} file(s)")
-        tick_dfs = [pd.read_parquet(f) for f in tick_files]
-        tick_df = pd.concat(tick_dfs, ignore_index=True).sort_values("epoch").reset_index(drop=True)
+        # --- Load Ticks ---
+        def load_ticks(files):
+            logger.info(f"Loading ticks from {len(files)} file(s)")
+            tick_dfs = [pd.read_parquet(f) for f in files]
+            # Must sort by epoch
+            df = pd.concat(tick_dfs, ignore_index=True).sort_values("epoch").reset_index(drop=True)
+            if "quote" not in df.columns:
+                raise ValueError("Tick files missing 'quote' column")
+            return df["quote"].values
 
-        # VALIDATION: Ensure required columns exist
-        if "quote" not in tick_df.columns:
-            raise ValueError(
-                "Tick files missing required 'quote' column. Expected columns: ['quote', 'epoch']"
-            )
-
-        self.ticks = tick_df["quote"].values.astype(np.float32)
-        self.tick_epochs = tick_df["epoch"].values if "epoch" in tick_df else None
-
-        # Load candles (may be multiple partitions)
-        logger.info(f"Loading candles from {len(candle_files)} file(s)")
-        candle_dfs = [pd.read_parquet(f) for f in candle_files]
-        candle_df = (
-            pd.concat(candle_dfs, ignore_index=True).sort_values("epoch").reset_index(drop=True)
+        self.ticks = self._load_or_create_mmap(
+            "ticks", tick_files, cache_dir, load_ticks, np.float32
         )
 
-        # VALIDATION: Ensure required columns exist
-        required_candle_cols = ["open", "high", "low", "close", "epoch"]
-        missing_cols = set(required_candle_cols) - set(candle_df.columns)
-        if missing_cols:
-            raise ValueError(
-                f"Candle files missing required columns: {missing_cols}. "
-                f"Expected columns: {required_candle_cols}"
-            )
+        # --- Load Tick Epochs ---
+        def load_tick_epochs(files):
+            tick_dfs = [pd.read_parquet(f) for f in files]
+            df = pd.concat(tick_dfs, ignore_index=True).sort_values("epoch").reset_index(drop=True)
+            return df["epoch"].values
 
-        self.candles = candle_df[required_candle_cols].values.astype(np.float32)
+        self.tick_epochs = self._load_or_create_mmap(
+            "tick_epochs", tick_files, cache_dir, load_tick_epochs, np.float64
+        )
 
-        # Add volume column (zeros) if not present
-        if self.candles.shape[1] == 5:
-            zeros = np.zeros((len(self.candles), 1), dtype=np.float32)
-            self.candles = np.hstack(
-                [
-                    self.candles[:, :4],  # OHLC
-                    zeros,  # Volume
-                    self.candles[:, 4:5],  # Epoch
-                ]
-            )
+        # --- Load Candles ---
+        def load_candles(files):
+            logger.info(f"Loading candles from {len(files)} file(s)")
+            candle_dfs = [pd.read_parquet(f) for f in files]
+            df = pd.concat(candle_dfs, ignore_index=True).sort_values("epoch").reset_index(drop=True)
+            
+            required_candle_cols = ["open", "high", "low", "close", "epoch"]
+            missing = set(required_candle_cols) - set(df.columns)
+            if missing:
+                raise ValueError(f"Missing candle cols: {missing}")
+                
+            data = df[required_candle_cols].values.astype(np.float32)
+            
+            # Add volume (zeros) and reorder to [O,H,L,C,V,T]
+            # Current: [O,H,L,C,E] (5 cols)
+            # Need: [O,H,L,C,V,E] (6 cols)
+            zeros = np.zeros((len(data), 1), dtype=np.float32)
+            return np.hstack([data[:, :4], zeros, data[:, 4:5]])
+
+        self.candles = self._load_or_create_mmap(
+            "candles", candle_files, cache_dir, load_candles, np.float32
+        )
 
         logger.info(
-            f"Loaded {len(self.ticks)} ticks, {len(self.candles)} candles "
-            f"from {len(tick_files) + len(candle_files)} partition file(s)"
+            f"Dataset mapped: {len(self.ticks)} ticks, {len(self.candles)} candles"
         )
 
     def _find_parquet_files(self, data_source: Path):
