@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/api/models/responses.py
+# hypothesis_version: 6.148.8
+
+['Losing trades', 'Pending trades', 'Total shadow trades', 'Win rate (0-1)', 'Winning trades', 'unknown']

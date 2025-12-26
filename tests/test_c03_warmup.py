@@ -11,11 +11,19 @@ from data.dataset import DerivDataset
 
 @pytest.fixture
 def mock_settings():
-    settings = MagicMock(spec=Settings)
+    settings = MagicMock()
+    # Mock data shapes
     settings.data_shapes = MagicMock()
     settings.data_shapes.sequence_length_ticks = 20
     settings.data_shapes.sequence_length_candles = 10
     settings.data_shapes.warmup_steps = 20  # Warmup > RSI period (14)
+    
+    # Mock normalization factors (REQUIRED by VolatilityMetricsExtractor)
+    settings.normalization = MagicMock()
+    settings.normalization.norm_factor_volatility = 1.0
+    settings.normalization.norm_factor_atr = 1.0
+    settings.normalization.norm_factor_rsi_std = 1.0
+    settings.normalization.norm_factor_bb_width = 1.0
     return settings
 
 @pytest.fixture

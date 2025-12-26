@@ -106,6 +106,12 @@ class TestPreprocessors:
         settings = MagicMock()
         settings.data_shapes.sequence_length_ticks = 100
         settings.data_shapes.sequence_length_candles = 50
+        
+        # Mock normalization factors
+        settings.normalization.norm_factor_volatility = 1.0
+        settings.normalization.norm_factor_atr = 1.0
+        settings.normalization.norm_factor_rsi_std = 1.0
+        settings.normalization.norm_factor_bb_width = 1.0
         return settings
 
     def test_tick_preprocessor_output_shape(self, mock_settings):
@@ -179,6 +185,12 @@ class TestFeatureBuilder:
         settings = MagicMock()
         settings.data_shapes.sequence_length_ticks = 100
         settings.data_shapes.sequence_length_candles = 50
+        
+        # Mock normalization factors
+        settings.normalization.norm_factor_volatility = 1.0
+        settings.normalization.norm_factor_atr = 1.0
+        settings.normalization.norm_factor_rsi_std = 1.0
+        settings.normalization.norm_factor_bb_width = 1.0
         return settings
 
     def test_feature_builder_initialization(self, mock_settings):

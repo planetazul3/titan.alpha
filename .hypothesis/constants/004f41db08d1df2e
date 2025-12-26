@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/observability/shadow_metrics.py
+# hypothesis_version: 6.148.8
+
+[0.0, 0.3, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0, 100, 1000, '0.50-0.60', '0.60-0.70', '0.70-0.80', '0.80-0.90', '0.90-1.00', 'SQLiteShadowStore', 'avg_probability', 'contract_types', 'last_24h_win_rate', 'last_hour_win_rate', 'losses', 'resolved_records', 'resolved_trades', 'simulated_pnl', 'simulated_roi_pct', 'total', 'total_records', 'total_trades', 'unresolved_records', 'unresolved_trades', 'win_rate', 'wins']

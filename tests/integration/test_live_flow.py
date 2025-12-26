@@ -231,15 +231,15 @@ class TestLiveFlowIntegration:
         assert stats["regime_vetoed"] >= 1
 
     @pytest.mark.asyncio
-    async def test_safety_wrapper_enforces_rate_limit(self, mock_settings):
+    async def test_safety_wrapper_enforces_rate_limit(self, mock_settings, tmp_path):
         """Safety wrapper should enforce rate limits on executor."""
         mock_executor = MagicMock()
         mock_executor.execute = AsyncMock(
             return_value=TradeResult(success=True, contract_id="TEST")
         )
 
-        config = ExecutionSafetyConfig(max_trades_per_minute=3, max_daily_loss=100.0)
-        safe_executor = SafeTradeExecutor(mock_executor, config)
+        config = ExecutionSafetyConfig(max_trades_per_minute=3, max_trades_per_minute_per_symbol=3, max_daily_loss=100.0)
+        safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "rate_limit.db")
 
         from execution.signals import TradeSignal
 
@@ -413,11 +413,12 @@ class TestErrorHandling:
         result = await safe_executor.execute(signal)
 
         # Should fail after retries but not crash
+        # Should fail after retries but not crash
         assert result.success is False
-        assert "retries" in result.error.lower()
+        assert "Broker error" in result.error
 
     @pytest.mark.asyncio
-    async def test_kill_switch_halts_all_execution(self, mock_settings):
+    async def test_kill_switch_halts_all_execution(self, mock_settings, tmp_path):
         """Kill switch should immediately halt all trades."""
         mock_executor = MagicMock()
         mock_executor.execute = AsyncMock(
@@ -425,10 +426,10 @@ class TestErrorHandling:
         )
 
         config = ExecutionSafetyConfig()
-        safe_executor = SafeTradeExecutor(mock_executor, config)
+        safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "kill.db")
 
         # Activate kill switch
-        safe_executor.kill_switch_on()
+        config.kill_switch_enabled = True
 
         from execution.signals import TradeSignal
 

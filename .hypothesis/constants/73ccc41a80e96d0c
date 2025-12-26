@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/shadow_resolution.py
+# hypothesis_version: 6.148.8
+
+[-1.0, 0.003, 0.005, 0.95, 100, 'CALL', 'NO_TOUCH', 'PUT', 'TOUCH', 'close', 'epoch', '✅ WIN', '❌ LOSS']

@@ -27,9 +27,16 @@ class MockTrade:
 
 class TestShadowLifecycle(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # Use in-memory DB for testing
-        self.store = SQLiteShadowStore(":memory:")
+        # Use temp file for testing to ensure connection sharing across threads/loops
+        import tempfile
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        db_path = os.path.join(self.tmp_dir.name, "test_shadow.db")
+        self.store = SQLiteShadowStore(db_path)
         self.resolver = ShadowTradeResolver(self.store)
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp_dir.cleanup()
         
     async def test_lifecycle_flow(self):
         """Verify the complete lifecycle: Store -> Resolve -> Win/Loss"""

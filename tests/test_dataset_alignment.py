@@ -9,12 +9,17 @@ import pandas as pd
 
 from config.settings import Settings
 from data.dataset import DerivDataset
+from data.features import reset_feature_builder
 
 
 class TestDatasetAlignment(unittest.TestCase):
     def setUp(self):
         # Create temp directory
         self.test_dir = Path(tempfile.mkdtemp())
+        
+        # Reset singleton to ensure fresh settings are used
+        reset_feature_builder()
+        
         self.settings = Settings()
 
         # Override data shapes for testing
@@ -26,37 +31,25 @@ class TestDatasetAlignment(unittest.TestCase):
         # Candle 2: 60-120s (ticks at 61, 62, ..., 100) -> dense
 
         # Ticks:
+        # Ticks:
         # 0-60s: 10 ticks (timestamps 1, 5, 10, ..., 45) - gaps of 5s
         t1 = np.arange(1, 50, 5)  # 10 ticks
         # 60-120s: 60 ticks (timestamps 61, 62, ..., 120) - gaps of 1s
         t2 = np.arange(61, 121, 1)  # 60 ticks
+        # Rest: Dummy ticks to satisfy length requirements
+        # We need enough data for ~60 candles of history
+        t3 = np.arange(121, 7000, 1) # generous buffer
 
-        self.epochs = np.concatenate([t1, t2])
-        self.quotes = np.random.randn(len(self.epochs)).astype(np.float32)
+        self.epochs = np.concatenate([t1, t2, t3])
+        self.quotes = (100.0 + np.random.randn(len(self.epochs))).astype(np.float32)
 
         # Generate sufficient dummy candles to satisfy DerivDataset requirements
-        # Need at least sequence_length_candles (5) + lookahead (5) = 10 candles
-        # We will create 20 candles, spaced 60s apart
-        num_candles = 20
+        # Need at least sequence_length_candles + lookahead + indicators warmup (~50-60)
+        num_candles = 100
         self.candle_epochs = np.arange(60, 60 * (num_candles + 1), 60, dtype=np.float32)
-        self.candles = np.zeros((num_candles, 5), dtype=np.float32)
+        # Initialize with positive prices (100.0) to pass log_returns check
+        self.candles = np.ones((num_candles, 5), dtype=np.float32) * 100.0
         self.candles[:, 4] = self.candle_epochs
-
-        # Ticks:
-        # Candle 1 (60s): sparse (10 ticks)
-        # Candle 2 (120s): dense (60 ticks)
-        # We only care about testing alignment for these, but ticks need to cover range
-        # Let's generate dummy ticks for all other periods to be safe
-
-        # Specific test data for alignment check:
-        # 0-60s: ticks 1..45 (step 5)
-        t1 = np.arange(1, 50, 5)
-        # 60-120s: ticks 61..120 (step 1)
-        t2 = np.arange(61, 121, 1)
-
-        self.epochs = np.concatenate([t1, t2])
-        # Generate positive prices (100 +/- random)
-        self.quotes = (100.0 + np.random.randn(len(self.epochs))).astype(np.float32)
 
         # Save to parquet
         df_ticks = pd.DataFrame({"epoch": self.epochs, "quote": self.quotes})
@@ -142,10 +135,10 @@ class TestDatasetAlignment(unittest.TestCase):
 
         # Verify alignment
         # The slice length is 10.
-        # The last 10 ticks in our data are 111...120.
-        # So we expect the output to strictly match those.
-        expected_slice = self.quotes[-10:]
-        np.testing.assert_array_equal(ticks_out, expected_slice)
+        # Ticks up to epoch 120 are indices 0..69 (10+60).
+        # We want the last 10 of that set (indices 60..69).
+        expected_slice = self.quotes[60:70]
+        np.testing.assert_array_equal(ticks_out[-10:], expected_slice)
 
 
 if __name__ == "__main__":

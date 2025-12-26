@@ -5,7 +5,13 @@ from data.processor import VolatilityMetricsExtractor
 
 @pytest.fixture
 def extractor():
-    return VolatilityMetricsExtractor()
+    settings = Mock()
+    # Mock normalization factors to returns floats, not Mocks
+    settings.normalization.norm_factor_volatility = 1.0
+    settings.normalization.norm_factor_atr = 1.0
+    settings.normalization.norm_factor_rsi_std = 1.0
+    settings.normalization.norm_factor_bb_width = 1.0
+    return VolatilityMetricsExtractor(settings)
 
 @patch("data.processor.indicators")
 def test_extract_handles_nans(mock_indicators, extractor):

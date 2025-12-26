@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/data/normalizers.py
+# hypothesis_version: 6.148.8
+
+[0.0, 1e-06, 25.0, 75.0, 100]

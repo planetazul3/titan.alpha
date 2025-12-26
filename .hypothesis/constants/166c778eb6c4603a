@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/execution/outcome_resolver.py
+# hypothesis_version: 6.148.8
+
+[0.003, 0.005, 'CALL', 'NO_TOUCH', 'PUT', 'RISE_FALL', 'STAYS_BETWEEN', 'TOUCH', 'TOUCH_NO_TOUCH', 'barrier_level', 'epoch', 'pd.DataFrame', 'quote']

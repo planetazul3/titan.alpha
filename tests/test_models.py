@@ -15,7 +15,10 @@ def mock_settings():
     """Create mock settings for models."""
     settings = MagicMock()
     settings.data_shapes.sequence_length_ticks = 100
+    settings.data_shapes.sequence_length_ticks = 100
     settings.data_shapes.sequence_length_candles = 50
+    settings.data_shapes.feature_dim_ticks = 1
+    settings.data_shapes.feature_dim_candles = 10
     settings.hyperparams.dropout_rate = 0.1
     settings.hyperparams.latent_dim = 16
     settings.hyperparams.lstm_hidden_size = 64

@@ -1,0 +1,4 @@
+# file: /home/planetazul3/x.titan/config/logging_config.py
+# hypothesis_version: 6.148.8
+
+['\x1b[0m', '\x1b[1;91m', '\x1b[90m', '\x1b[91m', '\x1b[92m', '\x1b[93m', 'CRITICAL', 'DEBUG', 'ERROR', 'INFO', 'WARNING', '[CALIBRATION]', '[DATA]', '[HEARTBEAT]', '[INFERENCE]', '[NETWORK]', '[REGIME]', '[SAFETY]', '[TRADE]', '\\1"***"', '__dict__', 'args', 'created', 'exc_info', 'exc_text', 'exception', 'filename', 'funcName', 'level', 'levelname', 'levelno', 'lineno', 'logger', 'message', 'module', 'msecs', 'msg', 'name', 'pathname', 'process', 'processName', 'relativeCreated', 'stack_info', 'taskName', 'thread', 'threadName', 'timestamp']

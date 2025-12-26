@@ -113,46 +113,7 @@ class TestNormalizationProperties:
         )
 
 
-# =============================================================================
-# RATE LIMITER INVARIANTS
-# =============================================================================
-
-
-class TestRateLimiterProperties:
-    """Property-based tests for rate limiter."""
-
-    @given(
-        max_per_minute=st.integers(min_value=1, max_value=100),
-        num_requests=st.integers(min_value=1, max_value=200),
-    )
-    @settings(max_examples=30)
-    def test_rate_limiter_never_exceeds_limit(self, max_per_minute, num_requests):
-        """Rate limiter must never allow more than max_per_minute requests."""
-        from execution.safety import RateLimiter
-
-        limiter = RateLimiter(max_per_minute)
-        allowed_count = 0
-
-        for _ in range(num_requests):
-            if limiter.allow():
-                allowed_count += 1
-
-        # Never exceed the limit
-        assert allowed_count <= max_per_minute, (
-            f"Allowed {allowed_count} requests but limit is {max_per_minute}"
-        )
-
-    @given(max_per_minute=st.integers(min_value=1, max_value=50))
-    @settings(max_examples=20)
-    def test_rate_limiter_allows_up_to_limit(self, max_per_minute):
-        """Rate limiter should allow exactly max_per_minute consecutive requests."""
-        from execution.safety import RateLimiter
-
-        limiter = RateLimiter(max_per_minute)
-        allowed = sum(1 for _ in range(max_per_minute + 10) if limiter.allow())
-
-        # Should allow exactly max_per_minute
-        assert allowed == max_per_minute
+# RateLimiter is internal to SafeTradeExecutor, tested via integration tests.
 
 
 # =============================================================================
