@@ -84,7 +84,7 @@ class SafeTradeExecutor:
             return self._reject("Kill switch enabled")
 
         # 2. Check State-Based Limits (Daily)
-        if not self._check_daily_limits():
+        if not await self._check_daily_limits():
             return self._reject("Daily limits exceeded")
 
         # 3. Check Short-Term Rate Limits
@@ -109,7 +109,7 @@ class SafeTradeExecutor:
         
         # 6. Update State
         if result.success:
-            self._record_trade(signal.metadata.get("symbol", "unknown"), result)
+            await self._record_trade(signal.metadata.get("symbol", "unknown"), result)
 
         return result
 
@@ -117,9 +117,10 @@ class SafeTradeExecutor:
         logger.warning(f"Trade rejected by Safety Shield: {reason}")
         return TradeResult(success=False, error=f"Safety: {reason}")
 
-    def _check_daily_limits(self) -> bool:
+    async def _check_daily_limits(self) -> bool:
         """Check if daily trade count or loss limit is hit."""
-        trade_count, daily_pnl = self.store.get_daily_stats()
+        # H09: Use async get to avoid blocking
+        trade_count, daily_pnl = await self.store.get_daily_stats_async()
         
         # We assume max_daily_loss is a positive number representing MAX LOSS allowed
         # e.g. 50.0 means we stop if pnl <= -50.0
@@ -165,7 +166,7 @@ class SafeTradeExecutor:
                     return TradeResult(success=False, error=str(e))
         return TradeResult(success=False, error="Max retries exhausted")
 
-    def _record_trade(self, symbol: str, result: TradeResult):
+    async def _record_trade(self, symbol: str, result: TradeResult):
         """Update persistent and memory state."""
         now = datetime.now(timezone.utc).timestamp()
         
@@ -176,7 +177,8 @@ class SafeTradeExecutor:
         self._symbol_minute_trades[symbol].append(now)
         
         # Persistence (Daily Stats)
-        self.store.increment_daily_trade_count()
+        # H09: Async update
+        await self.store.increment_daily_trade_count_async()
         # We don't know PnL yet! This is just entry.
         # PnL updates come from outcome resolution typically.
         # But we track *entry* count here.

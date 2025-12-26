@@ -54,6 +54,10 @@ class ShadowTradeResolver:
             current_time = current_time.replace(tzinfo=timezone.utc)
 
         # Get unresolved trades
+        # Queries are still sync for now unless we change query() too, but query is usually fast or less frequent.
+        # However, plan said "Queries generally happen in background...".
+        # Let's keep query sync for now or upgrade it too?
+        # The hot path is update_outcome in loop.
         unresolved = self.store.query(unresolved_only=True)
         
         resolved_count = 0
@@ -78,7 +82,7 @@ class ShadowTradeResolver:
 
         # 1. Resolve normal trades
         for trade, exit_price in normal_resolutions:
-            self._apply_resolution(trade, exit_price, current_price)
+            await self._apply_resolution_async(trade, exit_price, current_price)
             resolved_count += 1
             if trade.outcome is not None:
                 if trade.outcome > 0: wins += 1
@@ -111,25 +115,25 @@ class ShadowTradeResolver:
                     
                     if matching_candle:
                         exit_price = float(matching_candle['close'])
-                        self._apply_resolution(trade, exit_price, current_price) # Pass current_price mainly for logging context if needed, but resolved price is exit_price
+                        await self._apply_resolution_async(trade, exit_price, current_price) # Pass current_price mainly for logging context if needed, but resolved price is exit_price
                         resolved_count += 1
                         if trade.outcome is not None:
                             if trade.outcome > 0: wins += 1
                             else: losses += 1
                     else:
                         self.logger.warning(f"Could not find historical candle for trade {trade.trade_id} @ {trade.timestamp}")
-                        self._mark_as_stale(trade, current_price)
+                        await self._mark_as_stale_async(trade, current_price)
 
             except Exception as e:
                 self.logger.error(f"Error fetching history for stale trades: {e}")
                 # Fallback to marking all stale
                 for trade in stale_trades:
-                    self._mark_as_stale(trade, current_price)
+                    await self._mark_as_stale_async(trade, current_price)
         
         elif stale_trades:
             # No client provided, must mark stale
             for trade in stale_trades:
-                self._mark_as_stale(trade, current_price)
+                await self._mark_as_stale_async(trade, current_price)
 
         # Log summary
         if resolved_count > 0:
@@ -142,12 +146,13 @@ class ShadowTradeResolver:
 
         return resolved_count
 
-    def _apply_resolution(self, trade: ShadowTradeRecord, exit_price: float, current_price_ref: float):
-        """Apply resolution logic to a trade."""
+    async def _apply_resolution_async(self, trade: ShadowTradeRecord, exit_price: float, current_price_ref: float):
+        """Apply resolution logic to a trade asynchronously."""
         outcome = self._determine_outcome(trade, exit_price)
         
         if outcome is not None:
-            self.store.update_outcome(
+            # H08: Async DB update
+            await self.store.update_outcome_async(
                 trade=trade,
                 outcome=outcome,
                 exit_price=exit_price
@@ -166,8 +171,8 @@ class ShadowTradeResolver:
                 f"P&L: ${simulated_pnl:+.2f} | Regime: {trade.regime_state}"
             )
 
-    def _mark_as_stale(self, trade: ShadowTradeRecord, current_price: float):
-        """Mark a trade as stale."""
+    async def _mark_as_stale_async(self, trade: ShadowTradeRecord, current_price: float):
+        """Mark a trade as stale asynchronously."""
         expiration_time = trade.timestamp + self.duration
         staleness = datetime.now(timezone.utc) - expiration_time
         
@@ -175,8 +180,10 @@ class ShadowTradeResolver:
             f"⚠️ Trade {trade.trade_id[:8]} expired {staleness.total_seconds()/60:.1f} min ago - "
             f"marking as STALE (excluded from training)"
         )
-        self.store.mark_stale(
-            trade=trade
+        # H08: Async DB update
+        await self.store.mark_stale_async(
+            trade_id=trade.trade_id,
+            exit_price=current_price # Use current price as fallback exit for db rec
         )
 
     def _determine_outcome(self, trade: ShadowTradeRecord, exit_price: float) -> Optional[bool]:

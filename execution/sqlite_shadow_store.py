@@ -268,6 +268,25 @@ class SQLiteShadowStore:
                 logger.warning(f"Trade not found for stale marking: {trade_id}")
                 return False
 
+    # H08: Async Wrappers
+    async def update_outcome_async(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float) -> bool:
+        """Async update outcome."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.update_outcome(trade, outcome, exit_price))
+
+    async def mark_stale_async(self, trade_id: str, exit_price: float) -> bool:
+        """Async mark stale."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.mark_stale(trade_id, exit_price))
+    
+    async def query_async(self, **kwargs) -> list[ShadowTradeRecord]:
+        """Async query."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.query(**kwargs))
+
     def query(
         self,
         start: datetime | None = None,

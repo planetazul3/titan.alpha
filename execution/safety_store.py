@@ -166,3 +166,34 @@ class SQLiteSafetyStateStore:
                 conn.commit()
         except Exception as e:
             logger.error(f"DB Write Error (update_risk_metrics): {e}")
+
+    # H09: Async Wrappers to prevent blocking event loop
+    async def get_daily_stats_async(self) -> tuple[int, float]:
+        """Async version of get_daily_stats."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_daily_stats)
+
+    async def increment_daily_trade_count_async(self):
+        """Async version of increment_daily_trade_count."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.increment_daily_trade_count)
+
+    async def update_daily_pnl_async(self, pnl: float):
+        """Async version of update_daily_pnl."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.update_daily_pnl(pnl))
+
+    async def get_risk_metrics_async(self) -> dict:
+        """Async version of get_risk_metrics."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_risk_metrics)
+
+    async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float):
+        """Async version of update_risk_metrics."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.update_risk_metrics(drawdown, losses, peak_equity))
