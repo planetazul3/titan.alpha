@@ -512,108 +512,16 @@ async def run_live_trading(args):
             await client.disconnect()
             return 0
 
-        # Pre-load historical data
-        console_log("=" * 60, "INFO")
-        console_log("LOADING HISTORICAL DATA...", "DATA")
-        logger.info("[INIT] Pre-loading historical data to warm up buffers...")
-
-        console_log(f"Fetching {tick_len} historical ticks...", "WAIT")
-        hist_ticks = await client.get_historical_ticks(count=tick_len)
-        buffer.append_ticks(hist_ticks)
-        console_log(f"Loaded {buffer.tick_count()} ticks", "SUCCESS")
-        logger.info(f"[INIT] Pre-loaded {buffer.tick_count()} ticks")
-
-        console_log(f"Fetching {candle_len} historical candles...", "WAIT")
-        hist_candles = await client.get_historical_candles(count=candle_len, interval=60)
-        candle_arrays = [
-            [
-                float(c["open"]),
-                float(c["high"]),
-                float(c["low"]),
-                float(c["close"]),
-                0.0,
-                float(c["epoch"]),
-            ]
-            for c in hist_candles
-        ]
-        buffer.preload_candles(candle_arrays)
-        console_log(f"Loaded {buffer.candle_count()} candles", "SUCCESS")
-        logger.info(
-            f"[INIT] Pre-loaded {buffer.candle_count()} candles. Buffer ready: {buffer.is_ready()}"
-        )
-
-        # Warm up regime detector with historical close prices
-        # This prevents 50-minute degraded mode after restart
-        if hasattr(regime_veto, 'update_prices') and candle_arrays:
-            import numpy as np
-            close_prices = np.array([c[3] for c in candle_arrays])  # Index 3 is close price
-            regime_veto.update_prices(close_prices)
-            console_log(f"Regime veto warmed up with {len(close_prices)} prices", "SUCCESS")
-            logger.info(f"[INIT] Regime veto warmed up with {len(close_prices)} historical prices")
-
-        # Run initial inference if buffer ready
-        if buffer.is_ready():
-            console_log("=" * 60, "INFO")
-            console_log("RUNNING INITIAL INFERENCE...", "MODEL")
-            initial_recon_error = await run_inference(
-                model,
-                engine,
-                executor,
-                buffer,
-                feature_builder,
-                device,
-                settings,
-                metrics,
-                return_recon_error=True,  # Get reconstruction error for validation
-                trade_tracker=real_trade_tracker,
-            )
-            console_log(
-                f"Initial inference complete! Reconstruction error: {initial_recon_error:.4f}",
-                "SUCCESS",
-            )
-
-            # ══════════════════════════════════════════════════════════════════════
-            # STARTUP VALIDATION: Check reconstruction error is in expected range
-            # This catches calibration/model issues early before trading starts
-            # ══════════════════════════════════════════════════════════════════════
-            if initial_recon_error is not None:
-                if initial_recon_error > 1.0:
-                    logger.critical(
-                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} is extremely high! "
-                        f"Expected < 1.0. Model may need retraining with normalized features. "
-                        f"Trading will continue in CAUTION mode."
-                    )
-                    console_log("CALIBRATION WARNING: High reconstruction error!", "WARN")
-                elif initial_recon_error > 0.3:
-                    logger.warning(
-                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} exceeds VETO threshold (0.3). "
-                        f"Consider retraining or adjusting thresholds."
-                    )
-                    console_log("CALIBRATION CAUTION: Error above veto threshold", "WARN")
-                else:
-                    logger.info(
-                        f"[HEALTH] Reconstruction error {initial_recon_error:.4f} is within expected range."
-                    )
-                    console_log("Health check passed", "SUCCESS")
-        else:
-            console_log(
-                f"Buffer not ready. Ticks: {buffer.tick_count()}, Candles: {buffer.candle_count()}",
-                "WARN",
-            )
-
         # ══════════════════════════════════════════════════════════════════════
-        # NORMALIZED EVENT BUS - Strategy code uses this abstraction, NOT raw API
-        # This enables: broker swapping, replay testing, mock testing
+        # H11: STARTUP SYNCHRONIZATION (Subscribe-then-Fetch)
+        # We start subscribing buffer events BEFORE fetching history.
+        # This ensures no data gap between history end and live stream start.
         # ══════════════════════════════════════════════════════════════════════
         console_log("=" * 60, "INFO")
-        console_log("STARTING LIVE STREAMING...", "DATA")
+        console_log("STARTING LIVE STREAMING (BUFFERING)...", "DATA")
         logger.info("Creating normalized event bus...")
         event_bus = DerivEventAdapter(client)  # Implements MarketEventBus
         symbol = settings.trading.symbol
-
-        # Start streaming via normalized interface
-        console_log(f"Subscribing to {symbol} tick and candle streams...", "WAIT")
-        logger.info(f"Subscribing to {symbol} via MarketEventBus...")
 
         # Shared state for heartbeat
         tick_count = 0
@@ -622,6 +530,11 @@ async def run_live_trading(args):
         last_tick_time = datetime.now()
         last_tick_log_count = 0  # For periodic tick logging
         
+        # H11: Startup buffers and synchronization
+        startup_buffer_ticks: list[float] = []
+        startup_buffer_candles: list[Any] = []  # Store full event objects
+        startup_complete = asyncio.Event()
+
         # Observability shared components
         from observability.performance_tracker import PerformanceTracker
         from training.auto_retrain import RetrainingTrigger
@@ -634,16 +547,24 @@ async def run_live_trading(args):
             first_tick = True
             async for tick_event in event_bus.subscribe_ticks(symbol):
                 try:
+                    # Update heartbeat timestamp
+                    last_tick_time = datetime.now()
+                    
+                    # H11: Buffer during startup
+                    if not startup_complete.is_set():
+                        startup_buffer_ticks.append(tick_event.price)
+                        # Log sparsely to avoid spam during startup
+                        if len(startup_buffer_ticks) % 10 == 0:
+                            logger.debug(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
+                        return # Continue to next iteration (skip processing)
+
                     # Strategy sees TickEvent, not broker-specific message
                     buffer.append_tick(tick_event.price)
                     tick_count += 1
                     
-                    # Update heartbeat timestamp
-                    last_tick_time = datetime.now()
-
                     # Log first tick and then every 100 ticks
                     if first_tick:
-                        console_log(f"First tick received: {tick_event.price:.2f}", "SUCCESS")
+                        console_log(f"First LIVE tick received: {tick_event.price:.2f}", "SUCCESS")
                         first_tick = False
                     elif tick_count - last_tick_log_count >= 100:
                         console_log(
@@ -654,27 +575,24 @@ async def run_live_trading(args):
                     logger.error(f"Error processing tick: {e}", exc_info=True)
 
         async def process_candles():
-            """Process candle events from normalized MarketEventBus.
-
-            Uses MarketDataBuffer.update_candle() which handles:
-            - Same timestamp: Update last candle in-place (OHLCV update)
-            - New timestamp: Append new candle (previous candle closed)
-
-            Inference runs with a COOLDOWN to match contract duration.
-            With 1-minute contracts, we only run inference every 60 seconds.
-            """
+            """Process candle events from normalized MarketEventBus."""
             import time  # For cooldown timing
             
             nonlocal candle_count, inference_count
             first_candle = True
             
-            # Inference cooldown: only run model every N seconds
-            # This matches the contract duration (1-minute contracts = 60s cooldown)
-            inference_cooldown_seconds = 60  # Run inference at most once per minute
+            # Inference cooldown
+            inference_cooldown_seconds = 60
             last_inference_time = 0.0
             
             async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
                 try:
+                    # H11: Buffer during startup
+                    if not startup_complete.is_set():
+                        startup_buffer_candles.append(candle_event)
+                        logger.debug(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
+                        return # Continue to next iteration
+                        
                     # Buffer handles candle close detection internally
                     is_new_candle = buffer.update_candle(candle_event)
                     candle_count += 1
@@ -687,7 +605,7 @@ async def run_live_trading(args):
 
                     if first_candle:
                         console_log(
-                            f"First candle received (O:{candle_event.open:.2f} H:{candle_event.high:.2f} L:{candle_event.low:.2f} C:{candle_event.close:.2f})",
+                            f"First LIVE candle received (O:{candle_event.open:.2f} H:{candle_event.high:.2f} L:{candle_event.low:.2f} C:{candle_event.close:.2f})",
                             "SUCCESS",
                         )
                         first_candle = False
@@ -759,17 +677,17 @@ async def run_live_trading(args):
                     logger.error(f"Error processing candle: {e}", exc_info=True)
 
         async def heartbeat():
-            """Periodic status logging for observability with shadow trade performance metrics."""
+            """Periodic status logging for observability."""
             from observability.shadow_metrics import ShadowTradeMetrics
             import time
             
             heartbeat_interval = settings.heartbeat.interval_seconds
             stale_threshold = settings.heartbeat.stale_data_threshold_seconds
             
-            # Cache shadow metrics to avoid re-querying DB every heartbeat
+            # Cache shadow metrics
             shadow_metrics_cache = ShadowTradeMetrics()
             last_metrics_update = 0
-            metrics_update_interval = 300  # Refresh every 5 minutes (not every heartbeat)
+            metrics_update_interval = 300
             
             while True:
                 await asyncio.sleep(heartbeat_interval)
@@ -782,7 +700,7 @@ async def run_live_trading(args):
                 executor.get_safety_statistics() if executor else {}
                 cal_stats = calibration_monitor.get_statistics()
                 
-                # Update shadow trade metrics (non-blocking, cached)
+                # Update shadow trade metrics
                 if now_ts - last_metrics_update > metrics_update_interval:
                     try:
                         loop = asyncio.get_event_loop()
@@ -797,7 +715,7 @@ async def run_live_trading(args):
                 perf_stats = perf_tracker.get_summary()
                 latency = perf_stats["latency"]
                 should_retrain, retrain_reason = retrain_trigger.should_retrain(shadow_metrics_cache)
-
+                
                 # HUMAN-READABLE CONSOLE OUTPUT
                 console_log(
                     f"═══ HEARTBEAT ═══════════════════════════════",
@@ -871,7 +789,127 @@ async def run_live_trading(args):
                     )
                     logger.warning(f"[STALE] No ticks received for {stale_seconds:.1f}s")
 
-        await asyncio.gather(process_ticks(), process_candles(), heartbeat())
+        # START TASKS (Early, to catch events)
+        console_log("Starting background tasks (Stream + Heartbeat)...", "WAIT")
+        tick_task = asyncio.create_task(process_ticks())
+        candle_task = asyncio.create_task(process_candles())
+        heartbeat_task = asyncio.create_task(heartbeat())
+        
+        # Wait a moment for subscription to establish and start buffering
+        console_log("Waiting for stream to stabilize...", "WAIT")
+        await asyncio.sleep(2.0)
+
+        # Pre-load historical data (While streaming is buffering)
+        console_log("=" * 60, "INFO")
+        console_log("LOADING HISTORICAL DATA...", "DATA")
+        logger.info("[INIT] Fetching historical data while buffering live events...")
+
+        console_log(f"Fetching {tick_len} historical ticks...", "WAIT")
+        hist_ticks = await client.get_historical_ticks(count=tick_len)
+        buffer.append_ticks(hist_ticks)
+        console_log(f"Loaded {buffer.tick_count()} ticks", "SUCCESS")
+        logger.info(f"[INIT] Pre-loaded {buffer.tick_count()} ticks")
+
+        console_log(f"Fetching {candle_len} historical candles...", "WAIT")
+        hist_candles = await client.get_historical_candles(count=candle_len, interval=60)
+        candle_arrays = [
+            [
+                float(c["open"]),
+                float(c["high"]),
+                float(c["low"]),
+                float(c["close"]),
+                0.0,
+                float(c["epoch"]),
+            ]
+            for c in hist_candles
+        ]
+        buffer.preload_candles(candle_arrays)
+        console_log(f"Loaded {buffer.candle_count()} candles", "SUCCESS")
+        logger.info(
+            f"[INIT] Pre-loaded {buffer.candle_count()} candles. Buffer ready: {buffer.is_ready()}"
+        )
+
+        # H11: FLUSH STARTUP BUFFERS (Atomic Handover)
+        logger.info("[INIT] Flushing startup buffers...")
+        console_log(f"Flushing buffered startup events ({len(startup_buffer_ticks)} ticks, {len(startup_buffer_candles)} candles)...", "DATA")
+        
+        # Flush Ticks
+        for t in startup_buffer_ticks:
+            buffer.append_tick(t)
+            tick_count += 1
+            
+        # Flush Candles (with deduplication)
+        for c in startup_buffer_candles:
+            buffer.update_candle(c)
+            candle_count += 1
+            
+        # Clear buffers and set flag to enable live processing
+        startup_buffer_ticks.clear()
+        startup_buffer_candles.clear()
+        startup_complete.set()
+        
+        console_log("Startup synchronization complete - LIVE MODE ACTIVE", "SUCCESS")
+        logger.info("[INIT] Startup synchronization complete. Live processing active.")
+
+        # Warm up regime detector with historical close prices
+        if hasattr(regime_veto, 'update_prices') and candle_arrays:
+            import numpy as np
+            close_prices = np.array([c[3] for c in candle_arrays])  # Index 3 is close price
+            regime_veto.update_prices(close_prices)
+            console_log(f"Regime veto warmed up with {len(close_prices)} prices", "SUCCESS")
+
+        # Run initial inference if buffer ready
+        if buffer.is_ready():
+            console_log("=" * 60, "INFO")
+            console_log("RUNNING INITIAL INFERENCE...", "MODEL")
+            initial_recon_error = await run_inference(
+                model,
+                engine,
+                executor,
+                buffer,
+                feature_builder,
+                device,
+                settings,
+                metrics,
+                return_recon_error=True,  # Get reconstruction error for validation
+                trade_tracker=real_trade_tracker,
+            )
+            console_log(
+                f"Initial inference complete! Reconstruction error: {initial_recon_error:.4f}",
+                "SUCCESS",
+            )
+            
+            # Calibration checks
+            if initial_recon_error is not None:
+                if initial_recon_error > 1.0:
+                    logger.critical(
+                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} is extremely high! "
+                        f"Expected < 1.0. Model may need retraining with normalized features. "
+                        f"Trading will continue in CAUTION mode."
+                    )
+                    console_log("CALIBRATION WARNING: High reconstruction error!", "WARN")
+                elif initial_recon_error > 0.3:
+                    logger.warning(
+                        f"[CALIBRATION] Reconstruction error {initial_recon_error:.4f} exceeds VETO threshold (0.3). "
+                        f"Consider retraining or adjusting thresholds."
+                    )
+                    console_log("CALIBRATION CAUTION: Error above veto threshold", "WARN")
+                else:
+                    logger.info(
+                        f"[HEALTH] Reconstruction error {initial_recon_error:.4f} is within expected range."
+                    )
+                    console_log("Health check passed", "SUCCESS")
+        else:
+            console_log(
+                f"Buffer not ready. Ticks: {buffer.tick_count()}, Candles: {buffer.candle_count()}",
+                "WARN",
+            )
+            
+        # ══════════════════════════════════════════════════════════════════════
+        # Wait for tasks (Main Loop)
+        # ══════════════════════════════════════════════════════════════════════
+
+        await asyncio.gather(tick_task, candle_task, heartbeat_task)
 
     except KeyboardInterrupt:
         logger.info("Shutting down...")

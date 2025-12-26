@@ -22,7 +22,7 @@ class MultiTaskLoss(nn.Module):
         rise_fall_weight: float = 1.0,
         touch_weight: float = 0.5,
         range_weight: float = 0.5,
-        reconstruction_weight: float = 0.1,
+        reconstruction_weight: float = 50.0,
     ):
         super().__init__()
         self.weights = {

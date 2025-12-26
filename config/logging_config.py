@@ -18,6 +18,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 
 
 # Log categories for filtering
@@ -32,6 +33,23 @@ class LogCategory:
     CALIBRATION = "[CALIBRATION]"  # Model calibration issues
     HEARTBEAT = "[HEARTBEAT]"  # Periodic status
     DATA = "[DATA]"  # Market data processing
+
+
+class TokenSanitizer(logging.Filter):
+    """
+    Sanitizes sensitive tokens (e.g. API keys) from log records.
+    
+    Specifically targets 'authorize' messages in Deriv API traffic.
+    """
+    
+    # Regex to catch "authorize": "TOKEN" patterns in JSON strings
+    # Captures: "authorize": "..." -> "authorize": "***"
+    _AUTH_PATTERN = re.compile(r'("authorize"\s*:\s*)"[^"]+"')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = self._AUTH_PATTERN.sub(r'\1"***"', record.msg)
+        return True
 
 
 class JsonFormatter(logging.Formatter):
@@ -136,8 +154,12 @@ def setup_logging(
     # Clear existing handlers
     root_logger.handlers = []
 
+    # Token Sanitizer
+    sanitizer = TokenSanitizer()
+
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.addFilter(sanitizer)  # Apply sanitizer
 
     if json_format:
         console_handler.setFormatter(JsonFormatter())
@@ -151,6 +173,7 @@ def setup_logging(
     # File handler (always JSON for parsing)
     if log_file:
         file_handler = logging.FileHandler(log_file)
+        file_handler.addFilter(sanitizer)  # Apply sanitizer
         file_handler.setFormatter(JsonFormatter())
         root_logger.addHandler(file_handler)
 

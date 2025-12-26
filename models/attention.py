@@ -13,7 +13,6 @@ class AdditiveAttention(nn.Module):
     def __init__(self, hidden_dim: int):
         super().__init__()
         self.W = nn.Linear(hidden_dim, hidden_dim)
-        self.U = nn.Linear(hidden_dim, hidden_dim)
         self.V = nn.Linear(hidden_dim, 1)
 
     def forward(
