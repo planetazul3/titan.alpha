@@ -39,8 +39,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 SHADOW_DB_PATH = PROJECT_ROOT / "data_cache" / "shadow_trades.db"
 SAFETY_DB_PATH = PROJECT_ROOT / "data_cache" / "safety_state.db"
 
-# Binary options payout rate (Deriv standard: ~95%)
-PAYOUT_RATE = 0.95
+from config.settings import load_settings
+
+# Load configuration
+settings = load_settings()
+
+# Binary options payout rate from settings
+PAYOUT_RATE = settings.trading.payout_ratio
 
 
 class ConnectionManager:

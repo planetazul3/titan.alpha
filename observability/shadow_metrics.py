@@ -29,8 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Industry standard payout for binary options (Deriv: ~95%)
 # NOTE: For consistency, use settings.trading.payout_ratio when available.
-# This constant remains for backwards compatibility in standalone metrics usage.
-BINARY_OPTIONS_PAYOUT_RATE = 0.95
 
 
 @dataclass
@@ -87,17 +85,14 @@ class ShadowTradeMetrics:
     last_hour_win_rate: float = 0.0
     last_24h_win_rate: float = 0.0
     
-    def update_from_store(self, shadow_store: "SQLiteShadowStore", max_detailed_trades: int = 1000) -> None:
+    def update_from_store(self, shadow_store: "SQLiteShadowStore", payout_ratio: float = 0.95, max_detailed_trades: int = 1000) -> None:
         """
         Update metrics from shadow trade store (optimized).
         
-        This method efficiently queries the SQLite shadow store using SQL
-        aggregations for summary statistics, and only loads detail for
-        recent trades to avoid unbounded memory usage.
-        
         Args:
-            shadow_store: SQLiteShadowStore instance with shadow trade data
-            max_detailed_trades: Max trades to analyze in detail (performance limit)
+            shadow_store: SQLiteShadowStore instance
+            payout_ratio: Payout ratio for P&L simulation (e.g., 0.95)
+            max_detailed_trades: Max trades to analyze in detail
         """
         # Reset counters for fresh calculation
         self.wins = 0
@@ -128,8 +123,8 @@ class ShadowTradeMetrics:
         
         # Calculate simulated P&L from summary stats (no iteration needed)
         if self.resolved_trades > 0:
-            # Wins pay 95% profit, losses lose 100% of stake
-            self.simulated_pnl = (self.wins * BINARY_OPTIONS_PAYOUT_RATE) - self.losses
+            # Wins pay payout_ratio profit, losses lose 100% of stake
+            self.simulated_pnl = (self.wins * payout_ratio) - self.losses
             self.simulated_roi = (self.simulated_pnl / self.resolved_trades) * 100
         
         # Only query recent trades for detailed analysis (limit to avoid unbounded growth)
