@@ -21,10 +21,14 @@ Usage:
     ...     print(f"Trade blocked by {veto.reason}")
 """
 
+from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -84,23 +88,13 @@ class ExecutionPolicy:
     - First blocking veto terminates the check
     - All vetoes are logged for observability
     - Statistics track veto frequency by type
-    
-    Example:
-        >>> policy = ExecutionPolicy()
-        >>> policy.register_veto(
-        ...     VetoPrecedence.KILL_SWITCH,
-        ...     lambda: settings.execution_safety.kill_switch_enabled,
-        ...     "Kill switch active"
-        ... )
-        >>> veto = policy.check_vetoes()
-        >>> if veto:
-        ...     logger.warning(f"Trade blocked: {veto}")
     """
     
     def __init__(self):
         """Initialize empty execution policy."""
-        # Veto registry: precedence level -> list of (check_fn, reason, details_fn)
-        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[[], bool], str, Optional[Callable[[], dict]]]]] = {
+        # Veto registry: precedence level -> list of (check_fn, reason_provider, details_fn)
+        # reason_provider can be a str or a Callable[[], str]
+        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[[], bool], str | Callable[[], str], Optional[Callable[[], dict]]]]] = {
             level: [] for level in VetoPrecedence
         }
         
@@ -109,12 +103,40 @@ class ExecutionPolicy:
             level: 0 for level in VetoPrecedence
         }
         self._total_checks = 0
+
+        # Circuit Breaker state (L1)
+        self._circuit_breaker_active = False
+        self._circuit_breaker_reason = ""
+        
+        # Register standard circuit breaker check
+        self.register_veto(
+            VetoPrecedence.CIRCUIT_BREAKER,
+            lambda: self._circuit_breaker_active,
+            lambda: f"Circuit breaker active: {self._circuit_breaker_reason}" if self._circuit_breaker_reason else "Circuit breaker active"
+        )
     
+    def trigger_circuit_breaker(self, reason: str) -> None:
+        """
+        Manually trigger the circuit breaker veto (L1).
+        
+        Pauses all trading decisions until explicitly reset.
+        """
+        self._circuit_breaker_active = True
+        self._circuit_breaker_reason = reason
+        logger.warning(f"CIRCUIT BREAKER TRIGGERED: {reason}")
+
+    def reset_circuit_breaker(self) -> None:
+        """Reset the circuit breaker veto."""
+        if self._circuit_breaker_active:
+            logger.info("CIRCUIT BREAKER RESET")
+        self._circuit_breaker_active = False
+        self._circuit_breaker_reason = ""
+
     def register_veto(
         self,
         level: VetoPrecedence,
         check_fn: Callable[[], bool],
-        reason: str,
+        reason: str | Callable[[], str],
         details_fn: Optional[Callable[[], dict]] = None,
     ) -> None:
         """
@@ -123,11 +145,12 @@ class ExecutionPolicy:
         Args:
             level: Precedence level for this veto
             check_fn: Callable that returns True if veto should trigger
-            reason: Human-readable explanation (e.g., "Daily loss limit exceeded")
+            reason: Human-readable explanation or callable returning one
             details_fn: Optional callable that returns context dict for logging
         """
         self._vetoes[level].append((check_fn, reason, details_fn))
-        logger.debug(f"Registered veto: L{level} - {reason}")
+        display_reason = reason() if callable(reason) else reason
+        logger.debug(f"Registered veto: L{level} - {display_reason}")
     
     def check_vetoes(self) -> Optional[VetoDecision]:
         """
@@ -143,7 +166,7 @@ class ExecutionPolicy:
         
         # Check vetoes in precedence order (L0 -> L5)
         for level in sorted(VetoPrecedence):
-            for check_fn, reason, details_fn in self._vetoes[level]:
+            for check_fn, reason_provider, details_fn in self._vetoes[level]:
                 try:
                     if check_fn():
                         # Veto triggered
@@ -152,13 +175,16 @@ class ExecutionPolicy:
                         # Get optional details
                         details = details_fn() if details_fn else None
                         
+                        # Resolve reason
+                        reason = reason_provider() if callable(reason_provider) else reason_provider
+                        
                         veto = VetoDecision(level=level, reason=reason, details=details)
                         logger.info(f"Trade vetoed: {veto}")
                         
                         return veto
                 except Exception as e:
                     # Don't let broken veto checks crash the system
-                    logger.error(f"Veto check failed (L{level} - {reason}): {e}", exc_info=True)
+                    logger.error(f"Veto check failed (L{level}): {e}", exc_info=True)
                     continue
         
         # No vetoes triggered
@@ -182,6 +208,10 @@ class ExecutionPolicy:
                 if self._total_checks > 0
                 else 0.0
             ),
+            "circuit_breaker": {
+                "active": self._circuit_breaker_active,
+                "reason": self._circuit_breaker_reason
+            }
         }
     
     def clear_statistics(self) -> None:
@@ -190,12 +220,13 @@ class ExecutionPolicy:
         self._total_checks = 0
         logger.debug("Veto statistics cleared")
     
-    def unregister_all_vetoes(self, level: Optional[VetoPrecedence] = None) -> None:
+    def unregister_all_vetoes(self, level: Optional[VetoPrecedence] = None, include_system: bool = False) -> None:
         """
         Unregister vetoes for testing/debugging.
         
         Args:
             level: If specified, only clear this level. Otherwise clear all.
+            include_system: If True, also clear system-registered vetoes (like circuit breaker).
         """
         if level is not None:
             self._vetoes[level] = []
@@ -204,3 +235,40 @@ class ExecutionPolicy:
             for lvl in VetoPrecedence:
                 self._vetoes[lvl] = []
             logger.debug("Cleared all vetoes")
+            
+        # Re-register system vetoes if we cleared all
+        if not include_system and (level is None or level == VetoPrecedence.CIRCUIT_BREAKER):
+            self.register_veto(
+                VetoPrecedence.CIRCUIT_BREAKER,
+                lambda: self._circuit_breaker_active,
+                lambda: f"Circuit breaker active: {self._circuit_breaker_reason}" if self._circuit_breaker_reason else "Circuit breaker active"
+            )
+
+
+class SafetyProfile:
+    """
+    Centralized safety configuration for the trading system.
+    
+    Acts as a bridge between Settings.execution_safety and the 
+    ExecutionPolicy/SafeTradeExecutor components.
+    """
+    
+    @staticmethod
+    def apply(policy: ExecutionPolicy, settings: Settings) -> None:
+        """
+        Apply safety settings to an execution policy.
+        
+        Registers standard vetoes for the Decision layer.
+        """
+        config = settings.execution_safety
+        
+        # L0: Kill Switch
+        policy.register_veto(
+            level=VetoPrecedence.KILL_SWITCH,
+            check_fn=lambda: config.kill_switch_enabled,
+            reason="Kill switch enabled (manual halt)"
+        )
+        
+        # Note: Other vetoes like DAILY_LOSS (L2) require live P&L data
+        # which is usually managed by the Execution layer's SafeTradeExecutor.
+        # DecisionEngine focus is on Model Safety and Regime.

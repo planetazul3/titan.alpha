@@ -47,8 +47,14 @@ async def run_backtest(args):
     from execution.position_sizer import FixedStakeSizer
     sizer = FixedStakeSizer(stake=10.0)
     
+    # Shadow Store (for tracking decisions) -> In memory or temp
+    shadow_store = SQLiteShadowStore(Path("backtest_shadow.db"))
+    
+    # Engine
+    engine = DecisionEngine(settings, shadow_store=shadow_store, model_version="backtest_v1")
+    
     # Executor
-    raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer)
+    raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer, policy=engine.policy)
     safety_config = ExecutionSafetyConfig(max_trades_per_minute=100, kill_switch_enabled=False)
     # Use in-memory DB or temp file for backtest safety state
     safety_store_path = Path("backtest_safety.db")
@@ -56,14 +62,8 @@ async def run_backtest(args):
         raw_executor, 
         safety_config, 
         state_file=safety_store_path,
-        stake_resolver=lambda s, m: 10.0
+        stake_resolver=lambda s: 10.0
     )
-    
-    # Shadow Store (for tracking decisions) -> In memory or temp
-    shadow_store = SQLiteShadowStore(Path("backtest_shadow.db"))
-    
-    # Engine
-    engine = DecisionEngine(settings, shadow_store=shadow_store, model_version="backtest_v1")
     
     # Buffer
     buffer = MarketDataBuffer(

@@ -297,6 +297,19 @@ class ShadowTradeStore:
 
         logger.debug(f"Appended shadow trade: {record.trade_id}")
 
+    async def append_async(self, record: ShadowTradeRecord) -> None:
+        """
+        Append a shadow trade record to the store asynchronously.
+
+        Offloads the blocking I/O operation to a thread pool executor.
+
+        Args:
+            record: Shadow trade record to store
+        """
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.append(record))
+
     def query(
         self,
         start: datetime | None = None,

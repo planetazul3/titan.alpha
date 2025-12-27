@@ -96,7 +96,7 @@ class DerivTradeExecutor:
         >>> result = await executor.execute(signal)
     """
 
-    def __init__(self, client, settings: Settings, position_sizer=None):
+    def __init__(self, client, settings: Settings, position_sizer=None, policy=None):
         """
         Initialize Deriv executor.
 
@@ -105,14 +105,17 @@ class DerivTradeExecutor:
             settings: Trading configuration with stake amounts
             position_sizer: Optional PositionSizer instance. If None, uses FixedStakeSizer 
                             with settings.trading.stake_amount.
+            policy: Optional ExecutionPolicy instance. If provided, used for circuit breaking.
         """
         from execution.position_sizer import FixedStakeSizer  # Local import to avoid circular dep
 
         self.client = client
         self.settings = settings
         self.position_sizer = position_sizer or FixedStakeSizer(stake=settings.trading.stake_amount)
+        self.policy = policy
         self._executed_count = 0
         self._failed_count = 0
+        self._consecutive_idempotency_failures = 0
         
         name = self.position_sizer.__class__.__name__
         logger.info(f"DerivTradeExecutor initialized with sizer: {name}")
@@ -204,7 +207,20 @@ class DerivTradeExecutor:
                                 timestamp=datetime.fromtimestamp(purchase_time, tz=timezone.utc)
                             )
             except Exception as e:
-                logger.warning(f"Idempotency check failed (proceeding with execution): {e}")
+                self._consecutive_idempotency_failures += 1
+                logger.error(f"Idempotency check failed (consecutive: {self._consecutive_idempotency_failures}): {e}. Blocking execution.")
+                
+                # Recommendation 2: Trigger Circuit Breaker on repeated failures
+                if self.policy and self._consecutive_idempotency_failures >= 3:
+                    self.policy.trigger_circuit_breaker(
+                        f"Consecutive idempotency failures ({self._consecutive_idempotency_failures}). "
+                        f"Possible API instability or network issues."
+                    )
+                
+                return TradeResult(success=False, error=f"Idempotency check failure: {e}")
+
+            # Reset on successful check
+            self._consecutive_idempotency_failures = 0
 
             # Extract barrier from signal if present (required for Touch/No Touch and Range)
             barrier = signal.metadata.get("barrier")

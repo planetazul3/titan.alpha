@@ -503,7 +503,8 @@ async def run_live_trading(args):
         # The SafeTradeExecutor provides: rate limiting, P&L caps, kill switch
         console_log("Setting up trade executor with safety controls...", "WAIT")
         # Inject the chosen sizer into the raw executor
-        raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer)
+        # ID-001 Fix: Pass policy to executor for circuit breaker support
+        raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer, policy=engine.policy)
 
         safety_config = ExecutionSafetyConfig(
             max_trades_per_minute=settings.execution_safety.max_trades_per_minute,

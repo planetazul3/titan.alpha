@@ -8,7 +8,7 @@ from config.constants import CONTRACT_TYPES
 from config.settings import Settings
 from data.features import FEATURE_SCHEMA_VERSION
 from execution.filters import filter_signals, get_actionable_signals
-from execution.policy import ExecutionPolicy, VetoPrecedence  # Policy framework
+from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence  # Policy framework
 from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 from execution.signals import ShadowTrade, TradeSignal
@@ -65,6 +65,7 @@ class DecisionEngine:
         
         # Initialize Execution Policy
         self.policy = ExecutionPolicy()
+        SafetyProfile.apply(self.policy, self.settings)
         
         # Register Regime Veto (L4)
         # Note: We can't check reconstruction error here directly, so we'll check it
@@ -133,6 +134,14 @@ class DecisionEngine:
             self._stats["regime_vetoed"] += 1
             return []  # BLOCKED
 
+        # STEP 1.5: Execution Policy Veto Check (Kill Switch, Circuit Breakers, etc.)
+        policy_veto = self.policy.check_vetoes()
+        if policy_veto:
+            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
+            self._stats["processed"] += 1
+            self._stats["ignored"] += 1
+            return []
+
         # ══════════════════════════════════════════════════════════════════════
         # STEP 2: Filter probabilities into signals (only if regime allows)
         # ══════════════════════════════════════════════════════════════════════
@@ -188,14 +197,8 @@ class DecisionEngine:
         # ══════════════════════════════════════════════════════════════════════
         # FEEDBACK LOGGING: If no trades, explain why (Silence Fix)
         # ══════════════════════════════════════════════════════════════════════
-        if not real_trades and not shadow_trades and all_signals:
-            # Find the best rejected signal to explain why
-            best_signal = max(all_signals, key=lambda s: s.probability)
-            logger.info(
-                f"No actionable trades. Best candidate: {best_signal.direction} "
-                f"({best_signal.contract_type}) @ {best_signal.probability:.3f} "
-                f"(Threshold: {self.settings.thresholds.learning_threshold_min:.3f})"
-            )
+        if not real_trades and not shadow_trades:
+            self._log_no_trades_feedback(all_signals)
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 4: Log shadow trades (always, for learning)
@@ -269,6 +272,14 @@ class DecisionEngine:
             self._stats["regime_vetoed"] += 1
             return []
 
+        # Execution Policy Veto Check
+        policy_veto = self.policy.check_vetoes()
+        if policy_veto:
+            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
+            self._stats["processed"] += 1
+            self._stats["ignored"] += 1
+            return []
+
         # R02: Validate contract types
         valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
         validated_signals = []
@@ -312,13 +323,8 @@ class DecisionEngine:
             shadow_trades.extend(demoted)
 
         # Feedback logging
-        if not real_trades and not shadow_trades and all_signals:
-            best_signal = max(all_signals, key=lambda s: s.probability)
-            logger.info(
-                f"No actionable trades. Best candidate: {best_signal.direction} "
-                f"({best_signal.contract_type}) @ {best_signal.probability:.3f} "
-                f"(Threshold: {self.settings.thresholds.learning_threshold_min:.3f})"
-            )
+        if not real_trades and not shadow_trades:
+            self._log_no_trades_feedback(all_signals)
 
         # Update statistics
         self._stats["processed"] += 1
@@ -519,14 +525,9 @@ class DecisionEngine:
             },
         )
 
-        if  hasattr(self.shadow_store, "append_async"):
-             await self.shadow_store.append_async(record)
-             shadow_trade_logger.log_stored(record.trade_id)
-        else:
-             import asyncio
-             assert self.shadow_store is not None  # Already checked at function start
-             loop = asyncio.get_running_loop()
-             await loop.run_in_executor(None, lambda: self.shadow_store.append(record))  # type: ignore[union-attr]
+        await self.shadow_store.append_async(record)
+        shadow_trade_logger.log_stored(record.trade_id)
+        
         shadow_trade_logger.log_created(
             trade_id=record.trade_id,
             contract_type=record.contract_type,
@@ -538,6 +539,23 @@ class DecisionEngine:
         logger.debug(
             f"👻 SHADOW TRADE: {record.contract_type} {record.direction} "
             f"@ {record.probability:.3f} (ID: {record.trade_id[:8]})"
+        )
+
+    def _log_no_trades_feedback(self, all_signals: list[TradeSignal]) -> None:
+        """
+        Explain why no trades were generated (Silence Fix).
+        
+        Helps with observability during low-confidence or high-threshold regimes.
+        """
+        if not all_signals:
+             return
+             
+        # Find the best rejected signal to explain why
+        best_signal = max(all_signals, key=lambda s: s.probability)
+        logger.info(
+            f"No actionable trades. Best candidate: {best_signal.direction} "
+            f"({best_signal.contract_type}) @ {best_signal.probability:.3f} "
+            f"(Threshold: {self.settings.thresholds.learning_threshold_min:.3f})"
         )
 
     def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:
