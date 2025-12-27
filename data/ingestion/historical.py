@@ -240,8 +240,13 @@ class PartitionedDownloader:
         if resume:
             resume_epoch = self.find_resume_point("ticks")
             if resume_epoch and resume_epoch > int(start_time.timestamp()):
-                start_time = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
-                logger.info(f"Resuming tick download from {start_time}")
+                new_start = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
+                if new_start < end_time:
+                    start_time = new_start
+                    logger.info(f"Resuming tick download from {start_time}")
+                else:
+                    logger.info("Tick data is already up to date, skipping download")
+                    return []
 
         # Get monthly boundaries
         boundaries = get_month_boundaries(start_time, end_time)
@@ -322,9 +327,12 @@ class PartitionedDownloader:
 
                     if progress_callback:
                         # Report overall progress across all months
-                        month_progress = (
-                            downloaded_seconds / total_seconds if total_seconds > 0 else 1
-                        )
+                        # Ensure month_progress is within [0, 1] to avoid visual glitches
+                        if total_seconds > 0:
+                            month_progress = max(0.0, min(1.0, downloaded_seconds / total_seconds))
+                        else:
+                            month_progress = 1.0
+                            
                         overall = (month_idx + month_progress) / total_months
                         progress_callback(overall, 1.0)
 
@@ -383,8 +391,13 @@ class PartitionedDownloader:
         if resume:
             resume_epoch = self.find_resume_point("candles", granularity)
             if resume_epoch and resume_epoch > int(start_time.timestamp()):
-                start_time = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
-                logger.info(f"Resuming candle download from {start_time}")
+                new_start = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
+                if new_start < end_time:
+                    start_time = new_start
+                    logger.info(f"Resuming candle download from {start_time}")
+                else:
+                    logger.info("Candle data is already up to date, skipping download")
+                    return []
 
         # Get monthly boundaries
         boundaries = get_month_boundaries(start_time, end_time)
@@ -461,12 +474,12 @@ class PartitionedDownloader:
 
                     if progress_callback:
                         # Report overall progress
-                        month_progress = (
-                            len(month_candles) / total_candles_estimate
-                            if total_candles_estimate > 0
-                            else 1
-                        )
-                        overall = (month_idx + min(month_progress, 1.0)) / total_months
+                        if total_candles_estimate > 0:
+                            month_progress = max(0.0, min(1.0, len(month_candles) / total_candles_estimate))
+                        else:
+                            month_progress = 1.0
+                            
+                        overall = (month_idx + month_progress) / total_months
                         progress_callback(overall, 1.0)
 
                 # Adaptive Rate Limiting
