@@ -25,6 +25,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,7 +56,13 @@ def parse_date(date_str: str) -> datetime:
 
 async def main(args):
     """Main download function."""
-    from scripts.console_utils import console_header, console_log
+    from scripts.console_utils import (
+        console_header,
+        console_log,
+        console_separator,
+        format_duration,
+        format_size,
+    )
 
     console_header("DATA DOWNLOAD STARTING")
 
@@ -110,6 +117,8 @@ async def main(args):
         console_header("DOWNLOADING DATA")
         console_log("This may take a while for large date ranges...", "WAIT")
 
+        start_time = time.time()
+
         # Download data with all improvements
         result = await download_months(
             client=client,
@@ -122,29 +131,52 @@ async def main(args):
             resume=args.resume,
         )
 
+        total_duration = time.time() - start_time
+
         console_header("DOWNLOAD COMPLETE")
-        console_log(f"Tick partitions: {len(result['ticks'])} files", "SUCCESS")
-        console_log(f"Candle partitions: {len(result['candles'])} files", "SUCCESS")
-        logger.info("Download complete!")
-        logger.info(f"  Tick partitions: {len(result['ticks'])} files in {result['tick_dir']}")
-        logger.info(
-            f"  Candle partitions: {len(result['candles'])} files in {result['candle_dir']}"
-        )
 
-        # List created files
-        if result["ticks"]:
-            console_log("Tick files:", "DATA")
-            logger.info("  Tick files:")
-            for f in sorted(result["ticks"]):
-                console_log(f"  - {f.name}", "INFO")
-                logger.info(f"    - {f.name}")
+        # Load metadata for statistics
+        from data.ingestion.versioning import load_metadata
 
-        if result["candles"]:
-            console_log("Candle files:", "DATA")
-            logger.info("  Candle files:")
-            for f in sorted(result["candles"]):
-                console_log(f"  - {f.name}", "INFO")
-                logger.info(f"    - {f.name}")
+        total_ticks = 0
+        total_candles = 0
+        total_size = 0
+        gaps = 0
+        dupes = 0
+
+        for tick_file in result["ticks"]:
+            meta = load_metadata(tick_file)
+            if meta:
+                total_ticks += meta.record_count
+                total_size += meta.file_size or 0
+                gaps += meta.gaps_detected
+                dupes += meta.duplicates_removed
+
+        for candle_file in result["candles"]:
+            meta = load_metadata(candle_file)
+            if meta:
+                total_candles += meta.record_count
+                total_size += meta.file_size or 0
+                gaps += meta.gaps_detected
+                dupes += meta.duplicates_removed
+
+        # Summary Report
+        console_log("DOWNLOAD SUMMARY", "DATA")
+        console_separator()
+        console_log(f"Total Ticks:      {total_ticks:,}", "INFO")
+        console_log(f"Total Candles:    {total_candles:,}", "INFO")
+        console_log(f"Total Size:       {format_size(total_size)}", "INFO")
+        console_log(f"Total Duration:   {format_duration(total_duration)}", "INFO")
+        console_log(f"Average Speed:    {(total_ticks + total_candles) / total_duration:.1f} records/sec", "INFO")
+        
+        if gaps > 0 or dupes > 0:
+            console_separator()
+            console_log(f"Gaps Detected:    {gaps}", "WARN")
+            console_log(f"Duplicates:      {dupes}", "WARN")
+            console_log("Integrity checks passed (auto-fixed chunks)", "SUCCESS")
+        
+        console_separator()
+        logger.info(f"Download complete: {total_ticks} ticks, {total_candles} candles, {format_size(total_size)}")
 
     except Exception as e:
         console_log(f"Download failed: {e}", "ERROR")

@@ -48,9 +48,10 @@ class DatasetMetadata:
     # Checksum (optional)
     sha256: str | None = None
 
-    # Timestamps
+    # Metadata
     created_at: str = ""
     download_duration_seconds: float | None = None
+    file_size: int | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""

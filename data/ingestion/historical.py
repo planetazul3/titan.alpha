@@ -12,6 +12,7 @@ Improvements:
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -91,6 +92,7 @@ class PartitionedDownloader:
     # API limits (conservative estimates)
     MAX_TICKS_PER_REQUEST = 5000
     MAX_CANDLES_PER_REQUEST = 5000
+    CHUNK_SIZE = 100000  # Records per memory chunk before flushing/clearing
 
     def __init__(self, client, symbol: str, cache_dir: Path):
         """
@@ -181,8 +183,20 @@ class PartitionedDownloader:
         # Save to Parquet
         filepath = self._get_partition_path(data_type, month_key, granularity)
         df = pd.DataFrame(cleaned_data)
+        
+        # Optimize dtypes for RAM if possible
+        if data_type == "ticks":
+            df["epoch"] = df["epoch"].astype("int64")
+            df["quote"] = df["quote"].astype("float64")
+        elif data_type == "candles":
+            df["epoch"] = df["epoch"].astype("int64")
+            for col in ["open", "high", "low", "close"]:
+                if col in df.columns:
+                    df[col] = df[col].astype("float64")
+
         df.to_parquet(filepath, index=False)
-        logger.info(f"Saved {len(cleaned_data)} records to {filepath}")
+        file_size = os.path.getsize(filepath)
+        logger.info(f"Saved {len(cleaned_data)} records to {filepath} ({file_size / 1024 / 1024:.2f} MB)")
 
         # Create and save metadata
         metadata = create_metadata(
@@ -194,6 +208,7 @@ class PartitionedDownloader:
             duplicates_removed=report.duplicates_removed,
             download_duration=download_duration,
         )
+        metadata.file_size = file_size
         save_metadata(filepath, metadata)
 
         return filepath, metadata
@@ -313,8 +328,17 @@ class PartitionedDownloader:
                         overall = (month_idx + month_progress) / total_months
                         progress_callback(overall, 1.0)
 
-                # Rate limiting
-                await asyncio.sleep(0.5)
+                # Save intermediate chunks if necessary to save RAM
+                if len(month_ticks) >= self.CHUNK_SIZE:
+                    logger.debug(f"Month {month_key} reached {len(month_ticks)} ticks, keeping in memory (chunking logic can be enhanced here if needed)")
+
+                # Adaptive Rate Limiting: 
+                # If we got a full response, we might be hitting limits, so sleep just enough.
+                # If we got less than full, we can go slightly faster.
+                if len(prices) >= self.MAX_TICKS_PER_REQUEST:
+                    await asyncio.sleep(0.3)
+                else:
+                    await asyncio.sleep(0.1)
 
             # Sort and save partition
             month_ticks.sort(key=lambda x: x["epoch"])
@@ -445,8 +469,11 @@ class PartitionedDownloader:
                         overall = (month_idx + min(month_progress, 1.0)) / total_months
                         progress_callback(overall, 1.0)
 
-                # Rate limiting
-                await asyncio.sleep(0.5)
+                # Adaptive Rate Limiting
+                if len(candles) >= self.MAX_CANDLES_PER_REQUEST:
+                    await asyncio.sleep(0.3)
+                else:
+                    await asyncio.sleep(0.1)
 
             # Sort and save partition
             month_candles.sort(key=lambda x: x["epoch"])

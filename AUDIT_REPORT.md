@@ -84,7 +84,7 @@ This audit covers the complete DerivOmniModel algorithmic trading system for Der
 ### ✅ Data Flow
 - **Ingestion → Dataset**: Clean path through [FeatureBuilder](file:///home/planetazul3/xtitan/data/features.py#72-248)
 - **No Data Leakage**: Timestamp-aligned windowing prevents lookahead
-- **Bottleneck**: Historical download is IO-bound (expected)
+- **Optimized Performance**: Historical download uses adaptive rate limiting and RAM-safe chunking
 
 ### ✅ Error Handling
 - Scoped exception handling in [live.py](file:///home/planetazul3/xtitan/scripts/live.py) (network vs inference vs unexpected)

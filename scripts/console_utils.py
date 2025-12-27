@@ -54,3 +54,25 @@ def console_header(title: str):
 def console_separator():
     """Print a visual separator."""
     console_log("-" * 40, "INFO")
+
+
+def format_size(bytes_size: float) -> str:
+    """Format bytes into human-readable string."""
+    for unit in ["B", "KB", "MB", "GB"]:
+        if bytes_size < 1024:
+            return f"{bytes_size:.2f} {unit}"
+        bytes_size /= 1024
+    return f"{bytes_size:.2f} TB"
+
+
+def format_duration(seconds: float) -> str:
+    """Format seconds into human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds % 60
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds:.1f}s"
+    hours = int(minutes // 60)
+    remaining_minutes = minutes % 60
+    return f"{hours}h {remaining_minutes}m {int(remaining_seconds)}s"

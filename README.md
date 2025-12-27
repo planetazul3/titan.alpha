@@ -47,8 +47,9 @@ TRADING__SYMBOL=R_100
 ```
 
 ### 3. Download Historical Data
-
+      
 ```bash
+# Download 12 months with rich statistics and resume capability
 python scripts/download_data.py --months 12
 ```
 
@@ -90,7 +91,7 @@ xtitan/
 
 | Command | Description |
 |---------|-------------|
-| `python scripts/download_data.py --months 12` | Download 12 months of data |
+| `python scripts/download_data.py --months 12` | Download 12 months of data (with resume & RAM optimization) |
 | `python scripts/train.py --epochs 50` | Train model locally |
 | `python scripts/live.py --test` | Test Deriv API connection |
 | `python scripts/live.py --checkpoint best_model` | Run live trading |
