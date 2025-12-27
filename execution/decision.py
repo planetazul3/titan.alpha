@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -8,8 +9,10 @@ from config.constants import CONTRACT_TYPES
 from config.settings import Settings
 from data.features import FEATURE_SCHEMA_VERSION
 from execution.filters import filter_signals, get_actionable_signals
+from execution.contract_params import ContractDurationResolver
 from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence  # Policy framework
 from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
+from execution.safety_store import SQLiteSafetyStateStore
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
 from execution.signals import ShadowTrade, TradeSignal
 from observability.shadow_logging import shadow_trade_logger
@@ -43,12 +46,44 @@ class DecisionEngine:
         settings: Settings,
         regime_veto: RegimeVeto | None = None,
         shadow_store: ShadowTradeStore | None = None,
+        safety_store: SQLiteSafetyStateStore | None = None,
+        policy: ExecutionPolicy | None = None,
         model_version: str = "unknown",
     ):
         self.settings = settings
-        self.regime_veto = regime_veto or RegimeVeto()
+        
+        # IMPORTANT-002: Link regime thresholds to settings
+        if regime_veto is None:
+            caution = getattr(settings.hyperparams, "regime_caution_threshold", 0.1)
+            veto = getattr(settings.hyperparams, "regime_veto_threshold", 0.3)
+            self.regime_veto = RegimeVeto(threshold_caution=caution, threshold_veto=veto)
+        else:
+            self.regime_veto = regime_veto
+
         self.shadow_store = shadow_store  # New immutable store
+        self.safety_store = safety_store
+        self.duration_resolver = ContractDurationResolver(settings)
         self.model_version = model_version
+        self.policy = policy or ExecutionPolicy()
+        
+        # State trackers for policy providers
+        self._current_daily_pnl = 0.0
+        self._last_reconstruction_error = 0.0
+        
+        # IMPORTANT-004: Apply safety profile with dynamic providers
+        SafetyProfile.apply(
+            policy=self.policy, 
+            settings=settings,
+            pnl_provider=lambda: self._current_daily_pnl,
+            calibration_provider=lambda: self._last_reconstruction_error
+        )
+        
+        # Register Regime Veto (L4) into the policy
+        self.policy.register_veto(
+            level=VetoPrecedence.REGIME,
+            check_fn=lambda: self.regime_veto.assess(self._last_reconstruction_error).is_vetoed(),
+            reason=lambda: f"Market anomaly detected (Regime Veto L4). Error: {self._last_reconstruction_error:.3f}"
+        )
         
         if TRACING_ENABLED:
             self.tracer = trace.get_tracer(__name__)
@@ -63,9 +98,12 @@ class DecisionEngine:
             "regime_caution": 0,
         }
         
+        # Track pending background tasks for graceful shutdown
+        self._pending_shadow_tasks: set[asyncio.Task] = set()
+        
         # Initialize Execution Policy
-        self.policy = ExecutionPolicy()
-        SafetyProfile.apply(self.policy, self.settings)
+        # self.policy = ExecutionPolicy() # Removed, now initialized above
+        # SafetyProfile.apply(self.policy, self.settings) # Removed, now initialized above
         
         # Register Regime Veto (L4)
         # Note: We can't check reconstruction error here directly, so we'll check it
@@ -78,15 +116,17 @@ class DecisionEngine:
             f"DecisionEngine initialized with regime thresholds: "
             f"CAUTION={self.regime_veto.threshold_caution:.3f}, "
             f"VETO={self.regime_veto.threshold_veto:.3f}"
-            + (f", shadow_store={shadow_store._store_path}" if shadow_store else "")
+            + (f", shadow_store={shadow_store._store_path.name}" if shadow_store else "")
+            + (f", safety_store={safety_store.db_path.name}" if safety_store else "")
         )
 
-    def process_model_output(
+    async def process_model_output(
         self,
         probs: dict[str, float],
         reconstruction_error: float,
         timestamp: datetime | None = None,
         market_data: dict[str, Any] | None = None,
+        entry_price: float | None = None,
     ) -> list[TradeSignal]:
         """
         Main entry point for decision making with ABSOLUTE regime veto authority.
@@ -115,6 +155,21 @@ class DecisionEngine:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
 
+        # 0. Sync Safety State if possible
+        if self.safety_store:
+            await self.sync_safety_state()
+
+        # Update trackers for policy providers
+        self._last_reconstruction_error = reconstruction_error
+        
+        # 1. Check Execution Policy Vetoes (IMPORTANT-004)
+        policy_veto = self.policy.check_vetoes()
+        if policy_veto:
+            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
+            self._stats["processed"] += 1
+            self._stats["ignored"] += 1
+            return []
+
         # ══════════════════════════════════════════════════════════════════════
         # ══════════════════════════════════════════════════════════════════════
         # STEP 1: REGIME VETO CHECK (ABSOLUTE AUTHORITY - NO BYPASS POSSIBLE)
@@ -134,18 +189,21 @@ class DecisionEngine:
             self._stats["regime_vetoed"] += 1
             return []  # BLOCKED
 
-        # STEP 1.5: Execution Policy Veto Check (Kill Switch, Circuit Breakers, etc.)
-        policy_veto = self.policy.check_vetoes()
-        if policy_veto:
-            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
-            self._stats["processed"] += 1
-            self._stats["ignored"] += 1
-            return []
-
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 2: Filter probabilities into signals (only if regime allows)
-        # ══════════════════════════════════════════════════════════════════════
+        # R02: Filter probabilities into signals
         all_signals = filter_signals(probs, self.settings, timestamp)
+        
+        # Store shadow trades in background (Fire-and-Forget)
+        if self.shadow_store:
+            regime_assessment = self.regime_veto.assess(reconstruction_error)
+            for sig in all_signals:
+                self._store_shadow_trade_async(
+                    signal=sig,
+                    reconstruction_error=reconstruction_error,
+                    regime_state=self._get_regime_state_string(regime_assessment),
+                    entry_price=entry_price or 0.0,
+                    regime_vetoed=regime_assessment.is_vetoed(),
+                    metadata=market_data,
+                )
         
         # R02: Validate contract types early
         valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
@@ -252,7 +310,7 @@ class DecisionEngine:
 
         return kept, demoted
 
-    def _process_signals(
+    async def _process_signals(
         self,
         all_signals: list[TradeSignal],
         reconstruction_error: float,
@@ -364,6 +422,17 @@ class DecisionEngine:
         else:
             return "trusted"
 
+    async def sync_safety_state(self) -> None:
+        """
+        Sync current P&L from SafetyStateStore (IMPORTANT-004).
+        """
+        if self.safety_store:
+            try:
+                _, daily_pnl = await self.safety_store.get_daily_stats_async()
+                self._current_daily_pnl = daily_pnl
+            except Exception as e:
+                logger.error(f"Failed to sync safety state: {e}")
+
 
 
 
@@ -413,11 +482,11 @@ class DecisionEngine:
                 all_signals = filter_signals(probs, self.settings, timestamp)
                 span.set_attribute("signals_count", len(all_signals))
 
-                # Store shadow trades with full context
+                # Store shadow trades with full context (Fire-and-Forget)
                 if self.shadow_store:
                     with self.tracer.start_as_current_span("decision_engine.store_shadow_trades"):
                         for sig in all_signals:
-                            await self._store_shadow_trade_async(
+                            self._store_shadow_trade_async(
                                 signal=sig,
                                 reconstruction_error=reconstruction_error,
                                 regime_state=self._get_regime_state_string(regime_assessment),
@@ -430,7 +499,7 @@ class DecisionEngine:
 
                 # Process signals
                 with self.tracer.start_as_current_span("decision_engine.process_signals") as p_span:
-                    real_trades = self._process_signals(
+                    real_trades = await self._process_signals(
                         all_signals=all_signals,
                         reconstruction_error=reconstruction_error,
                         regime_assessment=regime_assessment,
@@ -441,11 +510,10 @@ class DecisionEngine:
                     return real_trades
         else:
             # Fallback when tracing disabled
-            regime_assessment = self.regime_veto.assess(reconstruction_error)
             all_signals = filter_signals(probs, self.settings, timestamp)
             if self.shadow_store:
                 for sig in all_signals:
-                    await self._store_shadow_trade_async(
+                    self._store_shadow_trade_async(
                         signal=sig,
                         reconstruction_error=reconstruction_error,
                         regime_state=self._get_regime_state_string(regime_assessment),
@@ -455,7 +523,7 @@ class DecisionEngine:
                         regime_vetoed=regime_assessment.is_vetoed(),
                         metadata=market_data,
                     )
-            return self._process_signals(
+            return await self._process_signals(
                 all_signals=all_signals,
                 reconstruction_error=reconstruction_error,
                 regime_assessment=regime_assessment,
@@ -463,23 +531,54 @@ class DecisionEngine:
                 market_data=market_data,
             )
 
-    async def _store_shadow_trade_async(
+    def _store_shadow_trade_async(
         self,
         signal: TradeSignal,
         reconstruction_error: float,
         regime_state: str,
-        tick_window: np.ndarray,
-        candle_window: np.ndarray,
         entry_price: float,
+        tick_window: np.ndarray | None = None,
+        candle_window: np.ndarray | None = None,
         regime_vetoed: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """
-        Store a shadow trade with full context to ShadowTradeStore (Async).
+        Store a shadow trade in the background (Fire-and-Forget).
+        
+        IMPORTANT: This non-blocking implementation ensures I/O doesn't 
+        delay the critical path of tick processing.
+        """
+        if not self.shadow_store:
+            return
 
+        task = asyncio.create_task(
+            self._do_store_shadow_trade(
+                signal=signal,
+                reconstruction_error=reconstruction_error,
+                regime_state=regime_state,
+                tick_window=tick_window,
+                candle_window=candle_window,
+                entry_price=entry_price,
+                regime_vetoed=regime_vetoed,
+                metadata=metadata,
+            )
+        )
+        self._pending_shadow_tasks.add(task)
+        task.add_done_callback(self._pending_shadow_tasks.discard)
 
-        Creates an immutable ShadowTradeRecord with everything needed
-        for later outcome resolution.
+    async def _do_store_shadow_trade(
+        self,
+        signal: TradeSignal,
+        reconstruction_error: float,
+        regime_state: str,
+        entry_price: float,
+        tick_window: np.ndarray | None = None,
+        candle_window: np.ndarray | None = None,
+        regime_vetoed: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Internal implementation of shadow trade storage.
         """
         if not self.shadow_store:
             return
@@ -493,15 +592,8 @@ class DecisionEngine:
             )
             return
 
-        # C02 Fix: Determine duration based on contract type
-        if signal.contract_type == CONTRACT_TYPES.RISE_FALL:
-            duration_minutes = self.settings.shadow_trade.duration_rise_fall
-        elif signal.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
-            duration_minutes = self.settings.shadow_trade.duration_touch
-        elif signal.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
-            duration_minutes = self.settings.shadow_trade.duration_range
-        else:
-            duration_minutes = self.settings.shadow_trade.duration_minutes  # fallback default
+        # IMPORTANT-001: Use centralized duration resolver
+        duration_minutes, _ = self.duration_resolver.resolve_duration(signal.contract_type)
 
         record = ShadowTradeRecord.create(
             contract_type=signal.contract_type,
@@ -560,7 +652,7 @@ class DecisionEngine:
 
     def _extract_barrier_value(self, metadata: dict[str, Any], key: str) -> float | None:
         """
-        ID-002 Fix: Safely extract and parse barrier value from metadata.
+        ID_BARRIER Fix: Safely extract and parse barrier value from metadata.
         
         Handles:
         - Floats/Ints
@@ -591,3 +683,20 @@ class DecisionEngine:
         except (ValueError, TypeError):
              logger.warning(f"Failed to parse barrier value for {key}: {value}")
              return None
+
+    async def shutdown(self, timeout: float = 5.0) -> None:
+        """
+        Gracefully shutdown the engine, flushing pending tasks.
+        """
+        if not self._pending_shadow_tasks:
+            return
+
+        logger.info(f"DecisionEngine: Waiting for {len(self._pending_shadow_tasks)} shadow tasks to flush...")
+        _, pending = await asyncio.wait(self._pending_shadow_tasks, timeout=timeout)
+        
+        if pending:
+            logger.warning(f"DecisionEngine shutdown timed out with {len(pending)} tasks remaining.")
+            for task in pending:
+                task.cancel()
+        else:
+            logger.info("DecisionEngine: All shadow tasks flushed successfully.")

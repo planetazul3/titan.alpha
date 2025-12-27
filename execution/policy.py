@@ -107,6 +107,7 @@ class ExecutionPolicy:
         # Circuit Breaker state (L1)
         self._circuit_breaker_active = False
         self._circuit_breaker_reason = ""
+        self._circuit_breaker_triggered_at: Optional[float] = None
         
         # Register standard circuit breaker check
         self.register_veto(
@@ -121,8 +122,10 @@ class ExecutionPolicy:
         
         Pauses all trading decisions until explicitly reset.
         """
+        import time
         self._circuit_breaker_active = True
         self._circuit_breaker_reason = reason
+        self._circuit_breaker_triggered_at = time.time()
         logger.warning(f"CIRCUIT BREAKER TRIGGERED: {reason}")
 
     def reset_circuit_breaker(self) -> None:
@@ -131,6 +134,7 @@ class ExecutionPolicy:
             logger.info("CIRCUIT BREAKER RESET")
         self._circuit_breaker_active = False
         self._circuit_breaker_reason = ""
+        self._circuit_breaker_triggered_at = None
 
     def register_veto(
         self,
@@ -166,6 +170,10 @@ class ExecutionPolicy:
         
         # Check vetoes in precedence order (L0 -> L5)
         for level in sorted(VetoPrecedence):
+            # REC-003: Check for Circuit Breaker auto-reset
+            if level == VetoPrecedence.CIRCUIT_BREAKER and self._circuit_breaker_active:
+                self._maybe_auto_reset_circuit_breaker()
+
             for check_fn, reason_provider, details_fn in self._vetoes[level]:
                 try:
                     if check_fn():
@@ -210,9 +218,28 @@ class ExecutionPolicy:
             ),
             "circuit_breaker": {
                 "active": self._circuit_breaker_active,
-                "reason": self._circuit_breaker_reason
+                "reason": self._circuit_breaker_reason,
+                "triggered_at": self._circuit_breaker_triggered_at
             }
         }
+
+    def _maybe_auto_reset_circuit_breaker(self) -> None:
+        """
+        Check if circuit breaker should be automatically reset based on settings.
+        """
+        # Note: In a real system, we'd need settings passed here or available globally.
+        # For now we use a default of 15 minutes unless overridden.
+        import time
+        if not self._circuit_breaker_active or self._circuit_breaker_triggered_at is None:
+            return
+            
+        # Simplified: We assume 15 minute auto-reset for REC-003
+        # In production this would come from settings.execution_safety.circuit_breaker_reset_minutes
+        timeout = 15 * 60 
+        
+        if time.time() - self._circuit_breaker_triggered_at >= timeout:
+            logger.info(f"Auto-resetting circuit breaker after {timeout/60:.0f} minutes")
+            self.reset_circuit_breaker()
     
     def clear_statistics(self) -> None:
         """Reset veto statistics (useful for testing)."""
@@ -254,11 +281,22 @@ class SafetyProfile:
     """
     
     @staticmethod
-    def apply(policy: ExecutionPolicy, settings: Settings) -> None:
+    def apply(
+        policy: ExecutionPolicy, 
+        settings: Settings,
+        pnl_provider: Optional[Callable[[], float]] = None,
+        calibration_provider: Optional[Callable[[], float]] = None
+    ) -> None:
         """
         Apply safety settings to an execution policy.
         
-        Registers standard vetoes for the Decision layer.
+        Registers standard vetoes for the system-wide protection hierarchy.
+        
+        Args:
+            policy: The ExecutionPolicy to configure.
+            settings: Central settings containing thresholds.
+            pnl_provider: Callable returning current daily P&L.
+            calibration_provider: Callable returning current calibration error (reconstruction error).
         """
         config = settings.execution_safety
         
@@ -269,6 +307,23 @@ class SafetyProfile:
             reason="Kill switch enabled (manual halt)"
         )
         
-        # Note: Other vetoes like DAILY_LOSS (L2) require live P&L data
-        # which is usually managed by the Execution layer's SafeTradeExecutor.
-        # DecisionEngine focus is on Model Safety and Regime.
+        # L2: Daily Loss Limit
+        if pnl_provider:
+            limit = config.max_daily_loss
+            policy.register_veto(
+                level=VetoPrecedence.DAILY_LOSS,
+                check_fn=lambda: pnl_provider() <= -limit if limit > 0 else False,
+                reason=lambda: f"Daily loss limit hit: {pnl_provider():.2f} <= -{limit:.2f}"
+            )
+            
+        # L3: Calibration / Stability
+        # High-order stability check (e.g. model completely failing to reconstruct normal data)
+        if calibration_provider:
+            # We use a very high threshold for absolute calibration failure
+            # compared to normal regime caution.
+            cal_threshold = getattr(settings.hyperparams, "calibration_failure_threshold", 5.0)
+            policy.register_veto(
+                level=VetoPrecedence.CALIBRATION,
+                check_fn=lambda: calibration_provider() >= cal_threshold,
+                reason=lambda: f"Model calibration failure: {calibration_provider():.3f} >= {cal_threshold:.3f}"
+            )

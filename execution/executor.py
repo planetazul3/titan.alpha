@@ -1,40 +1,24 @@
 """
 Trade execution abstraction.
 
-This module provides a broker-agnostic interface for trade execution.
-Strategy code calls this interface, not broker APIs directly.
-
-This isolation ensures:
-- Broker failures don't cascade into model logic
-- Trade execution can be mocked for testing
-- Clean separation between decision and execution
+Integrated with SQLiteIdempotencyStore (CRITICAL-002) and ExecutionLogger (REC-001).
 """
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Optional
 
 from config.constants import CONTRACT_TYPES
-from config.settings import Settings
+from execution.contract_params import ContractDurationResolver
+from execution.idempotency_store import SQLiteIdempotencyStore
 from execution.signals import TradeSignal
+from observability.execution_logging import execution_logger
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class TradeResult:
-    """
-    Result of a trade execution attempt.
-
-    Attributes:
-        success: Whether the trade was executed successfully
-        contract_id: Broker-assigned contract ID (if successful)
-        entry_price: Price at which trade was entered
-        error: Error message (if failed)
-        timestamp: When the execution occurred
-    """
-
     success: bool
     contract_id: str | None = None
     entry_price: float | None = None
@@ -45,246 +29,122 @@ class TradeResult:
         if self.timestamp is None:
             self.timestamp = datetime.now(timezone.utc)
 
-
 @runtime_checkable
 class TradeExecutor(Protocol):
-    """
-    Protocol for trade execution.
-
-    Strategy code depends on this interface, not broker-specific implementations.
-    This enables:
-    - Testing with mock executors
-    - Broker swapping without strategy changes
-    - Shadow/paper trading modes
-
-    Example:
-        >>> async def execute_signals(executor: TradeExecutor, signals: List[TradeSignal]):
-        ...     for signal in signals:
-        ...         result = await executor.execute(signal)
-        ...         if not result.success:
-        ...             logger.error(f"Trade failed: {result.error}")
-    """
-
     async def execute(self, signal: TradeSignal) -> TradeResult:
-        """
-        Execute a single trade signal.
-
-        Args:
-            signal: Trade signal with contract type, direction, probability
-
-        Returns:
-            TradeResult with success status and details
-        """
         ...
-
 
 class DerivTradeExecutor:
     """
-    Deriv-specific trade executor.
-
-    Translates TradeSignal objects into Deriv API calls.
-    This is the ONLY place that knows Deriv trade execution details.
-
-    Attributes:
-        client: Connected DerivClient instance
-        settings: Trading configuration
-
-    Example:
-        >>> client = DerivClient(settings)
-        >>> await client.connect()
-        >>> executor = DerivTradeExecutor(client, settings)
-        >>> result = await executor.execute(signal)
+    Deriv-specific trade executor with idempotency and structured logging.
     """
 
-    def __init__(self, client, settings: Settings, position_sizer=None, policy=None):
-        """
-        Initialize Deriv executor.
-
-        Args:
-            client: Connected DerivClient instance
-            settings: Trading configuration with stake amounts
-            position_sizer: Optional PositionSizer instance. If None, uses FixedStakeSizer 
-                            with settings.trading.stake_amount.
-            policy: Optional ExecutionPolicy instance. If provided, used for circuit breaking.
-        """
-        from execution.position_sizer import FixedStakeSizer  # Local import to avoid circular dep
-
+    def __init__(
+        self, 
+        client, 
+        settings, 
+        position_sizer=None, 
+        policy=None,
+        idempotency_store: Optional[SQLiteIdempotencyStore] = None
+    ):
+        from execution.position_sizer import FixedStakeSizer
         self.client = client
         self.settings = settings
         self.position_sizer = position_sizer or FixedStakeSizer(stake=settings.trading.stake_amount)
         self.policy = policy
+        self.idempotency_store = idempotency_store
+        self.duration_resolver = ContractDurationResolver(settings)
         self._executed_count = 0
         self._failed_count = 0
-        self._consecutive_idempotency_failures = 0
         
-        name = self.position_sizer.__class__.__name__
-        logger.info(f"DerivTradeExecutor initialized with sizer: {name}")
+        logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
-    async def execute(self, signal: TradeSignal) -> TradeResult:
+    async def execute(self, signal: TradeSignal, check_only: bool = False) -> TradeResult:
         """
-        Execute trade on Deriv platform.
-
-        Translates signal to Deriv-specific contract parameters and executes.
-
-        Args:
-            signal: Trade signal from decision engine
-
-        Returns:
-            TradeResult with execution outcome
+        Execute trade on Deriv platform with safety guards.
         """
         try:
-            # 1. Fetch current account balance for dynamic sizing
+            # 1. Fetch balance for sizing
             try:
                 balance = await self.client.get_balance()
-            except Exception as e:
-                logger.warning(f"Failed to fetch balance for sizing: {e}. Using static/fallback sizing.")
+            except Exception:
                 balance = None
 
-            # 2. Determine stake size
-            # PRIORITY: Check if safety layer injected a validated stake
-            injected_stake = signal.metadata.get("stake")
+            # 2. Determine stake
+            amount = signal.metadata.get("stake")
+            if amount is None:
+                amount = self.position_sizer.suggest_stake_for_signal(signal, account_balance=balance)
             
-            if injected_stake is not None:
-                amount = float(injected_stake)
-            else:
-                # Fallback: Calculate locally (only if not running under SafeTradeExecutor or legacy mode)
-                amount = self.position_sizer.suggest_stake_for_signal(
-                    signal, 
-                    account_balance=balance
-                )
-            
-            # 3. Safety check: ensure amount > 0
             if amount <= 0:
-                logger.warning(f"Position sizer returned ${amount:.2f} (<=0). Skipping trade.")
                 return TradeResult(success=False, error="Zero stake amount")
 
+            # 3. Resolve Durations (IMPORTANT-001)
+            duration, duration_unit = self.duration_resolver.resolve_duration(signal.contract_type)
+            
+            # 4. Map Contract Types
             if signal.contract_type == CONTRACT_TYPES.RISE_FALL:
-                # C02 Fix: Use centralized duration from settings
-                duration = self.settings.shadow_trade.duration_rise_fall
-                duration_unit = "m"
                 contract = "CALL" if signal.direction == "CALL" else "PUT"
             elif signal.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
-                # C02 Fix: Use centralized duration from settings
-                duration = self.settings.shadow_trade.duration_touch
-                duration_unit = "m"
                 contract = "ONETOUCH" if signal.direction == "TOUCH" else "NOTOUCH"
             elif signal.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
-                # C02 Fix: Use centralized duration from settings
-                duration = self.settings.shadow_trade.duration_range
-                duration_unit = "m"
                 contract = "RANGE" if signal.direction == "IN" else "UPORDOWN"
             else:
-                return TradeResult(
-                    success=False, error=f"Unsupported contract type: {signal.contract_type}"
-                )
+                return TradeResult(success=False, error=f"Unsupported contract type: {signal.contract_type}")
 
-            logger.info(
-                f"Executing {contract} trade: amount=${amount:.2f}, duration={duration}{duration_unit}"
-            )
+            # 5. Idempotency Check (CRITICAL-002)
+            if self.idempotency_store:
+                cached_id = await self.idempotency_store.get_contract_id_async(signal.signal_id)
+                if cached_id:
+                    logger.warning(f"Idempotency Guard: Signal {signal.signal_id} already executed.")
+                    return TradeResult(success=True, contract_id=cached_id, entry_price=amount)
 
-            # D04: Idempotency Check
-            # Before executing, check if we verify a similar trade exists to prevent double execution on retries
-            try:
-                open_contracts = await self.client.get_open_contracts()
-                signal_ts = signal.timestamp.timestamp() if signal.timestamp else datetime.now(timezone.utc).timestamp()
-                
-                for c in open_contracts:
-                    # Check matching parameters
-                    if (c.get("underlying") == self.client.symbol and
-                        c.get("contract_type") == contract and
-                        not c.get("is_expired") and 
-                        not c.get("is_sold")):
-                        
-                        # Check timing (purchase time close to signal time)
-                        # We assume execution happens within 90s of signal generation
-                        purchase_time = c.get("purchase_time")
-                        if purchase_time and abs(purchase_time - signal_ts) < 90:
-                            logger.warning(f"Idempotency check: Found existing contract {c.get('contract_id')} matching signal.")
-                            return TradeResult(
-                                success=True,
-                                contract_id=str(c.get("contract_id")),
-                                entry_price=float(c.get("buy_price", amount)),
-                                timestamp=datetime.fromtimestamp(purchase_time, tz=timezone.utc)
-                            )
-            except Exception as e:
-                self._consecutive_idempotency_failures += 1
-                logger.error(f"Idempotency check failed (consecutive: {self._consecutive_idempotency_failures}): {e}. Blocking execution.")
-                
-                # Recommendation 2: Trigger Circuit Breaker on repeated failures
-                if self.policy and self._consecutive_idempotency_failures >= 3:
-                    self.policy.trigger_circuit_breaker(
-                        f"Consecutive idempotency failures ({self._consecutive_idempotency_failures}). "
-                        f"Possible API instability or network issues."
-                    )
-                
-                return TradeResult(success=False, error=f"Idempotency check failure: {e}")
+            if check_only:
+                return TradeResult(success=True)
 
-            # Reset on successful check
-            self._consecutive_idempotency_failures = 0
+            # 6. Structured Log Attempt (REC-001)
+            execution_logger.log_trade_attempt(signal.signal_id, signal.contract_type, signal.direction, amount)
 
-            # Extract barrier from signal if present (required for Touch/No Touch and Range)
+            # 7. Execute via Deriv API
+            # Fetch barriers from metadata
             barrier = signal.metadata.get("barrier")
             barrier2 = signal.metadata.get("barrier2")
 
-            # Execute via Deriv API
-            result = await self.client.buy(contract, amount, duration, duration_unit, barrier=barrier, barrier2=barrier2)
-
-            self._executed_count += 1
-
-            # Extract contract details from response
-            # NOTE: client.buy() returns result["buy"] directly, so access fields directly
-            contract_id = result.get("contract_id")
-            entry_price = result.get("buy_price")
-
-            logger.info(f"Trade executed successfully: contract_id={contract_id}")
-
-            return TradeResult(
-                success=True,
-                contract_id=str(contract_id) if contract_id else None,
-                entry_price=float(entry_price) if entry_price else None,
+            result = await self.client.buy(
+                contract_type=contract,
+                amount=amount,
+                duration=duration,
+                duration_unit=duration_unit,
+                barrier=barrier,
+                barrier2=barrier2
             )
 
-        except Exception as e:
-            self._failed_count += 1
-            error_msg = str(e)
-            logger.error(f"Trade execution failed: {error_msg}")
+            if result.get("buy"):
+                contract_id = str(result["buy"]["contract_id"])
+                buy_price = float(result["buy"]["buy_price"])
+                
+                execution_logger.log_trade_success(signal.signal_id, contract_id, buy_price)
+                
+                # Record in idempotency store
+                if self.idempotency_store:
+                    await self.idempotency_store.record_execution_async(signal.signal_id, contract_id)
+                
+                self._executed_count += 1
+                return TradeResult(success=True, contract_id=contract_id, entry_price=buy_price)
+            else:
+                error_msg = result.get("error", {}).get("message", "Unknown execution error")
+                execution_logger.log_trade_failure(signal.signal_id, error_msg, details=result)
+                self._failed_count += 1
+                return TradeResult(success=False, error=error_msg)
 
-            return TradeResult(success=False, error=error_msg)
+        except Exception as e:
+            execution_logger.log_trade_failure(signal.signal_id, str(e))
+            self._failed_count += 1
+            return TradeResult(success=False, error=str(e))
 
     def get_statistics(self) -> dict:
-        """Get execution statistics."""
         total = self._executed_count + self._failed_count
         return {
             "executed": self._executed_count,
             "failed": self._failed_count,
             "success_rate": self._executed_count / total if total > 0 else 0.0,
         }
-
-
-class MockTradeExecutor:
-    """
-    Mock executor for testing and paper trading.
-
-    Records trade signals without actual execution.
-    Useful for backtesting and shadow trading validation.
-    """
-
-    def __init__(self):
-        self.executed_signals: list = []
-        logger.info("MockTradeExecutor initialized (paper trading mode)")
-
-    async def execute(self, signal: TradeSignal) -> TradeResult:
-        """Record signal without executing."""
-        self.executed_signals.append(signal)
-
-        logger.info(f"[MOCK] Would execute: {signal}")
-
-        return TradeResult(
-            success=True,
-            contract_id=f"MOCK_{len(self.executed_signals)}",
-            entry_price=100.0,  # Placeholder
-        )
-
-    def get_signals(self) -> list:
-        """Get all recorded signals."""
-        return self.executed_signals.copy()

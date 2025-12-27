@@ -1,124 +1,66 @@
 """
-Barrier Calculation Utility.
+Barrier Resolver - Centralized logic for contract barrier offsets.
 
-Centralizes all barrier calculation logic for trading contracts.
-Used by executor, shadow resolution, and decision engine.
-
-R05: Consolidate Barrier Calculation Logic
+REC-004: Standardizes how barriers are calculated across different components.
 """
 
-import logging
-from dataclasses import dataclass
-from typing import Literal
+from typing import Optional, Tuple
+from config.settings import Settings
 
-from config.constants import CONTRACT_TYPES
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class BarrierLevels:
-    """Calculated barrier levels for a trade."""
-    upper: float
-    lower: float | None = None  # Only used for STAYS_BETWEEN
-
-
-class BarrierCalculator:
+class BarrierResolver:
     """
-    Centralized barrier calculation for all contract types.
-    
-    Takes configuration as input and provides consistent barrier prices
-    given entry price and contract type.
+    Resolves trade barriers based on contract type, price, and settings.
     """
     
-    def __init__(
-        self,
-        default_touch_barrier_offset: float = 0.50,
-        default_range_high_offset: float = 0.50,
-        default_range_low_offset: float = -0.50,
-    ):
-        """
-        Initialize barrier calculator.
+    def __init__(self, settings: Settings):
+        self.settings = settings
         
-        Args:
-            default_touch_barrier_offset: Default offset for TOUCH/NO_TOUCH contracts
-            default_range_high_offset: Default high barrier offset for STAYS_BETWEEN
-            default_range_low_offset: Default low barrier offset for STAYS_BETWEEN
-        """
-        self.default_touch_barrier_offset = default_touch_barrier_offset
-        self.default_range_high_offset = default_range_high_offset
-        self.default_range_low_offset = default_range_low_offset
-    
-    def calculate(
-        self,
+    def resolve_barriers(
+        self, 
+        contract_type: str, 
         entry_price: float,
-        contract_type: str,
-        barrier_offset: float | None = None,
-        barrier2_offset: float | None = None,
-    ) -> BarrierLevels:
+        manual_barrier: Optional[str] = None,
+        manual_barrier2: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         """
-        Calculate barrier levels for a given contract.
+        Calculate absolute or offset barriers for a trade.
         
         Args:
-            entry_price: Entry price of the trade
-            contract_type: Type of contract (TOUCH_NO_TOUCH, STAYS_BETWEEN, etc.)
-            barrier_offset: Custom barrier offset (overrides default)
-            barrier2_offset: Custom second barrier offset for STAYS_BETWEEN
+            contract_type: RISE_FALL, ONETOUCH, etc.
+            entry_price: Current market price.
+            manual_barrier: Optional manual override.
+            manual_barrier2: Optional second manual override.
             
         Returns:
-            BarrierLevels with calculated upper and lower barriers
+            Tuple of (barrier, barrier2) strings.
         """
-        if contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH or contract_type == "TOUCH_NO_TOUCH":
-            offset = barrier_offset if barrier_offset is not None else self.default_touch_barrier_offset
-            return BarrierLevels(
-                upper=entry_price + offset,
-                lower=entry_price - abs(offset),
-            )
-        
-        elif contract_type == CONTRACT_TYPES.STAYS_BETWEEN or contract_type == "STAYS_BETWEEN":
-            high_offset = barrier_offset if barrier_offset is not None else self.default_range_high_offset
-            low_offset = barrier2_offset if barrier2_offset is not None else self.default_range_low_offset
-            return BarrierLevels(
-                upper=entry_price + high_offset,
-                lower=entry_price + low_offset,  # low_offset is typically negative
-            )
-        
-        else:
-            # RISE_FALL and other types don't use barriers
-            return BarrierLevels(upper=entry_price, lower=None)
-    
-    def calculate_from_percentage(
-        self,
-        entry_price: float,
-        contract_type: str,
-        barrier_pct: float = 0.005,
-        barrier2_pct: float = 0.003,
-    ) -> BarrierLevels:
-        """
-        Calculate barrier levels using percentage offsets.
-        
-        Args:
-            entry_price: Entry price of the trade
-            contract_type: Type of contract
-            barrier_pct: Barrier percentage (0.005 = 0.5%)
-            barrier2_pct: Second barrier percentage for ranges
+        # If manual barriers provided, they take priority
+        if manual_barrier is not None:
+            return manual_barrier, manual_barrier2
             
-        Returns:
-            BarrierLevels with calculated barriers
-        """
-        if contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH or contract_type == "TOUCH_NO_TOUCH":
-            offset = entry_price * barrier_pct
-            return BarrierLevels(
-                upper=entry_price + offset,
-                lower=entry_price - offset,
-            )
+        # Default offsets from settings
+        offset1 = self.settings.trading.barrier_offset
+        offset2 = self.settings.trading.barrier2_offset
         
-        elif contract_type == CONTRACT_TYPES.STAYS_BETWEEN or contract_type == "STAYS_BETWEEN":
-            offset = entry_price * barrier2_pct
-            return BarrierLevels(
-                upper=entry_price + offset,
-                lower=entry_price - offset,
-            )
-        
-        else:
-            return BarrierLevels(upper=entry_price, lower=None)
+        # RISE_FALL doesn't use barriers (it's implicit from entry price)
+        from config.constants import CONTRACT_TYPES
+        if contract_type == CONTRACT_TYPES.RISE_FALL:
+            return None, None
+            
+        # TOUCH/NO_TOUCH use a single barrier
+        if contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
+            return offset1, None
+            
+        # RANGE use two barriers
+        if contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
+            return offset1, offset2
+            
+        return None, None
+
+    def calculate_absolute_barrier(self, entry_price: float, offset_str: str) -> float:
+        """Helper to convert "+0.50" style offset to absolute price."""
+        try:
+            offset = float(offset_str)
+            return entry_price + offset
+        except (ValueError, TypeError):
+            return entry_price

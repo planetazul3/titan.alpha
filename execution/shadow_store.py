@@ -118,8 +118,8 @@ class ShadowTradeRecord:
         entry_price: float,
         reconstruction_error: float,
         regime_state: str,
-        tick_window: np.ndarray,
-        candle_window: np.ndarray,
+        tick_window: np.ndarray | list[float] | None = None,
+        candle_window: np.ndarray | list[list[float]] | None = None,
         model_version: str = "unknown",
         feature_schema_version: str = "1.0",
         barrier_level: float | None = None,
@@ -148,10 +148,10 @@ class ShadowTradeRecord:
             feature_schema_version=feature_schema_version,
             tick_window=tick_window.tolist()
             if isinstance(tick_window, np.ndarray)
-            else list(tick_window),
+            else (list(tick_window) if tick_window is not None else []),
             candle_window=candle_window.tolist()
             if isinstance(candle_window, np.ndarray)
-            else list(candle_window),
+            else (list(candle_window) if candle_window is not None else []),
             barrier_level=barrier_level,
             barrier2_level=barrier2_level,
             duration_minutes=duration_minutes,

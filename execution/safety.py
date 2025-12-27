@@ -40,6 +40,7 @@ class ExecutionSafetyConfig:
     kill_switch_enabled: bool = False
 
 
+
 class SafeTradeExecutor:
     """
     Wrapper around TradeExecutor that enforces safety policies.
@@ -58,7 +59,7 @@ class SafeTradeExecutor:
         Initialize safe executor.
         
         Args:
-            inner_executor: Raw execution implementation
+            executor: Raw execution implementation
             config: Safety limits configuration
             state_file: Path to SQLite state DB
             stake_resolver: Function to resolve stake amount for a signal (for pre-check)
@@ -103,6 +104,7 @@ class SafeTradeExecutor:
              return self._reject("Rate limit exceeded")
              
         # 4. Check Stake Amount (if resolver provided)
+        safe_signal = signal # Initialize safe_signal with original signal
         if self.stake_resolver:
             try:
                 # FIX: Pass the full signal to the resolver to get the ACTUAL stake logic
@@ -116,9 +118,9 @@ class SafeTradeExecutor:
                     msg = f"Stake {stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
                     return self._reject(msg)
                 
-                # INJECTION: Store validated stake in signal metadata to prevent drift
-                # This ensures the inner executor uses exactly what we validated
-                signal.metadata["stake"] = stake
+                # CRITICAL-003: Use immutable pattern for stake injection
+                # Instead of mutating the shared signal, we create a copy with the validated stake
+                safe_signal = signal.with_metadata(stake=stake)
                 
             except Exception as e:
                  logger.error(f"Error resolving stake in safety check: {e}")
@@ -132,9 +134,9 @@ class SafeTradeExecutor:
                 span.set_attribute("contract_type", str(signal.contract_type))
                 span.set_attribute("stake", signal.metadata.get("stake", 0.0))
                 
-                result = await self._execute_with_retry(signal)
+                result = await self._execute_with_retry(safe_signal)
         else:
-            result = await self._execute_with_retry(signal)
+            result = await self._execute_with_retry(safe_signal)
             
         # 6. Update State
         if result.success:
