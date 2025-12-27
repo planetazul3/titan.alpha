@@ -45,10 +45,14 @@ def create_real_settings():
 async def test_idempotency_failure_blocks_execution():
     """Test that idempotency check failure blocks execution (ID-001)."""
     client = MagicMock()
-    client.get_open_contracts = AsyncMock(side_effect=Exception("API Error"))
+    client.get_balance = AsyncMock(return_value=1000.0)
+    
+    # Mocking idempotency store failure
+    store = MagicMock()
+    store.get_contract_id_async = AsyncMock(side_effect=Exception("Idempotency check failure"))
     
     settings = create_real_settings()
-    executor = DerivTradeExecutor(client, settings)
+    executor = DerivTradeExecutor(client, settings, idempotency_store=store)
     
     signal = TradeSignal(
         signal_type=SIGNAL_TYPES.REAL_TRADE,
@@ -69,12 +73,16 @@ async def test_idempotency_failure_blocks_execution():
 async def test_circuit_breaker_triggers_on_repeated_failures():
     """Test that repeated idempotency failures trigger the circuit breaker."""
     client = MagicMock()
-    client.get_open_contracts = AsyncMock(side_effect=Exception("API Error"))
+    client.get_balance = AsyncMock(return_value=1000.0)
+    
+    # Mocking idempotency store failure
+    store = MagicMock()
+    store.get_contract_id_async = AsyncMock(side_effect=Exception("Idempotency check failure"))
     
     policy = ExecutionPolicy()
     settings = create_real_settings()
     
-    executor = DerivTradeExecutor(client, settings, policy=policy)
+    executor = DerivTradeExecutor(client, settings, policy=policy, idempotency_store=store)
     
     signal = TradeSignal(
         signal_type=SIGNAL_TYPES.REAL_TRADE,
@@ -108,18 +116,24 @@ async def test_policy_integration_blocks_decision():
     regime_veto = MagicMock()
     regime_veto.threshold_caution = 0.2
     regime_veto.threshold_veto = 0.5
-    regime_veto.assess.return_value.is_vetoed.return_value = False
+    # assess returns a mocked assessment
+    assessment = MagicMock()
+    assessment.is_vetoed.return_value = False
+    regime_veto.assess.return_value = assessment
     
     shadow_store = MagicMock(spec=ShadowTradeStore)
-    shadow_store._store_path = "test_shadow.db" # Add missing attribute
+    shadow_store._store_path = Path("test_shadow.db") # Fix: must be Path object
     
     engine = DecisionEngine(settings, regime_veto=regime_veto, shadow_store=shadow_store)
     
-    # Fake model output
-    probs = {"RISE_FALL": {"CALL": 0.9, "PUT": 0.1}}
+    # Fake model output (flat format as expected by filter_signals)
+    probs = {"rise_fall_prob": 0.9}
     
-    # process_model_output is synchronous
-    signals = engine.process_model_output(probs, reconstruction_error=0.1)
+    # Must apply SafetyProfile to register the kill switch veto
+    SafetyProfile.apply(engine.policy, settings)
+    
+    # process_model_output is now async
+    signals = await engine.process_model_output(probs, reconstruction_error=0.1)
     
     assert len(signals) == 0
     # Check stats for ignored (DecisionEngine uses "ignored" for policy vetoes)

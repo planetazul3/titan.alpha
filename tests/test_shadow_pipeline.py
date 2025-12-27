@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import asyncio
 import pytest
 
 
@@ -269,20 +270,51 @@ class TestPipelineIntegration:
             store_path = Path(tmpdir) / "shadow_trades.ndjson"
             store = ShadowTradeStore(store_path)
 
-            settings = MagicMock()
-            settings.thresholds.confidence_threshold_high = 0.75
-            settings.thresholds.learning_threshold_min = 0.40
-            settings.thresholds.learning_threshold_max = 0.60
-            # Add missing shadow_trade settings for I01 and C02 fixes
-            settings.shadow_trade.min_probability_track = 0.40
-            settings.shadow_trade.duration_rise_fall = 1
-            settings.shadow_trade.duration_touch = 5
-            settings.shadow_trade.duration_range = 5
-            settings.shadow_trade.duration_minutes = 1
-            # Add trading settings for filter_signals
-            settings.trading.symbol = "R_100"
-            settings.trading.barrier_offset = "+0.50"
-            settings.trading.barrier2_offset = "-0.50"
+            from config.settings import (
+                Settings, Trading, Thresholds, ModelHyperparams, 
+                ExecutionSafety, DataShapes, ShadowTradeConfig
+            )
+
+            trading = Trading(
+                symbol="R_100",
+                stake_amount=10.0,
+                barrier_offset=0.5,
+                barrier2_offset=-0.5
+            )
+            thresholds = Thresholds(
+                confidence_threshold_high=0.75,
+                learning_threshold_min=0.40,
+                learning_threshold_max=0.60
+            )
+            shadow = ShadowTradeConfig(
+                min_probability_track=0.40,
+                duration_minutes=1
+            )
+            safety = ExecutionSafety(
+                kill_switch_enabled=False,
+                circuit_breaker_reset_minutes=15
+            )
+            
+            from execution.regime import TrustState
+            hyperparams = ModelHyperparams.model_construct(
+                regime_caution_threshold=0.1,
+                regime_veto_threshold=0.3
+            )
+            
+            settings = Settings.model_construct(
+                trading=trading,
+                thresholds=thresholds,
+                shadow_trade=shadow,
+                execution_safety=safety,
+                hyperparams=hyperparams,
+                data_shapes=DataShapes.model_construct(),
+                environment="development"
+            )
+
+            regime_assessment = MagicMock()
+            regime_assessment.trust_state = TrustState.TRUSTED
+            regime_assessment.requires_caution.return_value = False
+            regime_assessment.is_vetoed.return_value = False
 
             regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
 
@@ -290,6 +322,7 @@ class TestPipelineIntegration:
                 settings, regime_veto=regime_veto, shadow_store=store, model_version="test_v1.0"
             )
 
+            from execution.regime import TrustState
             probs = {"rise_fall_prob": 0.85, "touch_prob": 0.25, "range_prob": 0.25}
 
             tick_window = np.random.rand(100).astype(np.float32) * 100 + 1
@@ -303,6 +336,10 @@ class TestPipelineIntegration:
                 candle_window=candle_window,
                 entry_price=100.0,
             )
+
+            # Await pending shadow tasks
+            if engine._pending_shadow_tasks:
+                await asyncio.gather(*engine._pending_shadow_tasks)
 
             # Should have real trades (not vetoed)
             assert len(trades) > 0

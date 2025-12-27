@@ -47,7 +47,12 @@ async def test_executor_uses_balance_for_sizing(mock_client, settings):
         timestamp=datetime.now()
         # payout_ratio=0.9 
     )
-    signal.payout_ratio = 0.9 # Manually attach for test context
+    # Kelly calculation:
+    # b = 0.9, p = 0.7, q = 0.3
+    # f = (0.7 * 0.9 - 0.3) / 0.9 = (0.63 - 0.3) / 0.9 = 0.33 / 0.9 = 0.3667
+    # Adjusted (safety=1.0) = 0.3667
+    # Stake = 0.3667 * 1000 = 366.67
+    object.__setattr__(signal, "payout_ratio", 0.9)
     
     # Kelly calculation:
     # b = 0.9, p = 0.7, q = 0.3
@@ -64,7 +69,10 @@ async def test_executor_uses_balance_for_sizing(mock_client, settings):
     # But it should be ~366, definitely not the default 10.0
     call_args = mock_client.buy.call_args
     assert call_args is not None
-    amount_arg = call_args[0][1] # amount is 2nd arg
+    # Check amount from kwargs or args
+    amount_arg = call_args.kwargs.get("amount") or (call_args.args[1] if len(call_args.args) > 1 else None)
+    
+    assert amount_arg is not None
     
     assert amount_arg > 100.0 
     assert abs(amount_arg - 366.67) < 50.0  # Allow some buffer for confidence scaling etc
@@ -90,7 +98,7 @@ async def test_executor_fallback_on_balance_error(mock_client, settings):
         # payout_ratio=0.9  <-- Removed, not in dataclass
     )
     # inject attribute manually if needed for sizer, or rely on default
-    signal.payout_ratio = 0.9
+    object.__setattr__(signal, "payout_ratio", 0.9)
     
     await executor.execute(signal)
     
@@ -100,7 +108,10 @@ async def test_executor_fallback_on_balance_error(mock_client, settings):
     
     call_args = mock_client.buy.call_args
     assert call_args is not None
-    amount_arg = call_args[0][1]
+    # Check amount from kwargs or args
+    amount_arg = call_args.kwargs.get("amount") or (call_args.args[1] if len(call_args.args) > 1 else None)
+    
+    assert amount_arg is not None
     
     # Just assert it didn't crash and produced specific positive number
     assert amount_arg > 0

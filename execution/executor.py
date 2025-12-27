@@ -56,6 +56,7 @@ class DerivTradeExecutor:
         self.duration_resolver = ContractDurationResolver(settings)
         self._executed_count = 0
         self._failed_count = 0
+        self._consecutive_idempotency_failures = 0
         
         logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
@@ -129,6 +130,7 @@ class DerivTradeExecutor:
                     await self.idempotency_store.record_execution_async(signal.signal_id, contract_id)
                 
                 self._executed_count += 1
+                self._consecutive_idempotency_failures = 0 # Reset on success
                 return TradeResult(success=True, contract_id=contract_id, entry_price=buy_price)
             else:
                 error_msg = result.get("error", {}).get("message", "Unknown execution error")
@@ -137,6 +139,12 @@ class DerivTradeExecutor:
                 return TradeResult(success=False, error=error_msg)
 
         except Exception as e:
+            # Check if this is an idempotency-related failure
+            if self.policy and "Idempotency" in str(e):
+                self._consecutive_idempotency_failures += 1
+                if self._consecutive_idempotency_failures >= 3:
+                     self.policy.trigger_circuit_breaker("Consecutive idempotency failures")
+            
             execution_logger.log_trade_failure(signal.signal_id, str(e))
             self._failed_count += 1
             return TradeResult(success=False, error=str(e))
@@ -148,3 +156,18 @@ class DerivTradeExecutor:
             "failed": self._failed_count,
             "success_rate": self._executed_count / total if total > 0 else 0.0,
         }
+
+class MockTradeExecutor:
+    """
+    Mock executor that records signals without executing them.
+    Used for testing and system verification.
+    """
+    def __init__(self):
+        self._signals = []
+        
+    async def execute(self, signal: TradeSignal) -> TradeResult:
+        self._signals.append(signal)
+        return TradeResult(success=True, contract_id=f"MOCK_{signal.signal_id}")
+        
+    def get_signals(self) -> list[TradeSignal]:
+        return self._signals

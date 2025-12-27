@@ -160,17 +160,11 @@ class RegimeVeto:
         # Determine trust state
         if error >= self.threshold_veto:
             state = TrustState.VETO
-            logger.warning(
-                f"REGIME VETO ACTIVE: reconstruction_error={error:.4f} >= {self.threshold_veto:.4f}"
-            )
+            # logger.warning(f"REGIME VETO: {error} >= {self.threshold_veto}")
         elif error >= self.threshold_caution:
             state = TrustState.CAUTION
-            logger.info(
-                f"Regime caution: reconstruction_error={error:.4f} >= {self.threshold_caution:.4f}"
-            )
         else:
             state = TrustState.TRUSTED
-            logger.debug(f"Regime trusted: reconstruction_error={error:.4f}")
 
         return RegimeAssessment(
             trust_state=state,

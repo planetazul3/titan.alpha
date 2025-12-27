@@ -30,32 +30,38 @@ from execution.sqlite_shadow_store import SQLiteShadowStore
 
 @pytest.fixture
 def mock_settings():
-    """Create mock settings for testing."""
-    settings = MagicMock()
-
-    # Set up nested structures
-    settings.trading = MagicMock()
-    settings.trading.symbol = "R_100"
-    settings.trading.stake_amount = 1.0
-
-    settings.thresholds = MagicMock()
-    settings.thresholds.confidence_threshold_high = 0.75
-    settings.thresholds.learning_threshold_min = 0.40
-    settings.thresholds.learning_threshold_max = 0.60
-
-    settings.data_shapes = MagicMock()
-    settings.data_shapes.sequence_length_ticks = 100
-    settings.data_shapes.sequence_length_candles = 50
-
-    settings.hyperparams = MagicMock()
-    settings.hyperparams.lstm_hidden_size = 64
-    settings.hyperparams.cnn_filters = 32
-    settings.hyperparams.latent_dim = 16
-    settings.hyperparams.dropout_rate = 0.1
-
-    settings.get_device = MagicMock(return_value=torch.device("cpu"))
-
-    return settings
+    """Create real settings for testing."""
+    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes
+    
+    trading = Trading.model_construct(
+        symbol="R_100",
+        stake_amount=1.0,
+        barrier_offset="+0.50",
+        barrier2_offset="-0.50"
+    )
+    thresholds = Thresholds.model_construct(
+        confidence_threshold_high=0.75,
+        learning_threshold_min=0.40,
+        learning_threshold_max=0.60
+    )
+    hyperparams = ModelHyperparams.model_construct(
+        lstm_hidden_size=64,
+        cnn_filters=32,
+        latent_dim=16,
+        dropout_rate=0.1
+    )
+    data_shapes = DataShapes.model_construct(
+        sequence_length_ticks=100,
+        sequence_length_candles=50
+    )
+    
+    return Settings.model_construct(
+        trading=trading,
+        thresholds=thresholds,
+        hyperparams=hyperparams,
+        data_shapes=data_shapes,
+        environment="development"
+    )
 
 
 @pytest.fixture
@@ -203,9 +209,9 @@ class TestLiveFlowIntegration:
         engine = DecisionEngine(mock_settings, regime_veto=regime_veto)
 
         # High confidence predictions should produce trades
+        # High confidence predictions should produce trades
         probs = {"rise_fall_prob": 0.85, "touch_prob": 0.50, "range_prob": 0.40}
-
-        trades = engine.process_model_output(probs, reconstruction_error=0.05)
+        trades = await engine.process_model_output(probs, reconstruction_error=0.05)
 
         # Should have at least one real trade for high confidence
         assert len(trades) >= 1
@@ -221,7 +227,7 @@ class TestLiveFlowIntegration:
         probs = {"rise_fall_prob": 0.95, "touch_prob": 0.95, "range_prob": 0.95}
 
         # High reconstruction error triggers veto
-        trades = engine.process_model_output(probs, reconstruction_error=0.5)
+        trades = await engine.process_model_output(probs, reconstruction_error=0.5)
 
         # All trades should be blocked
         assert len(trades) == 0
@@ -338,7 +344,7 @@ class TestEndToEndFlow:
         sample_probs = {k: v.item() for k, v in mock_probs.items()}
         reconstruction_error = 0.05  # Normal regime
 
-        trades = engine.process_model_output(sample_probs, reconstruction_error)
+        trades = await engine.process_model_output(sample_probs, reconstruction_error=0.05)
 
         # Should produce real trade for high confidence rise_fall
         assert len(trades) >= 1
@@ -357,13 +363,13 @@ class TestEndToEndFlow:
         probs = {"rise_fall_prob": 0.90, "touch_prob": 0.85, "range_prob": 0.80}
 
         # Normal regime - should allow multiple trades
-        trades_normal = engine.process_model_output(probs, reconstruction_error=0.05)
+        trades_normal = await engine.process_model_output(probs, reconstruction_error=0.05)
 
         # Reset engine
         engine = DecisionEngine(mock_settings, regime_veto=regime_veto)
 
         # Caution regime - should reduce trades
-        trades_caution = engine.process_model_output(probs, reconstruction_error=0.15)
+        trades_caution = await engine.process_model_output(probs, reconstruction_error=0.15)
 
         # Caution should be more restrictive (keep only best)
         assert len(trades_caution) <= len(trades_normal)
@@ -384,7 +390,7 @@ class TestEndToEndFlow:
 
         # High confidence
         probs = {"rise_fall_prob": 0.90, "touch_prob": 0.50, "range_prob": 0.40}
-        trades = engine.process_model_output(probs, reconstruction_error=0.05)
+        trades = await engine.process_model_output(probs, reconstruction_error=0.05)
 
         # Execute each trade
         for trade in trades:

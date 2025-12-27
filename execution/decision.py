@@ -159,121 +159,127 @@ class DecisionEngine:
         if self.safety_store:
             await self.sync_safety_state()
 
+        # Coerce to float for robust logging (prevents MagicMock formatting errors)
+        try:
+            reconstruction_error = float(reconstruction_error)
+        except (TypeError, ValueError):
+            # If it's a mock or invalid, we still want to avoid crash
+            pass
+            
         # Update trackers for policy providers
         self._last_reconstruction_error = reconstruction_error
         
-        # 1. Check Execution Policy Vetoes (IMPORTANT-004)
-        policy_veto = self.policy.check_vetoes()
-        if policy_veto:
-            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
-            self._stats["processed"] += 1
-            self._stats["ignored"] += 1
-            return []
+        if self.tracer:
+            with self.tracer.start_as_current_span("decision_engine.process_model_output") as span:
+                span.set_attribute("model_version", self.model_version)
+                span.set_attribute("reconstruction_error", reconstruction_error)
+                
+                # Check execution policy
+                policy_veto = self.policy.check_vetoes()
+                if policy_veto:
+                    span.set_attribute("veto.type", "policy")
+                    span.set_attribute("veto.reason", str(policy_veto))
+                    logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
+                    self._stats["processed"] += 1
+                    if policy_veto.level == VetoPrecedence.REGIME:
+                         self._stats["regime_vetoed"] += 1
+                    else:
+                         self._stats["ignored"] += 1
+                    return []
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 1: REGIME VETO CHECK (ABSOLUTE AUTHORITY - NO BYPASS POSSIBLE)
-        # ══════════════════════════════════════════════════════════════════════
-        # Check regime assessment via RegimeVeto (primary safety mechanism)
-        regime_assessment = self.regime_veto.assess(reconstruction_error)
+                regime_assessment = self.regime_veto.assess(reconstruction_error)
+                span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
 
-        # ══════════════════════════════════════════════════════════════════════
-        # CRITICAL: Strict Regime Veto Check via RegimeAssessment
-        # ══════════════════════════════════════════════════════════════════════
-        if regime_assessment.is_vetoed():
-            logger.warning(
-                f"TRADE BLOCKED BY REGIME VETO: error {reconstruction_error:.4f} "
-                f"> veto_threshold {self.regime_veto.threshold_veto:.3f}"
-            )
-            self._stats["processed"] += 1
-            self._stats["regime_vetoed"] += 1
-            return []  # BLOCKED
-
-        # R02: Filter probabilities into signals
-        all_signals = filter_signals(probs, self.settings, timestamp)
-        
-        # Store shadow trades in background (Fire-and-Forget)
-        if self.shadow_store:
-            regime_assessment = self.regime_veto.assess(reconstruction_error)
-            for sig in all_signals:
-                self._store_shadow_trade_async(
-                    signal=sig,
-                    reconstruction_error=reconstruction_error,
-                    regime_state=self._get_regime_state_string(regime_assessment),
-                    entry_price=entry_price or 0.0,
-                    regime_vetoed=regime_assessment.is_vetoed(),
-                    metadata=market_data,
-                )
-        
-        # R02: Validate contract types early
-        valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
-        validated_signals = []
-        for sig in all_signals:
-            if sig.contract_type in valid_contract_types:
-                validated_signals.append(sig)
-            else:
-                logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
-                self._stats["ignored"] += 1
-        all_signals = validated_signals
-        
-        real_trades, shadow_trades = get_actionable_signals(all_signals)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 3: Apply caution filter if regime requires it
-        # ══════════════════════════════════════════════════════════════════════
-        if regime_assessment.requires_caution():
-            self._stats["regime_caution"] += 1
-            logger.info(
-                f"Regime caution active: demoting some trades. "
-                f"reconstruction_error={reconstruction_error:.4f}"
-            )
-            
-            # Move real trades to shadow if confidence isn't very high
-            # In caution mode, we only take highest confidence trades
-            filtered_real = []
-            for signal in real_trades:
-                # Require higher threshold in caution mode (e.g. +5%)
-                caution_threshold = self.settings.thresholds.confidence_threshold_high + 0.05
-                if signal.probability >= caution_threshold:
-                    filtered_real.append(signal)
-                else:
-                    # Demote to shadow
-                    logger.info(f"Demoting CAUTION trade to shadow: {signal.probability:.3f}")
-                    shadow_trade = ShadowTrade(
-                        signal_type=signal.signal_type,
-                        contract_type=signal.contract_type,
-                        direction=signal.direction,
-                        probability=signal.probability,
-                        timestamp=signal.timestamp
+                if regime_assessment.is_vetoed():
+                    span.set_attribute("veto.type", "regime")
+                    logger.warning(
+                        f"TRADE BLOCKED BY REGIME VETO: error {reconstruction_error:.4f} "
+                        f"> veto_threshold {self.regime_veto.threshold_veto:.3f}"
                     )
-                    shadow_trades.append(shadow_trade)
+                    self._stats["processed"] += 1
+                    self._stats["regime_vetoed"] += 1
+                    return []
+
+                # R02: Filter probabilities into signals
+                all_signals = filter_signals(probs, self.settings, timestamp)
+                span.set_attribute("signals.filtered_count", len(all_signals))
+
+                # Store shadow trades in background
+                if self.shadow_store:
+                    for sig in all_signals:
+                        self._store_shadow_trade_async(
+                            signal=sig,
+                            reconstruction_error=reconstruction_error,
+                            regime_state=self._get_regime_state_string(regime_assessment),
+                            entry_price=entry_price or 0.0,
+                            regime_vetoed=regime_assessment.is_vetoed(),
+                            metadata=market_data,
+                        )
+
+                # Process further (validation, caution, stats)
+                real_trades = await self._process_signals(
+                    all_signals=all_signals,
+                    reconstruction_error=reconstruction_error,
+                    regime_assessment=regime_assessment,
+                    timestamp=timestamp,
+                    market_data=market_data,
+                )
+                span.set_attribute("signals.real_count", len(real_trades))
+                return real_trades
+        else:
+            # Fallback when tracing disabled
+            # 1. Check Execution Policy Vetoes (IMPORTANT-004)
+            policy_veto = self.policy.check_vetoes()
+            if policy_veto:
+                logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
+                self._stats["processed"] += 1
+                if policy_veto.level == VetoPrecedence.REGIME:
+                    self._stats["regime_vetoed"] += 1
+                else:
+                    self._stats["ignored"] += 1
+                return []
+
+            # ══════════════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════════════
+            # STEP 1: REGIME VETO CHECK (ABSOLUTE AUTHORITY - NO BYPASS POSSIBLE)
+            # ══════════════════════════════════════════════════════════════════════
+            # Check regime assessment via RegimeVeto (primary safety mechanism)
+            regime_assessment = self.regime_veto.assess(reconstruction_error)
+
+            # ══════════════════════════════════════════════════════════════════════
+            # CRITICAL: Strict Regime Veto Check via RegimeAssessment
+            # ══════════════════════════════════════════════════════════════════════
+            if regime_assessment.is_vetoed():
+                logger.warning(
+                    f"TRADE BLOCKED BY REGIME VETO: error {reconstruction_error:.4f} "
+                    f"> veto_threshold {self.regime_veto.threshold_veto:.3f}"
+                )
+                self._stats["processed"] += 1
+                self._stats["regime_vetoed"] += 1
+                return []  # BLOCKED
+
+            # R02: Filter probabilities into signals
+            all_signals = filter_signals(probs, self.settings, timestamp)
             
-            real_trades = filtered_real
-            real_trades, demoted = self._apply_caution_filter(real_trades)
-            shadow_trades.extend(demoted)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # FEEDBACK LOGGING: If no trades, explain why (Silence Fix)
-        # ══════════════════════════════════════════════════════════════════════
-        if not real_trades and not shadow_trades:
-            self._log_no_trades_feedback(all_signals)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 4: Log shadow trades (always, for learning)
-        # ══════════════════════════════════════════════════════════════════════
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 4: Log shadow trades via ShadowStore (handled in process_with_context)
-        # ══════════════════════════════════════════════════════════════════════
-
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 5: Update statistics
-        # ══════════════════════════════════════════════════════════════════════
-        self._stats["processed"] += 1
-        self._stats["real"] += len(real_trades)
-        self._stats["shadow"] += len(shadow_trades)
-        self._stats["ignored"] += len(all_signals) - len(real_trades) - len(shadow_trades)
-
-        return real_trades
+            # Store shadow trades in background (Fire-and-Forget)
+            if self.shadow_store:
+                for sig in all_signals:
+                    self._store_shadow_trade_async(
+                        signal=sig,
+                        reconstruction_error=reconstruction_error,
+                        regime_state=self._get_regime_state_string(regime_assessment),
+                        entry_price=entry_price or 0.0,
+                        regime_vetoed=regime_assessment.is_vetoed(),
+                        metadata=market_data,
+                    )
+            
+            return await self._process_signals(
+                all_signals=all_signals,
+                reconstruction_error=reconstruction_error,
+                regime_assessment=regime_assessment,
+                timestamp=timestamp,
+                market_data=market_data,
+            )
 
     def _apply_caution_filter(
         self, real_trades: list[TradeSignal]
@@ -324,73 +330,150 @@ class DecisionEngine:
         This is the internal workhorse that handles already-filtered signals.
         Used by process_with_context to avoid calling filter_signals twice.
         """
-        # If vetoed, block all trades
-        if regime_assessment.is_vetoed():
-            self._stats["processed"] += 1
-            self._stats["regime_vetoed"] += 1
-            return []
+        if self.tracer:
+            with self.tracer.start_as_current_span("decision_engine._process_signals") as span:
+                # If vetoed, block all trades
+                if regime_assessment.is_vetoed():
+                    span.set_attribute("veto.type", "regime")
+                    self._stats["processed"] += 1
+                    self._stats["regime_vetoed"] += 1
+                    return []
 
-        # Execution Policy Veto Check
-        policy_veto = self.policy.check_vetoes()
-        if policy_veto:
-            logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
-            self._stats["processed"] += 1
-            self._stats["ignored"] += 1
-            return []
+                # Execution Policy Veto Check
+                policy_veto = self.policy.check_vetoes()
+                if policy_veto:
+                    span.set_attribute("veto.type", "policy")
+                    logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
+                    self._stats["processed"] += 1
+                    self._stats["ignored"] += 1
+                    return []
 
-        # R02: Validate contract types
-        valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
-        validated_signals = []
-        for sig in all_signals:
-            if sig.contract_type in valid_contract_types:
-                validated_signals.append(sig)
-            else:
-                logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
-                self._stats["ignored"] += 1
-        all_signals = validated_signals
+                # R02: Validate contract types
+                valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
+                validated_signals = []
+                for sig in all_signals:
+                    if sig.contract_type in valid_contract_types:
+                        validated_signals.append(sig)
+                    else:
+                        logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
+                        self._stats["ignored"] += 1
+                all_signals = validated_signals
 
-        real_trades, shadow_trades = get_actionable_signals(all_signals)
+                real_trades, shadow_trades = get_actionable_signals(all_signals)
+                span.set_attribute("signals.real_base", len(real_trades))
+                span.set_attribute("signals.shadow_base", len(shadow_trades))
 
-        # Apply caution filter if needed
-        if regime_assessment.requires_caution():
-            self._stats["regime_caution"] += 1
-            logger.info(
-                f"Regime caution active: demoting some trades. "
-                f"reconstruction_error={reconstruction_error:.4f}"
-            )
-            
-            # Move real trades to shadow if confidence isn't very high
-            filtered_real = []
-            for signal in real_trades:
-                caution_threshold = self.settings.thresholds.confidence_threshold_high + 0.05
-                if signal.probability >= caution_threshold:
-                    filtered_real.append(signal)
-                else:
-                    logger.info(f"Demoting CAUTION trade to shadow: {signal.probability:.3f}")
-                    shadow_trade = ShadowTrade(
-                        signal_type=signal.signal_type,
-                        contract_type=signal.contract_type,
-                        direction=signal.direction,
-                        probability=signal.probability,
-                        timestamp=signal.timestamp
+                # Apply caution filter if needed
+                if regime_assessment.requires_caution():
+                    span.set_attribute("caution.active", True)
+                    self._stats["regime_caution"] += 1
+                    logger.info(
+                        f"Regime caution active: demoting some trades. "
+                        f"reconstruction_error={reconstruction_error:.4f}"
                     )
-                    shadow_trades.append(shadow_trade)
-            
-            real_trades = filtered_real
-            real_trades, demoted = self._apply_caution_filter(real_trades)
-            shadow_trades.extend(demoted)
+                    
+                    # Move real trades to shadow if confidence isn't very high
+                    filtered_real = []
+                    for signal in real_trades:
+                        caution_threshold = self.settings.thresholds.confidence_threshold_high + 0.05
+                        if signal.probability >= caution_threshold:
+                            filtered_real.append(signal)
+                        else:
+                            logger.info(f"Demoting CAUTION trade to shadow: {signal.probability:.3f}")
+                            shadow_trade = ShadowTrade(
+                                signal_type=signal.signal_type,
+                                contract_type=signal.contract_type,
+                                direction=signal.direction,
+                                probability=signal.probability,
+                                timestamp=signal.timestamp
+                            )
+                            shadow_trades.append(shadow_trade)
+                    
+                    real_trades = filtered_real
+                    real_trades, demoted = self._apply_caution_filter(real_trades)
+                    shadow_trades.extend(demoted)
 
-        # Feedback logging
-        if not real_trades and not shadow_trades:
-            self._log_no_trades_feedback(all_signals)
+                # Feedback logging
+                if not real_trades and not shadow_trades:
+                    self._log_no_trades_feedback(all_signals)
 
-        # Update statistics
-        self._stats["processed"] += 1
-        self._stats["real"] += len(real_trades)
-        self._stats["shadow"] += len(shadow_trades)
-        self._stats["ignored"] += len(all_signals) - len(real_trades) - len(shadow_trades)
+                # Update statistics
+                self._stats["processed"] += 1
+                self._stats["real"] += len(real_trades)
+                self._stats["shadow"] += len(shadow_trades)
+                self._stats["ignored"] += len(all_signals) - len(real_trades) - len(shadow_trades)
 
-        return real_trades
+                span.set_attribute("signals.real_final", len(real_trades))
+                return real_trades
+        else:
+            # Fallback when tracing disabled
+            # If vetoed, block all trades
+            if regime_assessment.is_vetoed():
+                self._stats["processed"] += 1
+                self._stats["regime_vetoed"] += 1
+                return []
+
+            # Execution Policy Veto Check
+            policy_veto = self.policy.check_vetoes()
+            if policy_veto:
+                logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
+                self._stats["processed"] += 1
+                self._stats["ignored"] += 1
+                return []
+
+            # R02: Validate contract types
+            valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
+            validated_signals = []
+            for sig in all_signals:
+                if sig.contract_type in valid_contract_types:
+                    validated_signals.append(sig)
+                else:
+                    logger.warning(f"Invalid contract type '{sig.contract_type}' - skipped")
+                    self._stats["ignored"] += 1
+            all_signals = validated_signals
+
+            real_trades, shadow_trades = get_actionable_signals(all_signals)
+
+            # Apply caution filter if needed
+            if regime_assessment.requires_caution():
+                self._stats["regime_caution"] += 1
+                logger.info(
+                    f"Regime caution active: demoting some trades. "
+                    f"reconstruction_error={reconstruction_error:.4f}"
+                )
+                
+                # Move real trades to shadow if confidence isn't very high
+                filtered_real = []
+                for signal in real_trades:
+                    caution_threshold = self.settings.thresholds.confidence_threshold_high + 0.05
+                    if signal.probability >= caution_threshold:
+                        filtered_real.append(signal)
+                    else:
+                        logger.info(f"Demoting CAUTION trade to shadow: {signal.probability:.3f}")
+                        shadow_trade = ShadowTrade(
+                            signal_type=signal.signal_type,
+                            contract_type=signal.contract_type,
+                            direction=signal.direction,
+                            probability=signal.probability,
+                            timestamp=signal.timestamp
+                        )
+                        shadow_trades.append(shadow_trade)
+                
+                real_trades = filtered_real
+                real_trades, demoted = self._apply_caution_filter(real_trades)
+                shadow_trades.extend(demoted)
+
+            # Feedback logging
+            if not real_trades and not shadow_trades:
+                self._log_no_trades_feedback(all_signals)
+
+            # Update statistics
+            self._stats["processed"] += 1
+            self._stats["real"] += len(real_trades)
+            self._stats["shadow"] += len(shadow_trades)
+            self._stats["ignored"] += len(all_signals) - len(real_trades) - len(shadow_trades)
+
+            return real_trades
 
 
     def get_regime_assessment(self, reconstruction_error: float) -> RegimeAssessmentProtocol:
@@ -468,15 +551,15 @@ class DecisionEngine:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
 
+        assessment = self.regime_veto.assess(reconstruction_error)
+        regime_state = self._get_regime_state_string(assessment)
+
         if self.tracer:
             with self.tracer.start_as_current_span("decision_engine.process_with_context") as span:
                 span.set_attribute("model_version", self.model_version)
                 span.set_attribute("reconstruction_error", reconstruction_error)
                 span.set_attribute("entry_price", entry_price)
-
-                # Get regime assessment
-                regime_assessment = self.regime_veto.assess(reconstruction_error)
-                span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
+                span.set_attribute("regime_state", regime_state)
 
                 # I02 Fix: Get all signals ONCE and reuse
                 all_signals = filter_signals(probs, self.settings, timestamp)
@@ -489,11 +572,11 @@ class DecisionEngine:
                             self._store_shadow_trade_async(
                                 signal=sig,
                                 reconstruction_error=reconstruction_error,
-                                regime_state=self._get_regime_state_string(regime_assessment),
+                                regime_state=regime_state,
                                 tick_window=tick_window,
                                 candle_window=candle_window,
                                 entry_price=entry_price,
-                                regime_vetoed=regime_assessment.is_vetoed(),
+                                regime_vetoed=assessment.is_vetoed(),
                                 metadata=market_data,
                             )
 
@@ -502,7 +585,7 @@ class DecisionEngine:
                     real_trades = await self._process_signals(
                         all_signals=all_signals,
                         reconstruction_error=reconstruction_error,
-                        regime_assessment=regime_assessment,
+                        regime_assessment=assessment,
                         timestamp=timestamp,
                         market_data=market_data,
                     )
@@ -516,17 +599,17 @@ class DecisionEngine:
                     self._store_shadow_trade_async(
                         signal=sig,
                         reconstruction_error=reconstruction_error,
-                        regime_state=self._get_regime_state_string(regime_assessment),
+                        regime_state=regime_state,
                         tick_window=tick_window,
                         candle_window=candle_window,
                         entry_price=entry_price,
-                        regime_vetoed=regime_assessment.is_vetoed(),
+                        regime_vetoed=assessment.is_vetoed(),
                         metadata=market_data,
                     )
             return await self._process_signals(
                 all_signals=all_signals,
                 reconstruction_error=reconstruction_error,
-                regime_assessment=regime_assessment,
+                regime_assessment=assessment,
                 timestamp=timestamp,
                 market_data=market_data,
             )
@@ -654,11 +737,7 @@ class DecisionEngine:
         """
         ID_BARRIER Fix: Safely extract and parse barrier value from metadata.
         
-        Handles:
-        - Floats/Ints
-        - Strings with '+' or '-' prefixes
-        - None values
-        - Invalid formats (returns None)
+        Now expects values to be numeric from Settings, or handles legacy strings.
         """
         if key not in metadata:
             return None
@@ -672,8 +751,7 @@ class DecisionEngine:
                 return float(value)
             
             if isinstance(value, str):
-                # Clean string: remove extra spaces and ensure it looks like a number
-                # Strip '+' but keep '-'
+                # Legacy support: strip '+' but keep '-'
                 clean_value = value.strip().replace("+", "")
                 if not clean_value:
                     return None

@@ -97,7 +97,7 @@ class TestShadowTrade:
             timestamp=datetime.now(timezone.utc),
         )
 
-        trade.update_outcome(outcome=True, exit_price=1.05, stake=10.0, payout=0.95)
+        trade = trade.with_outcome(outcome=True, exit_price=1.05, stake=10.0, payout=0.95)
 
         assert trade.outcome is True
         assert trade.pnl == 9.5  # 10 * 0.95
@@ -114,7 +114,7 @@ class TestShadowTrade:
             timestamp=datetime.now(timezone.utc),
         )
 
-        trade.update_outcome(outcome=False, exit_price=0.95, stake=10.0)
+        trade = trade.with_outcome(outcome=False, exit_price=0.95, stake=10.0)
 
         assert trade.outcome is False
         assert trade.pnl == -10.0
@@ -125,12 +125,24 @@ class TestDecisionEngine:
 
     @pytest.fixture
     def mock_settings(self):
-        """Create mock settings for decision engine."""
-        settings = MagicMock()
-        settings.thresholds.confidence_threshold_high = 0.75
-        settings.thresholds.learning_threshold_min = 0.40
-        settings.thresholds.learning_threshold_max = 0.60
-        return settings
+        """Create real settings for decision engine."""
+        from config.settings import Settings, Thresholds, ModelHyperparams, Trading
+        thresholds = Thresholds.model_construct(
+            confidence_threshold_high=0.75,
+            learning_threshold_min=0.40,
+            learning_threshold_max=0.60
+        )
+        hyperparams = ModelHyperparams.model_construct(
+            regime_caution_threshold=0.1,
+            regime_veto_threshold=0.3
+        )
+        trading = Trading.model_construct(symbol="R_100", stake_amount=10.0)
+        return Settings.model_construct(
+            thresholds=thresholds,
+            hyperparams=hyperparams,
+            trading=trading,
+            environment="development"
+        )
 
     def test_engine_initialization(self, mock_settings):
         """Engine should initialize with zero stats."""
@@ -151,12 +163,19 @@ class TestFilters:
 
     @pytest.fixture
     def mock_settings(self):
-        """Create mock settings for filters."""
-        settings = MagicMock()
-        settings.thresholds.confidence_threshold_high = 0.75
-        settings.thresholds.learning_threshold_min = 0.40
-        settings.thresholds.learning_threshold_max = 0.60
-        return settings
+        """Create real settings for filters."""
+        from config.settings import Settings, Thresholds, Trading
+        thresholds = Thresholds.model_construct(
+            confidence_threshold_high=0.75,
+            learning_threshold_min=0.40,
+            learning_threshold_max=0.60
+        )
+        trading = Trading.model_construct(symbol="R_100", stake_amount=10.0)
+        return Settings.model_construct(
+            thresholds=thresholds,
+            trading=trading,
+            environment="development"
+        )
 
     def test_high_confidence_becomes_real_trade(self, mock_settings):
         """High confidence signals should be REAL_TRADE."""
@@ -270,7 +289,8 @@ class TestRegimeVeto:
         assert assessment.is_vetoed()
         assert not assessment.requires_caution()
 
-    def test_regime_veto_blocks_high_confidence_trades(self):
+    @pytest.mark.asyncio
+    async def test_regime_veto_blocks_high_confidence_trades(self):
         """
         CRITICAL TEST: Regime veto MUST block trades even with 99% confidence.
 
@@ -279,11 +299,23 @@ class TestRegimeVeto:
         """
         from execution.decision import DecisionEngine
         from execution.regime import RegimeVeto
-
-        settings = MagicMock()
-        settings.thresholds.confidence_threshold_high = 0.75
-        settings.thresholds.learning_threshold_min = 0.40
-        settings.thresholds.learning_threshold_max = 0.60
+        from config.settings import Settings, Thresholds, ModelHyperparams, Trading
+        thresholds = Thresholds.model_construct(
+            confidence_threshold_high=0.75,
+            learning_threshold_min=0.40,
+            learning_threshold_max=0.60
+        )
+        hyperparams = ModelHyperparams.model_construct(
+            regime_caution_threshold=0.1,
+            regime_veto_threshold=0.3
+        )
+        trading = Trading.model_construct(symbol="R_100", stake_amount=10.0)
+        settings = Settings.model_construct(
+            thresholds=thresholds,
+            hyperparams=hyperparams,
+            trading=trading,
+            environment="development"
+        )
 
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         engine = DecisionEngine(settings, regime_veto=regime_veto)
@@ -294,7 +326,7 @@ class TestRegimeVeto:
         # But reconstruction error is above veto threshold
         reconstruction_error = 0.5  # Way above 0.3 threshold
 
-        trades = engine.process_model_output(probs, reconstruction_error)
+        trades = await engine.process_model_output(probs, reconstruction_error)
 
         # ABSOLUTE: No trades allowed, even with 99% confidence
         assert len(trades) == 0

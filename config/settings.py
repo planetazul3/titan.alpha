@@ -51,9 +51,17 @@ class Trading(BaseModel):
         gt=0.0,
         le=1.0
     )
-    barrier_offset: str = Field(default="+0.50", description="Barrier offset for Touch/No Touch and Range (High)")
-    barrier2_offset: str = Field(default="-0.50", description="Barrier2 offset for Range (Low)")
+    barrier_offset: float = Field(default=0.50, description="Barrier offset for Touch/No Touch and Range (High)")
+    barrier2_offset: float = Field(default=-0.50, description="Barrier2 offset for Range (Low)")
     stale_candle_threshold: float = Field(default=5.0, description="Max latency (s) before skipping candle", gt=0.0)
+
+    @field_validator("barrier_offset", "barrier2_offset")
+    @classmethod
+    def validate_barrier(cls, v: float) -> float:
+        """Ensure barrier offsets are within sane ranges."""
+        if abs(v) > 10.0:
+            raise ValueError(f"Barrier offset {v} exceeds expected range (±10.0)")
+        return v
 
 
 class Thresholds(BaseModel):
