@@ -35,6 +35,28 @@ class MultiTaskLoss(nn.Module):
         self.bce = nn.BCEWithLogitsLoss(reduction="mean")
         self.mse = nn.MSELoss(reduction="mean")
 
+        # Uncertainty weighting parameters (Kendall et al. 2018)
+        # log(sigma^2) for each task: rise_fall, touch, range, reconstruction
+        self.log_vars = nn.Parameter(torch.zeros(4))
+
+    def compute_weighted_loss(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Compute weighted total loss using learned uncertainty weights.
+        
+        Formula: L = sum( exp(-s_i) * L_i + 0.5 * s_i )
+        where s_i = log(sigma_i^2)
+        """
+        task_keys = ["rise_fall", "touch", "range", "reconstruction"]
+        total = 0
+        
+        for i, key in enumerate(task_keys):
+            if key in losses:
+                # Weighted loss term
+                precision = torch.exp(-self.log_vars[i])
+                total += precision * losses[key] + 0.5 * self.log_vars[i]
+                
+        return total
+
     def forward(
         self,
         logits: dict[str, torch.Tensor],
@@ -76,13 +98,19 @@ class MultiTaskLoss(nn.Module):
             )
 
         # Autoencoder reconstruction loss
-        if vol_input is not None and vol_reconstruction is not None:
+        # Check if 'vol_reconstruction' is in logits/outputs dict
+        recon_out = vol_reconstruction if vol_reconstruction is not None else logits.get("vol_reconstruction")
+        
+        if vol_input is not None and recon_out is not None:
             losses["reconstruction"] = (
-                self.mse(vol_reconstruction, vol_input) * self.weights["reconstruction"]
+                self.mse(recon_out, vol_input) * self.weights["reconstruction"]
             )
 
         # Total loss
-        losses["total"] = sum(losses.values())
+        if hasattr(self, "log_vars") and self.log_vars.requires_grad:
+            losses["total"] = self.compute_weighted_loss(losses)
+        else:
+            losses["total"] = sum(losses.values())
 
         return losses
 

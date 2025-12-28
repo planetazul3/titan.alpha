@@ -135,6 +135,7 @@ class DerivOmniModel(nn.Module):
             "rise_fall_logit": self.heads["rise_fall"](context),
             "touch_logit": self.heads["touch"](context),
             "range_logit": self.heads["range"](context),
+            "vol_reconstruction": self.volatility.reconstruct(vol_metrics),
         }
 
         return logits
