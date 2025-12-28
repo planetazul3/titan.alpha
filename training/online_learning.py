@@ -168,22 +168,47 @@ class FisherInformation:
             if num_samples and n_samples >= num_samples:
                 break
             
-            # Forward pass
-            inputs, targets = batch[:-1], batch[-1]
-            outputs = self.model(*inputs)
-            
-            # Get loss based on output type
-            if isinstance(outputs, dict):
-                # Multi-head output
-                loss = sum(
-                    loss_fn(outputs[k].squeeze(), targets)
-                    for k in outputs if "logit" in k
-                )
+            # Forward pass - Handle both dict and tensor-list batches
+            if isinstance(batch, dict):
+                ticks = batch["ticks"].to(next(self.model.parameters()).device)
+                candles = batch["candles"].to(next(self.model.parameters()).device)
+                vol_metrics = batch["vol_metrics"].to(next(self.model.parameters()).device)
+                targets = {k: v.to(next(self.model.parameters()).device) for k, v in batch["targets"].items()}
+                
+                outputs = self.model(ticks, candles, vol_metrics)
+                
+                # Multi-head loss for EWC
+                # If using the standard multi-task criterion, pass dicts
+                try:
+                    loss_dict = loss_fn(outputs, targets, vol_metrics)
+                    loss = loss_dict["total"] if isinstance(loss_dict, dict) else loss_dict
+                except Exception:
+                    # Fallback to summing Individual logit losses
+                    loss = 0
+                    for k in outputs:
+                        if "logit" in k:
+                            target_key = k.replace("_logit", "")
+                            if target_key in targets:
+                                loss += nn.functional.binary_cross_entropy_with_logits(
+                                    outputs[k].squeeze(), targets[target_key].float()
+                                )
             else:
-                # Squeeze to match target shape
-                if outputs.dim() > 1 and outputs.size(-1) == 1:
-                    outputs = outputs.squeeze(-1)
-                loss = loss_fn(outputs, targets)
+                # Fallback for tensor datasets
+                inputs, targets = batch[:-1], batch[-1]
+                inputs = [i.to(next(self.model.parameters()).device) for i in inputs]
+                targets = targets.to(next(self.model.parameters()).device)
+                
+                outputs = self.model(*inputs)
+                
+                if isinstance(outputs, dict):
+                    loss = sum(
+                        loss_fn(outputs[k].squeeze(), targets)
+                        for k in outputs if "logit" in k
+                    )
+                else:
+                    if outputs.dim() > 1 and outputs.size(-1) == 1:
+                        outputs = outputs.squeeze(-1)
+                    loss = loss_fn(outputs, targets)
             
             # Backward to get gradients
             self.model.zero_grad()
@@ -200,7 +225,25 @@ class FisherInformation:
         for name in self._fisher:
             self._fisher[name] /= n_samples
         
-        logger.info(f"Computed Fisher Information over {n_samples} samples")
+        # Clamp Fisher values to prevent extreme values that could destabilize EWC
+        fisher_min = 1e-8  # Prevent division issues
+        fisher_max = 1e6   # Prevent extreme penalties
+        total_clamped = 0
+        total_params = 0
+        for name in self._fisher:
+            original = self._fisher[name]
+            self._fisher[name] = torch.clamp(original, min=fisher_min, max=fisher_max)
+            total_clamped += (original != self._fisher[name]).sum().item()
+            total_params += original.numel()
+        
+        # Log Fisher statistics for debugging
+        all_fisher = torch.cat([f.flatten() for f in self._fisher.values()])
+        logger.info(
+            f"Computed Fisher Information over {n_samples} samples. "
+            f"Stats: mean={all_fisher.mean():.4e}, std={all_fisher.std():.4e}, "
+            f"min={all_fisher.min():.4e}, max={all_fisher.max():.4e}, "
+            f"clamped={total_clamped}/{total_params} ({100*total_clamped/total_params:.2f}%)"
+        )
     
     def get_fisher(self, name: str) -> torch.Tensor | None:
         """Get Fisher values for a parameter."""

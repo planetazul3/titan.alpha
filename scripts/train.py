@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import logging
 import argparse
 import torch
+import random
+import numpy as np
 from torch.utils.data import DataLoader, random_split
 
 from config.settings import load_settings
@@ -27,6 +29,16 @@ from training.trainer import Trainer, TrainerConfig
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def set_seed(seed: int = 42):
+    """Set all seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    logger.info(f"RNG seeds set to {seed}")
+
 def main():
     parser = argparse.ArgumentParser(description="Train DerivOmniModel")
     parser.add_argument("--data-path", type=Path, required=True, help="Path to training data (parquet)")
@@ -34,7 +46,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (overrides settings)")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate (overrides settings)")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Checkpoint directory")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
+
+    set_seed(args.seed)
 
     settings = load_settings()
     
@@ -53,14 +68,21 @@ def main():
     train_size = int(0.8 * total_len)
     
     # Gap to ensure no overlap in sliding windows
-    # dataset.candle_len is the sequence length
-    gap = settings.data_shapes.sequence_length_candles + dataset.lookahead
+    # Must account for: sequence_length + warmup_steps + lookahead
+    gap = settings.data_shapes.sequence_length_candles + settings.data_shapes.warmup_steps + dataset.lookahead
     
     val_start = train_size + gap
     
     if val_start >= total_len:
-        logger.warning("Dataset too small for proper temporal split with gap! Reducing gap/train size.")
-        val_start = train_size # Fallback (risky but better than crashing)
+        # STRICT: Fail instead of falling back to risky split that could cause data leakage
+        min_required = int(gap / 0.2) + 1  # Minimum dataset size for 80/20 split with gap
+        raise ValueError(
+            f"Dataset too small for proper temporal split with gap! "
+            f"Have {total_len} samples, need at least {min_required}. "
+            f"Gap = {gap} (seq_len={settings.data_shapes.sequence_length_candles} + "
+            f"warmup={settings.data_shapes.warmup_steps} + lookahead={dataset.lookahead}). "
+            f"Either increase dataset size or reduce sequence_length/warmup_steps."
+        )
     
     train_indices = list(range(0, train_size))
     val_indices = list(range(val_start, total_len))
@@ -79,15 +101,18 @@ def main():
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, # Shuffle WITHIN the training set is fine
+        drop_last=True,  # Ensure consistent batch sizes
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True
     )
     
     # Initialize model
@@ -98,6 +123,7 @@ def main():
         epochs=epochs,
         learning_rate=lr,
         checkpoint_dir=args.checkpoint_dir,
+        ewc_sample_size=settings.hyperparams.ewc_sample_size # Added this line
     )
     
     # Initialize trainer
@@ -105,7 +131,8 @@ def main():
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        config=config
+        config=config,
+        settings=settings
     )
     
     # Run training

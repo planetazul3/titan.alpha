@@ -19,7 +19,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -50,11 +50,16 @@ class TrainerConfig:
     log_dir: Path = field(default_factory=lambda: Path("logs/tensorboard"))
     save_every: int = 5
     early_stop_patience: int = 10
+    early_stop_min_delta: float = 1e-4
     gradient_clip: float = 1.0
 
-    # Advanced training options (backward compatible defaults)
-    use_amp: bool = True  # Enable Automatic Mixed Precision on CUDA
-    gradient_accumulation_steps: int = 1  # 1 = no accumulation
+    # Advanced training options
+    use_amp: bool = True
+    use_uncertainty_loss: bool = True  # Learned loss weights
+    gradient_accumulation_steps: int = 1
+    
+    # EWC
+    ewc_sample_size: int = 2000
 
 
 class Trainer:
@@ -80,12 +85,22 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: DataLoader,
         config: TrainerConfig,
+        settings: Any = None,  # Pass full settings for advanced config
         device: torch.device | None = None,
     ):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
+        
+        # Optimize model with torch.compile if available and not skipped (PyTorch 2.0+)
+        # We check for the attribute first to be safe
+        if hasattr(torch, "compile") and device and device.type == "cuda":
+            logger.info("Compiling model with torch.compile for performance...")
+            try:
+                self.model = torch.compile(self.model)
+            except Exception as e:
+                logger.warning(f"Model compilation failed, falling back to eager mode: {e}")
 
         # Device setup
         if device is None:
@@ -93,16 +108,37 @@ class Trainer:
         self.device = device
         self.model.to(device)
 
-        # Loss and optimizer
-        self.criterion = MultiTaskLoss()
+        # Multi-task loss
+        self.criterion = MultiTaskLoss().to(device)
+
+        # Optimizer (include model and criterion parameters if learnable)
+        trainable_params = list(model.parameters())
+        if config.use_uncertainty_loss:
+            trainable_params += list(self.criterion.parameters())
+
         self.optimizer = AdamW(
-            model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+            trainable_params, lr=config.learning_rate, weight_decay=config.weight_decay
         )
 
-        # Learning rate scheduler
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer, T_max=config.epochs - config.warmup_epochs, eta_min=1e-6
-        )
+        # Learning rate scheduler with proper warmup (S01)
+        # 1. Linear warmup from lr/10 to lr
+        warmup_steps = config.warmup_epochs
+        if warmup_steps > 0:
+            warmup_scheduler = LinearLR(
+                self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps
+            )
+            # 2. Cosine annealing from lr to eta_min
+            main_scheduler = CosineAnnealingLR(
+                self.optimizer, T_max=config.epochs - warmup_steps, eta_min=1e-6
+            )
+            # Combine them
+            self.scheduler = SequentialLR(
+                self.optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_steps]
+            )
+        else:
+            self.scheduler = CosineAnnealingLR(
+                self.optimizer, T_max=config.epochs, eta_min=1e-6
+            )
 
         # Mixed Precision Training setup
         self.use_amp = config.use_amp and device.type == "cuda"
@@ -112,8 +148,9 @@ class Trainer:
         # Gradient accumulation
         self.accumulation_steps = config.gradient_accumulation_steps
 
-        # Metrics tracker
-        self.metrics = TradingMetrics()
+        # Metrics trackers for multiple tasks
+        self.task_names = ["rise_fall", "touch", "range"]
+        self.task_metrics = {name: TradingMetrics() for name in self.task_names}
         
         # EWC State
         self.fisher_info: FisherInformation | None = None
@@ -129,6 +166,8 @@ class Trainer:
         self.global_step = 0
         self.best_val_loss = float("inf")
         self.patience_counter = 0
+        self._consecutive_nan_count = 0  # Track consecutive NaN losses
+        self._max_consecutive_nans = 10  # Threshold to halt training
 
         # Create checkpoint directory
         config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -191,9 +230,8 @@ class Trainer:
             # Validation phase
             val_loss, val_metrics = self._validate_epoch()
 
-            # Learning rate scheduling (after warmup)
-            if epoch >= self.config.warmup_epochs:
-                self.scheduler.step()
+            # Learning rate scheduling
+            self.scheduler.step()
 
             # Logging
             lr = self.optimizer.param_groups[0]["lr"]
@@ -207,18 +245,29 @@ class Trainer:
                 self.writer.add_scalar("Loss/train", train_loss, epoch)
                 self.writer.add_scalar("Loss/val", val_loss, epoch)
                 self.writer.add_scalar("LR", lr, epoch)
-                for k, v in val_metrics.items():
-                    self.writer.add_scalar(f"Metrics/{k}", v, epoch)
+                
+                # Log uncertainty weights if used
+                if self.config.use_uncertainty_loss:
+                    for i, name in enumerate(["rise_fall", "touch", "range", "reconstruction"]):
+                        sigma = torch.exp(self.criterion.log_vars[i] * 0.5).item()
+                        self.writer.add_scalar(f"Uncertainty/sigma_{name}", sigma, epoch)
+
+                # Log all task metrics
+                for name, metrics in val_metrics.items():
+                    for metric_name, value in metrics.items():
+                        if isinstance(value, (int, float)):
+                            self.writer.add_scalar(f"Metrics_{name}/{metric_name}", value, epoch)
 
             # Checkpointing
             if (epoch + 1) % self.config.save_every == 0:
                 self._save_checkpoint(f"epoch_{epoch + 1}.pt")
 
-            # Best model saving
-            if val_loss < self.best_val_loss:
+            # Best model saving with min_delta (ES01)
+            if val_loss < self.best_val_loss - self.config.early_stop_min_delta:
                 self.best_val_loss = val_loss
                 self._save_checkpoint("best_model.pt")
                 self.patience_counter = 0
+                logger.info(f"  New best model saved! (Val Loss: {val_loss:.4f})")
             else:
                 self.patience_counter += 1
 
@@ -230,11 +279,21 @@ class Trainer:
         elapsed = time.time() - start_time
         logger.info(f"Training complete in {elapsed / 60:.1f} minutes")
 
+        # Restore best weights (ES02)
+        best_path = self.config.checkpoint_dir / "best_model.pt"
+        if best_path.exists():
+            logger.info("Restoring best model weights for final evaluation...")
+            self.load_checkpoint(best_path)
+
         # Compute Fisher Information on training data for EWC
         logger.info("Computing Fisher Information for EWC...")
         self.fisher_info = FisherInformation(self.model)
-        # Use a subset of training data for efficiency (e.g., 2000 samples)
-        self.fisher_info.compute(self.train_loader, self.criterion, num_samples=2000)
+        # Use a subset of training data for efficiency
+        self.fisher_info.compute(
+            self.train_loader, 
+            self.criterion, 
+            num_samples=self.config.ewc_sample_size
+        )
 
         # Save final model with Fisher info
         self._save_checkpoint("final_model.pt")
@@ -258,6 +317,7 @@ class Trainer:
         # Reset gradients at start
         self.optimizer.zero_grad(set_to_none=True)
 
+        n_batches = len(self.train_loader)
         progress_bar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
         for batch_idx, batch in enumerate(progress_bar):
             # Move to device with non-blocking transfer for async
@@ -278,20 +338,57 @@ class Trainer:
                 if self.accumulation_steps > 1:
                     loss = loss / self.accumulation_steps
 
+            # CRITICAL: Check for NaN/Inf loss with enhanced monitoring
+            if not torch.isfinite(loss):
+                self._consecutive_nan_count += 1
+                # Log scaler state for debugging AMP issues
+                scaler_scale = self.scaler.get_scale() if self.use_amp else 1.0
+                logger.warning(
+                    f"Loss is {loss.item()} (non-finite) at step {self.global_step}. "
+                    f"Consecutive NaN count: {self._consecutive_nan_count}, "
+                    f"Scaler scale: {scaler_scale:.2e}"
+                )
+                if self.writer:
+                    self.writer.add_scalar("Debug/nan_count", self._consecutive_nan_count, self.global_step)
+                    self.writer.add_scalar("Debug/scaler_scale", scaler_scale, self.global_step)
+                
+                # Halt training if too many consecutive NaNs
+                if self._consecutive_nan_count >= self._max_consecutive_nans:
+                    raise RuntimeError(
+                        f"Training halted: {self._consecutive_nan_count} consecutive NaN losses. "
+                        f"Check learning rate, data, or reduce AMP precision."
+                    )
+                
+                self.optimizer.zero_grad(set_to_none=True)
+                # Log that we skipped this batch
+                if self.writer:
+                    self.writer.add_scalar("Debug/batch_skipped", 1, self.global_step)
+                continue
+            
+            # Reset NaN counter on successful finite loss
+            self._consecutive_nan_count = 0
+
             # Backward pass with gradient scaling
             self.scaler.scale(loss).backward()
 
-            # Update weights every accumulation_steps
-            if (batch_idx + 1) % self.accumulation_steps == 0:
+            # Update weights every accumulation_steps OR on the last batch
+            is_accumulation_step = (batch_idx + 1) % self.accumulation_steps == 0
+            is_last_batch = (batch_idx + 1) == n_batches
+            
+            if is_accumulation_step or is_last_batch:
                 # Unscale gradients before clipping
                 self.scaler.unscale_(self.optimizer)
 
                 # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
 
                 # Optimizer step with scaler
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+
+                # Log grad norm to TB
+                if self.writer and self.global_step % 10 == 0:
+                    self.writer.add_scalar("Grad/norm", grad_norm, self.global_step)
 
                 # Reset gradients
                 self.optimizer.zero_grad(set_to_none=True)
@@ -312,12 +409,12 @@ class Trainer:
 
         return total_loss / num_batches
 
-    @torch.no_grad()
-    def _validate_epoch(self) -> tuple:
-        """Run validation epoch."""
+    def _validate_epoch(self) -> tuple[float, dict[str, dict[str, float]]]:
+        """Run validation epoch with multi-task metrics."""
         self.model.eval()
         total_loss = 0.0
-        self.metrics.reset()
+        for m in self.task_metrics.values():
+            m.reset()
 
         for batch in tqdm(self.val_loader, desc="Validation", leave=False):
             # Move to device with non-blocking transfer
@@ -335,36 +432,46 @@ class Trainer:
 
             total_loss += losses["total"].item()
 
-            # Track predictions for metrics (use rise_fall as primary)
-            rise_fall_logit = outputs.get("rise_fall_logit")
-            rise_fall_target = targets.get("rise_fall")
-
-            if rise_fall_logit is not None and rise_fall_target is not None:
-                # Convert logit to probability for metrics
-                rise_fall_prob = torch.sigmoid(rise_fall_logit.float())
-                self.metrics.update(rise_fall_prob, rise_fall_target)
+            # Track predictions for ALL metrics
+            for name in self.task_names:
+                logit = outputs.get(f"{name}_logit")
+                target = targets.get(name)
+                if logit is not None and target is not None:
+                    prob = torch.sigmoid(logit.float())
+                    self.task_metrics[name].update(prob, target)
 
         val_loss = total_loss / len(self.val_loader)
-        metrics = self.metrics.compute()
+        
+        # Compute metrics for each task
+        all_metrics = {}
+        for name, tracker in self.task_metrics.items():
+            task_stats = tracker.compute()
+            for metric_name, val in task_stats.items():
+                all_metrics[f"{name}/{metric_name}"] = val
 
-        return val_loss, metrics
+        return val_loss, all_metrics
 
     def _save_checkpoint(self, filename: str):
-        """Save model checkpoint with full training state."""
+        """Save model checkpoint with full training state (Atomic)."""
+        import os
         path = self.config.checkpoint_dir / filename
-        torch.save(
-            {
-                "epoch": self.current_epoch,
-                "global_step": self.global_step,
-                "model_state_dict": self.model.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "scaler_state_dict": self.scaler.state_dict(),  # Save AMP scaler state
-                "fisher_state_dict": self.fisher_info.state_dict() if self.fisher_info else None,
-                "best_val_loss": self.best_val_loss,
-                "config": self.config,
-            },
-            path,
-        )
+        temp_path = path.with_suffix(".tmp")
+        
+        state = {
+            "epoch": self.current_epoch,
+            "global_step": self.global_step,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
+            "scaler_state_dict": self.scaler.state_dict(),  # Save AMP scaler state
+            "fisher_state_dict": self.fisher_info.state_dict() if self.fisher_info else None,
+            "best_val_loss": self.best_val_loss,
+            "config": self.config,
+        }
+        
+        # Atomic write
+        torch.save(state, temp_path)
+        os.replace(temp_path, path)
         logger.info(f"Saved checkpoint to {path}")
 
     def load_checkpoint(self, path: Path):
