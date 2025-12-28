@@ -81,6 +81,10 @@ class TradingMetrics:
         # ROC-AUC (simplified)
         auc = self._compute_auc(preds, targets)
 
+        # Trading metrics
+        pf = compute_profit_factor(preds, targets, threshold)
+        ev = compute_expected_value(preds, targets, threshold)
+
         return {
             "accuracy": accuracy,
             "precision": precision,
@@ -89,6 +93,8 @@ class TradingMetrics:
             "win_rate": win_rate,
             "brier_score": brier,
             "auc": auc,
+            "profit_factor": pf,
+            "expected_value": ev,
             "total_samples": len(targets),
             "positive_rate": np.mean(targets),
         }
