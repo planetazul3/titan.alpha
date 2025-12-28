@@ -44,6 +44,10 @@ coverage/
 logs/
 data_cache/
 checkpoints/
+coverage_reports/
+python-deriv-api/
+test_data/
+unica.md
 # Exclude data artifacts inside data/ but NOT the Python source files
 data/*.csv
 data/*.parquet

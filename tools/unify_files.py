@@ -89,6 +89,7 @@ DEFAULT_EXCLUDED_DIRS = {
     "cover",
     "coverage",
     "logs",
+    "coverage_reports",
     "data_cache",  # Note: 'data/' contains source code, only exclude 'data_cache/'
 }
 

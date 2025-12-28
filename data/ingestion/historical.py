@@ -26,6 +26,7 @@ from data.ingestion.versioning import (
     DatasetMetadata,
     compute_checksum,
     create_metadata,
+    get_metadata_path,
     load_metadata,
     save_metadata,
 )
@@ -40,6 +41,15 @@ try:
 except ImportError:
     HAS_PANDAS = False
     logger.warning("pandas not installed - Parquet storage disabled")
+
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    HAS_PYARROW = True
+except ImportError:
+    HAS_PYARROW = False
+    logger.warning("pyarrow not installed - Incremental storage disabled")
 
 
 def epoch_to_month_key(epoch: int) -> str:
@@ -75,6 +85,77 @@ def get_month_boundaries(
     return boundaries
 
 
+class TokenBucket:
+    """
+    Token Bucket algorithm for rate limiting.
+    Allows for bursts while maintaining a steady average rate.
+    """
+    def __init__(self, tokens_per_second: float, burst_multiplier: float = 1.0):
+        self.capacity = tokens_per_second * burst_multiplier
+        self.tokens = self.capacity
+        self.refill_rate = tokens_per_second
+        self.last_refill = time.time()
+
+    async def consume(self, amount: float = 1.0):
+        while self.tokens < amount:
+            self._refill()
+            if self.tokens < amount:
+                # Wait for just enough time to get one token or the remaining amount
+                await asyncio.sleep(max(0.01, (amount - self.tokens) / self.refill_rate))
+        
+        self.tokens -= amount
+
+    def _refill(self):
+        now = time.time()
+        elapsed = now - self.last_refill
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_refill = now
+
+
+class IncrementalWriter:
+    """Helper to write Parquet files incrementally using PyArrow."""
+    def __init__(self, filepath: Path, data_type: str):
+        self.filepath = filepath
+        self.data_type = data_type
+        self.writer = None
+        self.schema = None
+        self._temp_path = filepath.with_suffix(".inc.parquet")
+
+    def write_chunk(self, data: list[dict]):
+        if not data:
+            return
+            
+        df = pd.DataFrame(data)
+        # Optimize dtypes
+        if self.data_type == "ticks":
+            df["epoch"] = df["epoch"].astype("int64")
+            df["quote"] = df["quote"].astype("float64")
+        elif self.data_type == "candles":
+            df["epoch"] = df["epoch"].astype("int64")
+            for col in ["open", "high", "low", "close"]:
+                if col in df.columns:
+                    df[col] = df[col].astype("float64")
+
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        
+        if self.writer is None:
+            self.schema = table.schema
+            self.writer = pq.ParquetWriter(self._temp_path, self.schema)
+            
+        self.writer.write_table(table)
+
+    def close(self):
+        if self.writer:
+            self.writer.close()
+            self.writer = None
+        return self._temp_path if self._temp_path.exists() else None
+
+    def cleanup(self):
+        self.close()
+        if self._temp_path.exists():
+            self._temp_path.unlink()
+
+
 class PartitionedDownloader:
     """
     Memory-safe downloader that streams data to disk in monthly partitions.
@@ -105,9 +186,11 @@ class PartitionedDownloader:
         self.symbol = symbol
         self.cache_dir = Path(cache_dir)
 
-        # Create symbol-specific directories
         self.symbol_dir = self.cache_dir / symbol
         self.symbol_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Rate limiter: 5 requests per second (Deriv allows ~10-20, so 5 is safe)
+        self.rate_limiter = TokenBucket(tokens_per_second=5.0, burst_multiplier=2.0)
 
     def _get_partition_dir(self, data_type: str, granularity: int | None = None) -> Path:
         """Get the partition directory for a data type."""
@@ -131,87 +214,147 @@ class PartitionedDownloader:
     def find_resume_point(self, data_type: str, granularity: int | None = None) -> int | None:
         """
         Find the latest epoch from existing partitions for resume capability.
+        Verifies checksums of existing partitions to ensure resume data is valid.
 
         Returns:
-            Latest end_epoch + 1 if partitions exist, None otherwise.
+            Latest end_epoch + 1 if partitions exist and are valid, None otherwise.
         """
+        from data.ingestion.versioning import verify_checksum
+        
         partition_dir = self._get_partition_dir(data_type, granularity)
 
         latest_epoch = None
-        for parquet_file in partition_dir.glob("*.parquet"):
+        latest_file = None
+        
+        # Sort partitions by name (YYYY-MM) to find the most recent one
+        parquet_files = sorted(partition_dir.glob("*.parquet"))
+        
+        for parquet_file in reversed(parquet_files):
             metadata = load_metadata(parquet_file)
-            if metadata and metadata.end_epoch:
-                if latest_epoch is None or metadata.end_epoch > latest_epoch:
-                    latest_epoch = metadata.end_epoch
+            if not metadata or not metadata.end_epoch:
+                continue
+                
+            # Verify checksum if present in metadata
+            if metadata.sha256:
+                if not verify_checksum(parquet_file, metadata.sha256):
+                    logger.warning(f"Checksum validation failed for {parquet_file.name}, skipping resume from this partition")
+                    continue
+            
+            if latest_epoch is None or metadata.end_epoch > latest_epoch:
+                latest_epoch = metadata.end_epoch
+                latest_file = parquet_file
 
         if latest_epoch:
-            logger.info(f"Found existing data up to epoch {latest_epoch}, will resume from there")
+            logger.info(f"Found valid existing data in {latest_file.name} up to epoch {latest_epoch}")
             return latest_epoch + 1
 
         return None
 
     def _save_partition(
         self,
-        data: list[dict],
+        data: list[dict] | pd.DataFrame,
         data_type: str,
         month_key: str,
         granularity: int | None = None,
         download_duration: float | None = None,
+        incremental_file: Path | None = None,
     ) -> tuple[Path, DatasetMetadata]:
         """
         Save a monthly partition with integrity checks and metadata.
+        Uses the Write-Rename pattern for atomic storage.
+        If incremental_file is provided, it merges it with data.
+        Accepts both list of dicts and pandas DataFrames.
         """
         if not HAS_PANDAS:
             raise RuntimeError("pandas required for Parquet storage")
 
-        if not data:
+        # Convert to DataFrame if needed
+        if isinstance(data, list):
+            df = pd.DataFrame(data)
+        else:
+            df = data
+
+        # Merge incremental data if it exists
+        if incremental_file and incremental_file.exists():
+            try:
+                inc_df = pd.read_parquet(incremental_file)
+                df = pd.concat([inc_df, df], ignore_index=True)
+                # Cleanup temp inc file
+                incremental_file.unlink()
+            except Exception as e:
+                logger.error(f"Failed to read incremental file {incremental_file}: {e}")
+
+        if df.empty:
             raise ValueError("Cannot save an empty partition: no data provided.")
 
-        # Run integrity checks
-        checker = IntegrityChecker()
-        if data_type == "ticks":
-            cleaned_data, report = checker.generate_report(
-                data, data_type="ticks", auto_dedupe=True
-            )
-        else:
-            cleaned_data, report = checker.generate_report(
-                data, data_type="candles", granularity=granularity, auto_dedupe=True
-            )
+        # Sort by epoch and deduplicate
+        df = df.sort_values("epoch").drop_duplicates(subset=["epoch"], keep="first")
 
-        logger.info(f"Partition {month_key}: {report}")
-
-        # Save to Parquet
+        # Create temporary path for atomic write
         filepath = self._get_partition_path(data_type, month_key, granularity)
-        df = pd.DataFrame(cleaned_data)
-        
-        # Optimize dtypes for RAM if possible
-        if data_type == "ticks":
+        temp_filepath = filepath.with_suffix(".tmp.parquet")
+
+        try:
+            # Run integrity check on final merged data
+            # (Note: converting to dict for now to maintain IntegrityChecker compatibility)
+            data_for_check = df.to_dict("records")
+            checker = IntegrityChecker()
+            cleaned_data, report = checker.generate_report(
+                data_for_check, data_type=data_type, granularity=granularity
+            )
+            
+            # Re-convert to DataFrame if deduplication happened in checker
+            if report.duplicates_removed > 0:
+                df = pd.DataFrame(cleaned_data)
+
+            # Optimize dtypes before saving
             df["epoch"] = df["epoch"].astype("int64")
-            df["quote"] = df["quote"].astype("float64")
-        elif data_type == "candles":
-            df["epoch"] = df["epoch"].astype("int64")
-            for col in ["open", "high", "low", "close"]:
-                if col in df.columns:
-                    df[col] = df[col].astype("float64")
+            if data_type == "ticks":
+                df["quote"] = df["quote"].astype("float64")
+            elif data_type == "candles":
+                for col in ["open", "high", "low", "close"]:
+                    if col in df.columns:
+                        df[col] = df[col].astype("float64")
 
-        df.to_parquet(filepath, index=False)
-        file_size = os.path.getsize(filepath)
-        logger.info(f"Saved {len(cleaned_data)} records to {filepath} ({file_size / 1024 / 1024:.2f} MB)")
+            # Write to temporary file with compression
+            df.to_parquet(temp_filepath, index=False, engine="pyarrow", compression="zstd")
+            file_size = os.path.getsize(temp_filepath)
+            
+            # Create metadata
+            from data.ingestion.versioning import compute_checksum
+            
+            metadata = create_metadata(
+                symbol=self.symbol,
+                data_type=data_type,
+                records=cleaned_data,
+                granularity=granularity,
+                gaps_detected=report.gaps_detected,
+                duplicates_removed=report.duplicates_removed,
+                download_duration=download_duration,
+            )
+            metadata.file_size = file_size
+            
+            # Compute checksum for integrity tracking
+            metadata.sha256 = compute_checksum(temp_filepath)
+            
+            # Save metadata first (if it fails, parquet is still temp)
+            save_metadata(temp_filepath, metadata)
+            
+            # Atomic swap
+            os.rename(temp_filepath, filepath)
+            os.rename(get_metadata_path(temp_filepath), get_metadata_path(filepath))
+            
+            logger.info(f"Saved {len(cleaned_data)} records to {filepath} ({file_size / 1024 / 1024:.2f} MB)")
+            return filepath, metadata
 
-        # Create and save metadata
-        metadata = create_metadata(
-            symbol=self.symbol,
-            data_type=data_type,
-            records=cleaned_data,
-            granularity=granularity,
-            gaps_detected=report.gaps_detected,
-            duplicates_removed=report.duplicates_removed,
-            download_duration=download_duration,
-        )
-        metadata.file_size = file_size
-        save_metadata(filepath, metadata)
-
-        return filepath, metadata
+        except Exception as e:
+            logger.error(f"Failed to save partition {month_key} atomically: {e}")
+            if temp_filepath.exists():
+                temp_filepath.unlink()
+            meta_temp = get_metadata_path(temp_filepath)
+            if meta_temp.exists():
+                meta_temp.unlink()
+            raise
 
     async def download_ticks_partitioned(
         self,
@@ -236,131 +379,141 @@ class PartitionedDownloader:
         """
         partition_files = []
 
-        # Check for resume point
-        if resume:
-            resume_epoch = self.find_resume_point("ticks")
-            if resume_epoch and resume_epoch > int(start_time.timestamp()):
-                new_start = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
-                if new_start < end_time:
-                    start_time = new_start
-                    logger.info(f"Resuming tick download from {start_time}")
-                else:
-                    logger.info("Tick data is already up to date, skipping download")
-                    return []
-
         # Get monthly boundaries
         boundaries = get_month_boundaries(start_time, end_time)
         total_months = len(boundaries)
 
         for month_idx, (month_start, month_end) in enumerate(boundaries):
             month_key = month_start.strftime("%Y-%m")
+            
+            # Per-month resume check
+            filepath = self._get_partition_path("ticks", month_key)
+            if resume and filepath.exists():
+                # Verify if it's complete
+                metadata = load_metadata(filepath)
+                if metadata and metadata.end_epoch >= int(month_end.timestamp()) - 1:
+                    logger.info(f"Partition {month_key} already exists and is complete, skipping")
+                    partition_files.append(filepath)
+                    continue
+                else:
+                    logger.info(f"Partition {month_key} exists but may be incomplete, re-downloading")
+
             logger.info(f"Downloading ticks for {month_key} ({month_idx + 1}/{total_months})")
 
             partition_start = time.time()
             month_ticks = []
+            
+            # Setup incremental writer if needed
+            inc_file_path = self._get_partition_path("ticks", month_key)
+            inc_writer = IncrementalWriter(inc_file_path, "ticks") if HAS_PYARROW else None
 
             current_end = int(month_end.timestamp())
             start_epoch = int(month_start.timestamp())
-            total_seconds = current_end - start_epoch
 
             while current_end > start_epoch:
+                # Rate limit requests
+                await self.rate_limiter.consume(1.0)
+                
                 retry_count = 0
                 max_retries = 5
 
                 while retry_count < max_retries:
                     try:
-                        # Add timeout to prevent indefinite hangs
+                        # Backward download within the month range
+                        # Providing BOTH start and end is more robust for historical data
                         response = await asyncio.wait_for(
                             self.client.api.ticks_history(
                                 {
                                     "ticks_history": self.symbol,
-                                    "count": self.MAX_TICKS_PER_REQUEST,
-                                    "end": current_end,
                                     "start": start_epoch,
+                                    "end": str(current_end),
                                     "style": "ticks",
+                                    "count": self.MAX_TICKS_PER_REQUEST,
                                 }
                             ),
-                            timeout=30.0,  # 30 second timeout
+                            timeout=30.0,
                         )
-                        break  # Success, exit retry loop
+                        break  # Success
 
                     except asyncio.TimeoutError:
                         retry_count += 1
-                        wait_time = min(2**retry_count, 30)  # Exponential backoff, max 30s
-                        logger.warning(
-                            f"Tick request timed out (attempt {retry_count}/{max_retries}), retrying in {wait_time}s..."
-                        )
+                        wait_time = min(2**retry_count, 30)
+                        logger.warning(f"Timeout (attempt {retry_count}/{max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
 
                     except Exception as e:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
-                        logger.error(
-                            f"Error downloading ticks: {e} (attempt {retry_count}/{max_retries})"
-                        )
+                        logger.error(f"Error: {e} (attempt {retry_count}/{max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
 
                 if retry_count >= max_retries:
-                    logger.error(
-                        f"Max retries exceeded for ticks at epoch {current_end}, skipping to next batch"
-                    )
-                    current_end -= 3600  # Skip 1 hour of data if stuck
+                    logger.error(f"Max retries exceeded at {current_end}, skipping")
+                    current_end -= 3600
                     continue
 
                 history = response.get("history", {})
                 prices = history.get("prices", [])
                 times = history.get("times", [])
+                
+                logger.debug(f"API returned {len(prices)} ticks for {self.symbol}. First: {times[0] if times else 'N/A'}, Last: {times[-1] if times else 'N/A'}")
 
                 if not prices:
                     break
 
                 # Add ticks
                 for price, epoch in zip(prices, times, strict=False):
+                    if epoch < start_epoch:
+                        continue
                     month_ticks.append({"epoch": epoch, "quote": price})
 
-                # Move window back
+                # Move window backward
                 if times:
-                    current_end = min(times) - 1
-                    downloaded_seconds = int(month_end.timestamp()) - current_end
-
+                    new_end = min(times) - 1
+                    if new_end >= current_end: # Sanity check to prevent infinite loops
+                        break
+                    current_end = new_end
+                    
                     if progress_callback:
-                        # Report overall progress across all months
-                        # Ensure month_progress is within [0, 1] to avoid visual glitches
-                        if total_seconds > 0:
-                            month_progress = max(0.0, min(1.0, downloaded_seconds / total_seconds))
-                        else:
-                            month_progress = 1.0
-                            
+                        # Progress is approximate for backward download
+                        elapsed_seconds = int(month_end.timestamp()) - current_end
+                        total_range = int(month_end.timestamp()) - start_epoch
+                        month_progress = min(1.0, elapsed_seconds / total_range) if total_range > 0 else 1.0
+                        
                         overall = (month_idx + month_progress) / total_months
-                        progress_callback(overall, 1.0)
+                        progress_callback(overall, 1.0, current_count=len(month_ticks))
 
-                # Save intermediate chunks if necessary to save RAM
-                if len(month_ticks) >= self.CHUNK_SIZE:
-                    logger.debug(f"Month {month_key} reached {len(month_ticks)} ticks, keeping in memory (chunking logic can be enhanced here if needed)")
+                # Memory risk check: Flush to intermediate Parquet if chunk size exceeded
+                if len(month_ticks) >= self.CHUNK_SIZE and inc_writer:
+                    logger.info(f"Flushing {len(month_ticks)} ticks for {month_key} to disk to save RAM")
+                    try:
+                        inc_writer.write_chunk(month_ticks)
+                        month_ticks = []  # Clear memory
+                    except Exception as e:
+                        logger.error(f"Failed to write incremental chunk: {e}")
 
-                # Adaptive Rate Limiting: 
-                # If we got a full response, we might be hitting limits, so sleep just enough.
-                # If we got less than full, we can go slightly faster.
-                if len(prices) >= self.MAX_TICKS_PER_REQUEST:
-                    await asyncio.sleep(0.3)
-                else:
-                    await asyncio.sleep(0.1)
+                # Adaptive Rate Limiting is now handled by self.rate_limiter
+                pass
 
-            # Sort and save partition
-            month_ticks.sort(key=lambda x: x["epoch"])
+            # Finalize partition
+            inc_path = inc_writer.close() if inc_writer else None
             partition_duration = time.time() - partition_start
-
-            if month_ticks:
+            
+            try:
                 filepath, _ = self._save_partition(
-                    month_ticks, "ticks", month_key, download_duration=partition_duration
+                    month_ticks, 
+                    "ticks", 
+                    month_key, 
+                    download_duration=partition_duration,
+                    incremental_file=inc_path,
                 )
                 partition_files.append(filepath)
-
-            logger.info(
-                f"Completed {month_key}: {len(month_ticks)} ticks in {partition_duration:.1f}s"
-            )
+            except Exception as e:
+                logger.error(f"Failed to finalize partition {month_key}: {e}")
+                if inc_writer:
+                    inc_writer.cleanup()
 
         return partition_files
 
@@ -387,120 +540,138 @@ class PartitionedDownloader:
         """
         partition_files = []
 
-        # Check for resume point
-        if resume:
-            resume_epoch = self.find_resume_point("candles", granularity)
-            if resume_epoch and resume_epoch > int(start_time.timestamp()):
-                new_start = datetime.fromtimestamp(resume_epoch, tz=timezone.utc)
-                if new_start < end_time:
-                    start_time = new_start
-                    logger.info(f"Resuming candle download from {start_time}")
-                else:
-                    logger.info("Candle data is already up to date, skipping download")
-                    return []
-
         # Get monthly boundaries
         boundaries = get_month_boundaries(start_time, end_time)
         total_months = len(boundaries)
 
         for month_idx, (month_start, month_end) in enumerate(boundaries):
             month_key = month_start.strftime("%Y-%m")
+
+            # Per-month resume check
+            filepath = self._get_partition_path("candles", month_key, granularity)
+            if resume and filepath.exists():
+                metadata = load_metadata(filepath)
+                if metadata and metadata.end_epoch >= int(month_end.timestamp()) - granularity:
+                    logger.info(f"Partition {month_key} (candles) already exists and is complete, skipping")
+                    partition_files.append(filepath)
+                    continue
+                else:
+                    logger.info(f"Partition {month_key} exists but may be incomplete, re-downloading")
+
             logger.info(f"Downloading candles for {month_key} ({month_idx + 1}/{total_months})")
 
             partition_start = time.time()
             month_candles = []
+            
+            # Setup incremental writer if needed
+            inc_file_path = self._get_partition_path("candles", month_key, granularity)
+            inc_writer = IncrementalWriter(inc_file_path, "candles") if HAS_PYARROW else None
 
             current_end = int(month_end.timestamp())
             start_epoch = int(month_start.timestamp())
-            total_candles_estimate = (current_end - start_epoch) // granularity
 
             while current_end > start_epoch:
+                # Rate limit requests
+                await self.rate_limiter.consume(1.0)
+                
                 retry_count = 0
                 max_retries = 5
 
                 while retry_count < max_retries:
                     try:
-                        # Add timeout to prevent indefinite hangs
+                        # Backward download for candles with explicit start/end
                         response = await asyncio.wait_for(
                             self.client.api.ticks_history(
                                 {
                                     "ticks_history": self.symbol,
-                                    "count": self.MAX_CANDLES_PER_REQUEST,
-                                    "end": current_end,
                                     "start": start_epoch,
+                                    "end": str(current_end),
                                     "style": "candles",
                                     "granularity": granularity,
+                                    "count": self.MAX_CANDLES_PER_REQUEST,
                                 }
                             ),
-                            timeout=30.0,  # 30 second timeout
+                            timeout=30.0,
                         )
-                        break  # Success, exit retry loop
+                        break  # Success
 
                     except asyncio.TimeoutError:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
-                        logger.warning(
-                            f"Candle request timed out (attempt {retry_count}/{max_retries}), retrying in {wait_time}s..."
-                        )
+                        logger.warning(f"Timeout (attempt {retry_count}/{max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
 
                     except Exception as e:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
-                        logger.error(
-                            f"Error downloading candles: {e} (attempt {retry_count}/{max_retries})"
-                        )
+                        logger.error(f"Error: {e} (attempt {retry_count}/{max_retries})")
                         await asyncio.sleep(wait_time)
                         continue
 
                 if retry_count >= max_retries:
-                    logger.error(
-                        f"Max retries exceeded for candles at epoch {current_end}, skipping to next batch"
-                    )
-                    current_end -= 3600  # Skip 1 hour of data if stuck
+                    logger.error(f"Max retries exceeded for candles at {current_end}, skipping")
+                    current_end -= granularity * 100
                     continue
 
                 candles = response.get("candles", [])
+                
+                logger.debug(f"API returned {len(candles)} candles for {self.symbol}. First epoch: {candles[0]['epoch'] if candles else 'N/A'}")
 
                 if not candles:
                     break
 
-                month_candles.extend(candles)
+                # Add candles, clipping to month start
+                for candle in candles:
+                    if candle["epoch"] < start_epoch:
+                        continue
+                    month_candles.append(candle)
 
-                # Move window back
+                # Move window backward
                 if candles:
-                    current_end = min(c["epoch"] for c in candles) - 1
-
+                    new_end = min(c["epoch"] for c in candles) - 1
+                    if new_end >= current_end:
+                        break
+                    current_end = new_end
+                    
                     if progress_callback:
-                        # Report overall progress
-                        if total_candles_estimate > 0:
-                            month_progress = max(0.0, min(1.0, len(month_candles) / total_candles_estimate))
-                        else:
-                            month_progress = 1.0
-                            
+                        elapsed_seconds = int(month_end.timestamp()) - current_end
+                        total_range = int(month_end.timestamp()) - start_epoch
+                        month_progress = min(1.0, elapsed_seconds / total_range) if total_range > 0 else 1.0
+                        
                         overall = (month_idx + month_progress) / total_months
-                        progress_callback(overall, 1.0)
+                        progress_callback(overall, 1.0, current_count=len(month_candles))
 
-                # Adaptive Rate Limiting
-                if len(candles) >= self.MAX_CANDLES_PER_REQUEST:
-                    await asyncio.sleep(0.3)
-                else:
-                    await asyncio.sleep(0.1)
+                # Memory risk check: Flush to intermediate Parquet if chunk size exceeded
+                if len(month_candles) >= self.CHUNK_SIZE and inc_writer:
+                    logger.info(f"Flushing {len(month_candles)} candles for {month_key} to disk to save RAM")
+                    try:
+                        inc_writer.write_chunk(month_candles)
+                        month_candles = []  # Clear memory
+                    except Exception as e:
+                        logger.error(f"Failed to write incremental chunk: {e}")
 
-            # Sort and save partition
-            month_candles.sort(key=lambda x: x["epoch"])
+                # Adaptive Rate Limiting is now handled by self.rate_limiter
+                pass
+
+            # Finalize partition
+            inc_path = inc_writer.close() if inc_writer else None
             partition_duration = time.time() - partition_start
-
-            if month_candles:
+            
+            try:
                 filepath, _ = self._save_partition(
                     month_candles,
                     "candles",
                     month_key,
                     granularity=granularity,
                     download_duration=partition_duration,
+                    incremental_file=inc_path,
                 )
                 partition_files.append(filepath)
+            except Exception as e:
+                logger.error(f"Failed to finalize partition {month_key}: {e}")
+                if inc_writer:
+                    inc_writer.cleanup()
 
             logger.info(
                 f"Completed {month_key}: {len(month_candles)} candles in {partition_duration:.1f}s"
@@ -539,7 +710,7 @@ async def download_months(
     months: float | None = None,
     cache_dir: Path | None = None,
     granularity: int = 60,
-    compute_checksums: bool = False,
+    compute_checksums: bool = True,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     resume: bool = True,
@@ -582,21 +753,32 @@ async def download_months(
     logger.info(f"Downloading data from {start_time} to {end_time}")
     logger.info(f"Symbol: {symbol}, Granularity: {granularity}s")
 
-    # Progress tracking
     tick_progress = [0.0]
     candle_progress = [0.0]
+    tick_start = time.time()
+    candle_start = time.time()
+    tick_count = [0]
+    candle_count = [0]
 
-    def tick_progress_cb(current, total):
+    def tick_progress_cb(current, total, current_count=0):
         tick_progress[0] = current / total if total > 0 else 1.0
+        tick_count[0] = current_count
+        elapsed = time.time() - tick_start
+        speed = current_count / elapsed if elapsed > 0 else 0
+        
         print(
-            f"\r  Ticks: {tick_progress[0] * 100:.1f}%  |  Candles: {candle_progress[0] * 100:.1f}%",
+            f"\r  Ticks: {tick_progress[0] * 100:.1f}% ({speed:.0f} t/s)  |  Candles: {candle_progress[0] * 100:.1f}%",
             end="",
         )
 
-    def candle_progress_cb(current, total):
+    def candle_progress_cb(current, total, current_count=0):
         candle_progress[0] = current / total if total > 0 else 1.0
+        candle_count[0] = current_count
+        elapsed = time.time() - candle_start
+        speed = current_count / elapsed if elapsed > 0 else 0
+        
         print(
-            f"\r  Ticks: {tick_progress[0] * 100:.1f}%  |  Candles: {candle_progress[0] * 100:.1f}%",
+            f"\r  Ticks: {tick_progress[0] * 100:.1f}%  |  Candles: {candle_progress[0] * 100:.1f}% ({speed:.1f} c/s)",
             end="",
         )
 
