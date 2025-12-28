@@ -26,9 +26,10 @@ from execution.decision import DecisionEngine
 from execution.executor import DerivTradeExecutor
 from execution.safety import SafeTradeExecutor, ExecutionSafetyConfig
 from execution.sqlite_shadow_store import SQLiteShadowStore
-from utils.logging_setup import setup_logging
+from config.logging_config import setup_logging
 
-logger, _, _ = setup_logging(script_name="backtest")
+log_file = setup_logging(script_name="backtest", level="INFO")
+logger = logging.getLogger(__name__)
 
 async def run_backtest(args):
     settings = load_settings()

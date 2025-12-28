@@ -28,9 +28,10 @@ from training.metrics import TradingMetrics
 from tqdm.auto import tqdm
 
 
-from utils.logging_setup import setup_logging
+from config.logging_config import setup_logging
 
-logger, log_dir, log_file = setup_logging(script_name="evaluate")
+log_file = setup_logging(script_name="evaluate", level="INFO")
+logger = logging.getLogger(__name__)
 
 def main(args):
     settings = load_settings()

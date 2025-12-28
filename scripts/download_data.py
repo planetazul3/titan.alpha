@@ -41,9 +41,10 @@ from data.ingestion.client import DerivClient
 from data.ingestion.historical import download_months
 
 
-from utils.logging_setup import setup_logging
+from config.logging_config import setup_logging
 
-logger, log_dir, log_file = setup_logging(script_name="download_data")
+log_file = setup_logging(script_name="download_data", level="INFO")
+logger = logging.getLogger(__name__)
 
 
 def parse_date(date_str: str) -> datetime:

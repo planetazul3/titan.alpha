@@ -4,7 +4,7 @@ import time
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from utils.logging_setup import cleanup_logs
+from config.logging_config import cleanup_logs
 from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.shadow_store import ShadowTradeRecord
 

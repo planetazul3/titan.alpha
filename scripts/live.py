@@ -69,10 +69,12 @@ except ImportError:
     tracer = None
 
 
-from utils.logging_setup import setup_logging
+from config.logging_config import setup_logging
 
 # Configure logging to both console and file
-logger, log_dir, log_file = setup_logging(script_name="live_trading")
+log_file = setup_logging(script_name="live_trading", level="INFO")
+logger = logging.getLogger(__name__)
+log_dir = log_file.parent if log_file else None
 
 # Import shared console logging utilities
 from scripts.console_utils import console_log
@@ -745,7 +747,7 @@ async def run_live_trading(args):
                     
                     # 1. Log cleanup
                     try:
-                        from utils.logging_setup import cleanup_logs
+                        from config.logging_config import cleanup_logs
                         deleted_logs = cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
                         if deleted_logs > 0:
                             logger.info(f"[MAINTENANCE] Deleted {deleted_logs} old log files")

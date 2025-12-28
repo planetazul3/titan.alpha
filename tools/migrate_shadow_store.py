@@ -21,9 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import logging
 
 
-from utils.logging_setup import setup_logging
+from config.logging_config import setup_logging
 
-logger = setup_logging(script_name="migrate_shadow")
+log_file = setup_logging(script_name="migrate_shadow", level="INFO")
+logger = logging.getLogger(__name__)
 
 
 def migrate_shadow_store(source_path: Path, target_path: Path, dry_run: bool = False) -> int:
