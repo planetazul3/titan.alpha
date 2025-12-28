@@ -135,6 +135,9 @@ class ModelHyperparams(BaseModel):
     
     regime_caution_threshold: float = Field(default=0.2, description="Regime caution threshold", gt=0)
     regime_veto_threshold: float = Field(default=0.5, description="Regime veto threshold", gt=0)
+    
+    # EWC Configuration
+    ewc_sample_size: int = Field(default=5000, description="Number of samples for Fisher Information computation", gt=100)
 
     @field_validator("learning_rate", "batch_size")
     @classmethod
