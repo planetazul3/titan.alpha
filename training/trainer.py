@@ -23,6 +23,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from config.constants import MAX_CONSECUTIVE_NANS
 from training.losses import MultiTaskLoss
 from training.metrics import TradingMetrics
 from training.online_learning import FisherInformation
@@ -167,7 +168,7 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.patience_counter = 0
         self._consecutive_nan_count = 0  # Track consecutive NaN losses
-        self._max_consecutive_nans = 10  # Threshold to halt training
+        self._max_consecutive_nans = MAX_CONSECUTIVE_NANS
 
         # Create checkpoint directory
         config.checkpoint_dir.mkdir(parents=True, exist_ok=True)

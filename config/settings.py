@@ -23,7 +23,7 @@ from typing import Literal
 import torch
 
 # Pydantic v2 imports
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config.constants import DEFAULT_SEED, MIN_SEQUENCE_LENGTH
@@ -385,7 +385,7 @@ class Settings(BaseSettings):
         deriv_app_id: Deriv application ID
     """
 
-    model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_nested_delimiter="__", env_file=".env", extra="ignore", frozen=True)
 
     trading: Trading
     thresholds: Thresholds
@@ -405,10 +405,10 @@ class Settings(BaseSettings):
         default="auto", description="Compute device preference"
     )
 
-    deriv_api_token: str = Field(default="", description="Deriv API token for authentication")
+    deriv_api_token: SecretStr = Field(default="", description="Deriv API token for authentication")
     deriv_app_id: int = Field(default=1089, description="Deriv application ID")
     
-    dashboard_api_key: str = Field(default="titan-admin", description="API key for dashboard access")
+    dashboard_api_key: SecretStr = Field(default="titan-admin", description="API key for dashboard access")
 
     def get_device(self) -> torch.device:
         """Resolve and return the compute device based on preference."""
@@ -420,7 +420,8 @@ class Settings(BaseSettings):
 
     def validate_api_credentials(self) -> bool:
         """Check if API credentials are configured."""
-        return bool(self.deriv_api_token and len(self.deriv_api_token) > 0)
+        token_value = self.deriv_api_token.get_secret_value()
+        return bool(token_value and len(token_value) > 0)
 
 
 def load_settings() -> Settings:

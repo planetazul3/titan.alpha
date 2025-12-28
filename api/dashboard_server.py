@@ -441,7 +441,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     WebSocket endpoint for real-time trading data streaming.
     """
     # Manual validation for WebSocket since global dependency doesn't always apply to WS upgrade automatically or cleanly
-    if token != settings.dashboard_api_key:
+    if token != settings.dashboard_api_key.get_secret_value():
         await websocket.close(code=1008) # Policy Violation
         return
 

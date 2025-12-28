@@ -91,3 +91,33 @@ Default random seed for reproducibility.
 Used for initializing random number generators in Python, NumPy, and PyTorch
 to ensure deterministic behavior across runs.
 """
+
+# Network Configuration
+DEFAULT_MAX_RETRIES: Final[int] = 3
+"""Default retry attempts for API operations."""
+
+DEFAULT_INGESTION_RETRIES: Final[int] = 5
+"""Retry attempts for data ingestion operations (more resilient)."""
+
+# Timeout Configuration
+DEFAULT_DB_TIMEOUT: Final[float] = 30.0
+"""SQLite connection timeout in seconds."""
+
+DEFAULT_API_TIMEOUT: Final[float] = 10.0
+"""API request timeout in seconds."""
+
+CONTRACT_SETTLE_TIMEOUT: Final[float] = 180.0
+"""Maximum wait time for contract settlement in seconds."""
+
+# Feature Engineering
+CANDLE_FEATURE_COUNT: Final[int] = 10
+"""Number of features per candle: O, H, L, C, V, T, RSI, BB_width, BB_%b, ATR."""
+
+# Training
+MAX_CONSECUTIVE_NANS: Final[int] = 10
+"""Maximum consecutive NaN batches before halting training."""
+
+# Data Streaming
+DEFAULT_CANDLE_INTERVAL: Final[int] = 60
+"""Default candle interval in seconds (1 minute)."""
+

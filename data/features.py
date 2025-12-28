@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from config.constants import CANDLE_FEATURE_COUNT
 from config.settings import Settings
 from data.processor import CandlePreprocessor, TickPreprocessor, VolatilityMetricsExtractor
 
@@ -44,7 +45,7 @@ class FeatureSchema:
 
     tick_length: int
     candle_length: int
-    candle_features: int = 10  # O, H, L, C, V, T, RSI, BB_width, BB_%b, ATR
+    candle_features: int = CANDLE_FEATURE_COUNT  # O, H, L, C, V, T, RSI, BB_width, BB_%b, ATR
     volatility_features: int = 4  # realized_vol, atr_mean, rsi_std, bb_w_mean
 
     def validate_ticks(self, ticks: np.ndarray) -> None:

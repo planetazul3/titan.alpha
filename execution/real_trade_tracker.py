@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from config.constants import DEFAULT_MAX_RETRIES
 from execution.pending_trade_store import PendingTradeStore
 
 logger = logging.getLogger(__name__)
@@ -154,7 +155,7 @@ class RealTradeTracker:
     
     async def _watch_contract(self, contract_id: str, trade: PendingTrade) -> None:
         """Subscribe to contract updates and handle settlement with retry."""
-        max_retries = 3
+        max_retries = DEFAULT_MAX_RETRIES
         
         def on_settled(profit: float, won: bool):
             """Called when contract settles."""

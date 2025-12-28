@@ -15,7 +15,7 @@ class TestDashboardAuth:
 
     def test_authorized_access(self):
         """Verify 200 when correct key provided."""
-        headers = {"X-API-Key": settings.dashboard_api_key}
+        headers = {"X-API-Key": settings.dashboard_api_key.get_secret_value()}
         response = client.get("/api/health", headers=headers)
         assert response.status_code == 200
         assert response.json()["status"] == "healthy"
@@ -28,7 +28,7 @@ class TestDashboardAuth:
                 pass
         
         # Success with token
-        with client.websocket_connect(f"/ws/trading-stream?token={settings.dashboard_api_key}") as websocket:
+        with client.websocket_connect(f"/ws/trading-stream?token={settings.dashboard_api_key.get_secret_value()}") as websocket:
             data = websocket.receive_json()
             assert data["type"] == "metrics"
 

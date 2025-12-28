@@ -156,7 +156,7 @@ class DerivClient:
         self.api: DerivAPI | None = None
         self.symbol = settings.trading.symbol
         self.app_id = settings.deriv_app_id
-        self.token = settings.deriv_api_token
+        self.token = settings.deriv_api_token.get_secret_value()
         self._keep_alive_task: asyncio.Task | None = None
         self._reconnect_lock = asyncio.Lock()
         

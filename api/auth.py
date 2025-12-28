@@ -18,10 +18,10 @@ async def get_api_key(
     """
     Verify API key from header or query parameter.
     """
-    if api_key_header == settings.dashboard_api_key:
+    if api_key_header == settings.dashboard_api_key.get_secret_value():
         return api_key_header
         
-    if token == settings.dashboard_api_key:
+    if token == settings.dashboard_api_key.get_secret_value():
         return token
         
     raise HTTPException(
