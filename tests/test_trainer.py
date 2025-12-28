@@ -106,7 +106,7 @@ class TestTrainer:
         val_loss, metrics = trainer._validate_epoch()
         
         assert isinstance(val_loss, float)
-        assert "accuracy" in metrics
+        assert "rise_fall/accuracy" in metrics
         assert mock_model_obj.eval.called
 
     def test_save_checkpoint(self, mock_model_obj, trainer_config):
