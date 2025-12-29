@@ -2,9 +2,14 @@
 Trade execution abstraction.
 
 Integrated with SQLiteIdempotencyStore (CRITICAL-002) and ExecutionLogger (REC-001).
+
+Performance/Safety Improvements:
+- Multi-failure circuit breaker: Triggers on any 5 consecutive API failures within 10 minutes
+  (not just idempotency errors). Protects against API outages, insufficient balance, etc.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable, Optional
@@ -16,6 +21,10 @@ from execution.signals import TradeSignal
 from observability.execution_logging import execution_logger
 
 logger = logging.getLogger(__name__)
+
+# Circuit breaker configuration
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5  # Number of consecutive failures to trigger
+CIRCUIT_BREAKER_WINDOW_SECONDS = 600   # 10 minute rolling window
 
 @dataclass
 class TradeResult:
@@ -37,6 +46,11 @@ class TradeExecutor(Protocol):
 class DerivTradeExecutor:
     """
     Deriv-specific trade executor with idempotency and structured logging.
+    
+    Safety Features:
+    - Multi-failure circuit breaker: Triggers on 5 consecutive API failures within 10 minutes
+    - Idempotency guard: Prevents duplicate executions via SQLiteIdempotencyStore
+    - Structured logging: All attempts/results logged via ExecutionLogger
     """
 
     def __init__(
@@ -56,7 +70,9 @@ class DerivTradeExecutor:
         self.duration_resolver = ContractDurationResolver(settings)
         self._executed_count = 0
         self._failed_count = 0
-        self._consecutive_idempotency_failures = 0
+        
+        # Multi-failure circuit breaker: track failure timestamps for rolling window
+        self._failure_timestamps: list[float] = []
         
         logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
@@ -130,24 +146,48 @@ class DerivTradeExecutor:
                     await self.idempotency_store.record_execution_async(signal.signal_id, contract_id)
                 
                 self._executed_count += 1
-                self._consecutive_idempotency_failures = 0 # Reset on success
+                self._clear_failure_window()  # Reset on success
                 return TradeResult(success=True, contract_id=contract_id, entry_price=buy_price)
             else:
                 error_msg = result.get("error", {}).get("message", "Unknown execution error")
                 execution_logger.log_trade_failure(signal.signal_id, error_msg, details=result)
                 self._failed_count += 1
+                self._record_failure(error_msg)  # Multi-failure tracking
                 return TradeResult(success=False, error=error_msg)
 
         except Exception as e:
-            # Check if this is an idempotency-related failure
-            if self.policy and "Idempotency" in str(e):
-                self._consecutive_idempotency_failures += 1
-                if self._consecutive_idempotency_failures >= 3:
-                     self.policy.trigger_circuit_breaker("Consecutive idempotency failures")
-            
             execution_logger.log_trade_failure(signal.signal_id, str(e))
             self._failed_count += 1
+            self._record_failure(str(e))  # Multi-failure tracking for all exceptions
             return TradeResult(success=False, error=str(e))
+    
+    def _record_failure(self, error_msg: str) -> None:
+        """
+        Record a failure and check if circuit breaker should trigger.
+        
+        Triggers circuit breaker on any N consecutive failures within the rolling window,
+        regardless of error type (Idempotency, InternalServerError, InsufficientBalance, etc.).
+        """
+        now = time.monotonic()
+        self._failure_timestamps.append(now)
+        
+        # Prune failures outside the rolling window
+        cutoff = now - CIRCUIT_BREAKER_WINDOW_SECONDS
+        self._failure_timestamps = [t for t in self._failure_timestamps if t > cutoff]
+        
+        # Check if we've hit the threshold
+        if len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD and self.policy:
+            self.policy.trigger_circuit_breaker(
+                f"Multi-failure circuit breaker: {len(self._failure_timestamps)} failures in {CIRCUIT_BREAKER_WINDOW_SECONDS}s. Last: {error_msg[:50]}"
+            )
+            logger.error(
+                f"CIRCUIT BREAKER TRIGGERED: {len(self._failure_timestamps)} consecutive failures. "
+                f"Last error: {error_msg}"
+            )
+    
+    def _clear_failure_window(self) -> None:
+        """Clear failure window on successful execution."""
+        self._failure_timestamps.clear()
 
     def get_statistics(self) -> dict:
         total = self._executed_count + self._failed_count

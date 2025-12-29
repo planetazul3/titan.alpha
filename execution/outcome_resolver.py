@@ -37,11 +37,13 @@ class ResolutionConfig:
         rise_fall_window_seconds: How long to track rise/fall outcome
         touch_barrier_percent: Percentage for touch barrier detection
         range_band_percent: Percentage for range bands
+        prefer_tick_data: If True, prefer tick data over OHLC for accuracy
     """
 
     rise_fall_window_seconds: int = 60  # 1 minute default
     touch_barrier_percent: float = 0.005  # 0.5%
     range_band_percent: float = 0.003  # 0.3%
+    prefer_tick_data: bool = True  # PERF: Tick data preferred for tick-perfect resolution
 
 
 class OutcomeResolver:
@@ -167,29 +169,66 @@ class OutcomeResolver:
             return False
 
     def _resolve_touch(
-        self, entry_price: float, window_ticks: np.ndarray, direction: str, barrier_level: float | None = None
+        self, 
+        entry_price: float, 
+        window_ticks: np.ndarray, 
+        direction: str, 
+        barrier_level: float | None = None,
+        ohlc_data: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> bool:
         """
         Resolve TOUCH_NO_TOUCH contract outcome.
 
         - TOUCH: Win if price touched barrier (moved > threshold)
         - NO_TOUCH: Win if price stayed within barrier
+        
+        Resolution Strategy (aligned with Deriv specifications):
+        1. PREFER tick data for tick-perfect resolution when available
+        2. FALLBACK to OHLC (High/Low) during data gaps with warning
+        
+        Args:
+            entry_price: Trade entry price
+            window_ticks: Tick prices in the resolution window
+            direction: "TOUCH" or "NO_TOUCH"
+            barrier_level: Absolute barrier level (or None for percentage-based)
+            ohlc_data: Optional tuple of (high_prices, low_prices) for OHLC fallback
         """
         if barrier_level is not None:
             # Absolute barrier checks
-            # Usually barrier is a delta (e.g. 1.5).
-            # If barrier is absolute, we'd need to know that.
-            # Assuming barrier_level stored IS the absolute distance or absolute price?
-            # Standard Deriv 'barrier' is usually an offset (+1.23) or absolute?
-            # For simplicity in this fix, we assume barrier_level is the ABSOLUTE DELTA from entry
-            # or we assume it's the target price.
-            # Let's align with the existing logic: existing uses 'barrier' as a delta (max_deviation > barrier).
-            # So if barrier_level is passed, treat it as the absolute delta threshold.
+            # Standard Deriv 'barrier' is usually an offset (+1.23) or absolute.
+            # Treat barrier_level as the absolute delta threshold from entry.
             barrier = barrier_level
         else:
             barrier = entry_price * self.config.touch_barrier_percent
 
-        max_deviation = np.max(np.abs(window_ticks - entry_price))
+        # Determine tick data availability
+        has_tick_data = len(window_ticks) > 0 and not np.all(np.isnan(window_ticks))
+        
+        if has_tick_data and self.config.prefer_tick_data:
+            # PREFERRED: Tick-perfect resolution
+            max_deviation = np.max(np.abs(window_ticks - entry_price))
+        elif ohlc_data is not None:
+            # FALLBACK: Use OHLC High/Low for barrier check (per Deriv specs)
+            high_prices, low_prices = ohlc_data
+            if len(high_prices) > 0 and len(low_prices) > 0:
+                max_above = np.max(high_prices) - entry_price  # How far above entry
+                max_below = entry_price - np.min(low_prices)   # How far below entry
+                max_deviation = max(abs(max_above), abs(max_below))
+                logger.warning(
+                    f"Touch resolution using OHLC fallback (tick data unavailable). "
+                    f"Accuracy may be reduced. max_deviation={max_deviation:.5f}"
+                )
+            else:
+                logger.warning("Touch resolution: No OHLC data available for fallback")
+                max_deviation = 0.0
+        else:
+            # Last resort: use ticks even if sparse
+            if len(window_ticks) > 0:
+                max_deviation = np.max(np.abs(window_ticks - entry_price))
+            else:
+                logger.warning("Touch resolution: No price data available")
+                max_deviation = 0.0
+        
         touched = max_deviation > barrier
 
         if direction == "TOUCH":
