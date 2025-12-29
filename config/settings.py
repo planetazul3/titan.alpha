@@ -176,6 +176,9 @@ class DataShapes(BaseModel):
     feature_dim_ticks: int = Field(
         default=1, description="Number of feature channels per tick", ge=1
     )
+    feature_dim_volatility: int = Field(
+        default=4, description="Number of volatility metrics", ge=1
+    )
     warmup_steps: int = Field(
         default=50, description="Warmup steps for technical indicators", ge=0
     )

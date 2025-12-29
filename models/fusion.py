@@ -7,6 +7,13 @@ class ExpertFusion(nn.Module):
     """
     Fuses embeddings from all three experts into unified market context.
     Strategy: Concatenation + MLP mixing
+    
+    Note on Normalization:
+    We use LayerNorm instead of BatchNorm because:
+    1. Inference often happens with batch_size=1 (live trading).
+    2. BatchNorm statistics are unstable/invalid for N=1.
+    3. LayerNorm is independent of batch size, ensuring consistent outputs in both
+       backtesting (batch N) and live execution (batch 1).
     """
 
     def __init__(
@@ -23,7 +30,7 @@ class ExpertFusion(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(input_total, 512),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.ReLU(),
             nn.Dropout(dropout),  # Configurable dropout rate
             nn.Linear(512, output_dim),

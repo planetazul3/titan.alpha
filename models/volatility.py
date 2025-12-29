@@ -48,7 +48,13 @@ class VolatilityExpert(nn.Module):
     def reconstruction_error(self, x: torch.Tensor) -> torch.Tensor:
         """
         Compute per-sample MSE reconstruction error.
-        Low error: Normal volatility. High: Anomalous.
+        
+        Usage in Regime Detection:
+        - Low error: The current volatility state is "normal" / seen during training.
+        - High error: The current state is anomalous or unseen.
+        
+        This error score is used by the RegimeVeto to switch to safer/shadow modes
+        when market conditions deviate significantly from the training distribution.
         """
         recon = self.reconstruct(x)
         error = torch.mean((x - recon) ** 2, dim=1)

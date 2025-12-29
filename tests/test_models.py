@@ -19,6 +19,7 @@ def mock_settings():
     settings.data_shapes.sequence_length_candles = 50
     settings.data_shapes.feature_dim_ticks = 1
     settings.data_shapes.feature_dim_candles = 10
+    settings.data_shapes.feature_dim_volatility = 4
     settings.hyperparams.dropout_rate = 0.1
     settings.hyperparams.fusion_dropout = 0.2
     settings.hyperparams.head_dropout = 0.1

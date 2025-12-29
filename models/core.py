@@ -82,8 +82,9 @@ class DerivOmniModel(nn.Module):
         )
         self.spatial = SpatialExpert(settings, embedding_dim=spat_dim)
 
-        # Volatility expert input dim is 4 (realized_vol, atr_mean, rsi_std, bb_w_mean)
-        self.volatility = VolatilityExpert(input_dim=4, settings=settings, hidden_dim=32)
+        # Volatility expert input dim is configurable via settings
+        vol_input_dim = settings.data_shapes.feature_dim_volatility
+        self.volatility = VolatilityExpert(input_dim=vol_input_dim, settings=settings, hidden_dim=32)
 
         self.fusion = ExpertFusion(
             temporal_dim=temp_dim,

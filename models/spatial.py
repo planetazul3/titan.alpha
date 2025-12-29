@@ -18,19 +18,16 @@ class SpatialExpert(nn.Module):
 
         base_channels = settings.hyperparams.cnn_filters
 
-        # Parallel blocks with different receptive fields could be concatenated
-        # OR stacked. Prompt implies stacked "Pyramidal ... Block1 ... Block2 ... Block3"
-        # with increasing kernels implies we are stacking?
-        # But usually pyramidal implies multiscale parallel or U-Net.
-        # "Block1: kernel=3 ... Block2: kernel=5... Block3: kernel=15"
-        # If sequential: receptive field 3+4+14 = 21. If parallel: max is 15.
-        # Prompt says "Analysis 'roughness' and geometry... Larger kernels capture momentum".
-        # Let's assume sequential for depth features.
+        # Architecture Choice: Sequential Pyramidal Stacking
+        # We stack convolution blocks with increasing kernel sizes (3 -> 5 -> 15)
+        # to capture features at increasing temporal scales.
+        # - Block 1 (k=3):  Captures immediate microstructure (tick-by-tick noise/action)
+        # - Block 2 (k=5):  Captures local trends and momentum
+        # - Block 3 (k=15): Captures broader structural patterns and geometry
+        # This sequential approach builds a hierarchical representation of the tick series.
 
         self.block1 = Conv1DBlock(1, base_channels, kernel_size=3)
         self.block2 = Conv1DBlock(base_channels, base_channels * 2, kernel_size=5)
-        self.block3 = Conv1DBlock(base_channels * 2, base_channels * 4, kernel_size=15)
-
         self.block3 = Conv1DBlock(base_channels * 2, base_channels * 4, kernel_size=15)
 
         # M07: Replace Global Average Pooling with Attention Pooling
