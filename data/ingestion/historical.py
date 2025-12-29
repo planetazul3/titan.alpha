@@ -322,16 +322,13 @@ class PartitionedDownloader:
 
         try:
             # Run integrity check on final merged data
-            # (Note: converting to dict for now to maintain IntegrityChecker compatibility)
-            data_for_check = df.to_dict("records")
             checker = IntegrityChecker()
             cleaned_data, report = checker.generate_report(
-                data_for_check, data_type=data_type, granularity=granularity
+                df, data_type=data_type, granularity=granularity
             )
             
-            # Re-convert to DataFrame if deduplication happened in checker
-            if report.duplicates_removed > 0:
-                df = pd.DataFrame(cleaned_data)
+            # Use cleaned data (which might be the same DataFrame or a new one)
+            df = cleaned_data
 
             # Optimize dtypes before saving
             df["epoch"] = df["epoch"].astype("int64")
