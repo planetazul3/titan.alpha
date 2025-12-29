@@ -15,6 +15,10 @@ class MultiTaskLoss(nn.Module):
     - MSE reconstruction loss for volatility autoencoder
 
     Weights can be adjusted to prioritize certain tasks.
+    
+    IMPORTANT: If `log_vars` (learned uncertainty) is used (requires_grad=True), 
+    the manual `weights` dictionary IS IGNORED to prevent double-weighting ambiguity.
+    Uncertainty weighting automatically handles scaling differences (e.g. MSE vs BCE).
     """
 
     def __init__(
@@ -47,7 +51,9 @@ class MultiTaskLoss(nn.Module):
         where s_i = log(sigma_i^2)
         """
         task_keys = ["rise_fall", "touch", "range", "reconstruction"]
-        total = 0
+        # Use device of first loss tensor found, or cpu
+        first_loss = next(iter(losses.values())) if losses else torch.tensor(0.0)
+        total = torch.tensor(0.0, device=first_loss.device)
         
         for i, key in enumerate(task_keys):
             if key in losses:
@@ -77,42 +83,45 @@ class MultiTaskLoss(nn.Module):
             Dict with 'total', 'rise_fall', 'touch', 'range', 'reconstruction'
         """
         losses = {}
-
-        # Contract head losses
+        # 1. Compute RAW (unweighted) losses for all active heads
+        
         if "rise_fall_logit" in logits and "rise_fall" in targets:
-            losses["rise_fall"] = (
-                self.bce(logits["rise_fall_logit"].squeeze(), targets["rise_fall"].float())
-                * self.weights["rise_fall"]
-            )
+            losses["rise_fall"] = self.bce(logits["rise_fall_logit"].squeeze(), targets["rise_fall"].float())
 
         if "touch_logit" in logits and "touch" in targets:
-            losses["touch"] = (
-                self.bce(logits["touch_logit"].squeeze(), targets["touch"].float())
-                * self.weights["touch"]
-            )
+            losses["touch"] = self.bce(logits["touch_logit"].squeeze(), targets["touch"].float())
 
         if "range_logit" in logits and "range" in targets:
-            losses["range"] = (
-                self.bce(logits["range_logit"].squeeze(), targets["range"].float())
-                * self.weights["range"]
-            )
+            losses["range"] = self.bce(logits["range_logit"].squeeze(), targets["range"].float())
 
         # Autoencoder reconstruction loss
-        # Check if 'vol_reconstruction' is in logits/outputs dict
         recon_out = vol_reconstruction if vol_reconstruction is not None else logits.get("vol_reconstruction")
-        
         if vol_input is not None and recon_out is not None:
-            losses["reconstruction"] = (
-                self.mse(recon_out, vol_input) * self.weights["reconstruction"]
-            )
+            losses["reconstruction"] = self.mse(recon_out, vol_input)
 
-        # Total loss
+        # 2. Compute Total Loss based on Weighting Strategy
+        
+        # Initialize total as tensor on correct device
+        first_loss = next(iter(losses.values())) if losses else torch.tensor(0.0)
+        losses["total"] = torch.tensor(0.0, device=first_loss.device)
+
         if hasattr(self, "log_vars") and self.log_vars.requires_grad:
+            # STRATEGY A: Learned Uncertainty Weighting
+            # Ignores self.weights
             losses["total"] = self.compute_weighted_loss(losses)
         else:
-            losses["total"] = sum(losses.values())
+            # STRATEGY B: Manual Weighting
+            # Applies self.weights
+            for key in ["rise_fall", "touch", "range", "reconstruction"]:
+                if key in losses:
+                    losses["total"] += losses[key] * self.weights.get(key, 1.0)
+                    # Update the individual entry in losses dict to reflect the WEIGHTED value?
+                    # Generally useful for logging to see actual contribution.
+                    losses[key] = losses[key] * self.weights.get(key, 1.0)
 
         return losses
+
+
 
 
 class FocalLoss(nn.Module):

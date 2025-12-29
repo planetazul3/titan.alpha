@@ -63,6 +63,31 @@ class TrainerConfig:
     ewc_sample_size: int = 2000
 
 
+class BatchProfiler:
+    """Simple profiler for batch timing."""
+    def __init__(self):
+        self.data_time = 0.0
+        self.compute_time = 0.0
+        self.last_step = time.time()
+        
+    def step_data(self):
+        """Call after data loading finishes."""
+        now = time.time()
+        self.data_time += now - self.last_step
+        self.last_step = now
+        
+    def step_compute(self):
+        """Call after compute finishes."""
+        now = time.time()
+        self.compute_time += now - self.last_step
+        self.last_step = now
+        
+    def reset(self):
+        self.data_time = 0.0
+        self.compute_time = 0.0
+        self.last_step = time.time()
+
+
 class Trainer:
     """
     Training orchestrator for DerivOmniModel.
@@ -317,10 +342,17 @@ class Trainer:
 
         # Reset gradients at start
         self.optimizer.zero_grad(set_to_none=True)
+        
+        # Batch Profiler
+        profiler = BatchProfiler()
 
         n_batches = len(self.train_loader)
         progress_bar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
+        
         for batch_idx, batch in enumerate(progress_bar):
+            # Record Data Time
+            profiler.step_data()
+            
             # Move to device with non-blocking transfer for async
             ticks = batch["ticks"].to(self.device, non_blocking=True)
             candles = batch["candles"].to(self.device, non_blocking=True)
@@ -403,10 +435,21 @@ class Trainer:
             total_loss += current_loss
             num_batches += 1
 
+            # Record Compute Time
+            profiler.step_compute()
+            
             # Update progress bar
             progress_bar.set_postfix(
                 {"loss": f"{current_loss:.4f}", "lr": f"{self.optimizer.param_groups[0]['lr']:.2e}"}
             )
+            
+            # Log profiling stats periodically
+            if self.writer and self.global_step % 100 == 0:
+                 self.writer.add_scalar("Time/data", profiler.data_time, self.global_step)
+                 self.writer.add_scalar("Time/compute", profiler.compute_time, self.global_step)
+            
+            # Reset profiler for next batch
+            profiler.reset()
 
         return total_loss / num_batches
 
