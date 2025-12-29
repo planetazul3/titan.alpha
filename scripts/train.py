@@ -9,6 +9,7 @@ Fisher Information for Elastic Weight Consolidation (EWC).
 """
 
 import sys
+import os
 from pathlib import Path
 
 # Add project root to path
@@ -97,12 +98,15 @@ def main():
     lr = args.lr or settings.hyperparams.learning_rate
     epochs = args.epochs or 50 # Default if not in settings (settings doesn't have epochs)
     
+    # Dynamic worker count for Kaggle/Cloud environments
+    num_workers = os.cpu_count() or 2
+    
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, # Shuffle WITHIN the training set is fine
         drop_last=True,  # Ensure consistent batch sizes
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True
     )
@@ -110,7 +114,7 @@ def main():
         val_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True
     )
