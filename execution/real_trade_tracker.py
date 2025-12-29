@@ -5,10 +5,19 @@ This module provides API-based outcome tracking for executed trades.
 Uses Deriv's proposal_open_contract subscription to get real-time
 updates and actual P&L when contracts settle.
 
+Graceful Shutdown (TRACKER-STORE-AUDIT):
+- P&L update tasks are tracked in _pending_pnl_tasks for graceful shutdown
+- shutdown() flushes all pending P&L updates before exit
+
+Zombie Prevention (TRACKER-STORE-AUDIT):
+- Trades exceeding MAX_RECOVERY_RETRIES are marked FAILED_TO_TRACK
+- get_zombie_trades() returns trades requiring operator attention
+
 Usage:
     >>> tracker = RealTradeTracker(client, sizer, executor)
     >>> await tracker.register_trade(signal, contract_id, entry_price, stake)
-    >>> # Tracker automatically subscribes and updates sizer/executor on settlement
+    >>> # On shutdown:
+    >>> await tracker.shutdown()
 """
 
 import asyncio
@@ -20,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from config.constants import DEFAULT_MAX_RETRIES
-from execution.pending_trade_store import PendingTradeStore
+from execution.pending_trade_store import PendingTradeStore, MAX_RECOVERY_RETRIES
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +57,13 @@ class RealTradeTracker:
     1. Updates position sizer (for compounding)
     2. Updates executor P&L (for daily limits)
     
+    Graceful Shutdown (TRACKER-STORE-AUDIT):
+    - P&L update tasks tracked in _pending_pnl_tasks
+    - shutdown() flushes all pending updates before exit
+    
+    Zombie Prevention (TRACKER-STORE-AUDIT):
+    - Trades failing re-subscription MAX_RECOVERY_RETRIES times marked FAILED_TO_TRACK
+    
     Attributes:
         client: DerivClient for API subscriptions
         sizer: Position sizer with record_outcome() method
@@ -59,7 +75,6 @@ class RealTradeTracker:
         client: Any = None,
         sizer: Any = None,
         executor: Any = None,
-
         model_monitor: Any = None,
         persistence_path: Path | None = None,
     ):
@@ -70,6 +85,7 @@ class RealTradeTracker:
             client: DerivClient instance for API calls
             sizer: Position sizer (CompoundingPositionSizer, etc.)
             executor: SafeTradeExecutor for P&L updates
+            model_monitor: Optional model health monitor
             persistence_path: Path for SQLite persistence (enables crash recovery)
         """
         self.client = client
@@ -84,7 +100,11 @@ class RealTradeTracker:
             self._store = PendingTradeStore(Path("data_cache/pending_trades.db"))
         
         self._pending_trades: dict[str, PendingTrade] = {}
-        self._active_tasks: set[asyncio.Task] = set()  # Track background tasks
+        self._active_tasks: set[asyncio.Task] = set()  # Track background subscription tasks
+        
+        # TRACKER-STORE-AUDIT: Track P&L update tasks for graceful shutdown
+        self._pending_pnl_tasks: set[asyncio.Task] = set()
+        
         self._resolved_count = 0
         self._wins = 0
         self._losses = 0
@@ -154,7 +174,11 @@ class RealTradeTracker:
             logger.warning("[TRACKER] No client - cannot subscribe to contract")
     
     async def _watch_contract(self, contract_id: str, trade: PendingTrade) -> None:
-        """Subscribe to contract updates and handle settlement with retry."""
+        """
+        Subscribe to contract updates and handle settlement with retry.
+        
+        TRACKER-STORE-AUDIT: Tracks retry count and marks zombies if exhausted.
+        """
         max_retries = DEFAULT_MAX_RETRIES
         
         def on_settled(profit: float, won: bool):
@@ -182,8 +206,22 @@ class RealTradeTracker:
                     )
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"[TRACKER] Failed to watch contract {contract_id} after {max_retries} retries: {e}")
-                    # Remove from pending after all retries exhausted
+                    # TRACKER-STORE-AUDIT: Increment retry count and check for zombie
+                    retry_count = self._store.increment_retry_count(contract_id)
+                    logger.error(
+                        f"[TRACKER] Failed to watch contract {contract_id} after {max_retries} retries: {e}. "
+                        f"Total recovery attempts: {retry_count}"
+                    )
+                    
+                    # Check if we should mark as zombie
+                    if retry_count >= MAX_RECOVERY_RETRIES:
+                        self._store.mark_failed_to_track(contract_id)
+                        logger.critical(
+                            f"[TRACKER] ⚠️ Contract {contract_id} marked as FAILED_TO_TRACK (zombie). "
+                            f"Requires operator attention!"
+                        )
+                    
+                    # Remove from in-memory pending
                     self._pending_trades.pop(contract_id, None)
     
     def _handle_outcome(self, contract_id: str, profit: float, won: bool) -> None:
@@ -230,13 +268,14 @@ class RealTradeTracker:
             except Exception as e:
                 logger.error(f"[TRACKER] Failed to update sizer: {e}")
         
-        # Update P&L tracking (for daily limits) - dispatch as background task
-        # update_pnl is async, but we're in a sync callback, so use create_task
+        # Update P&L tracking (for daily limits)
+        # TRACKER-STORE-AUDIT: Track task for graceful shutdown
         if self.executor and hasattr(self.executor, 'update_pnl'):
             try:
-                # Non-blocking dispatch to prevent event loop jitter
-                asyncio.create_task(self.executor.update_pnl(profit))
-                logger.debug(f"[TRACKER] P&L update dispatched: ${profit:+.2f}")
+                task = asyncio.create_task(self.executor.update_pnl(profit))
+                self._pending_pnl_tasks.add(task)
+                task.add_done_callback(self._pending_pnl_tasks.discard)
+                logger.debug(f"[TRACKER] P&L update task dispatched: ${profit:+.2f}")
             except Exception as e:
                 logger.error(f"[TRACKER] Failed to dispatch P&L update: {e}")
     
@@ -307,5 +346,28 @@ class RealTradeTracker:
                 # Remove invalid trade from store
                 self._store.remove_trade(trade_data["contract_id"])
         
+        
         logger.info(f"[TRACKER] Recovery complete: {recovered} trades re-subscribed")
         return recovered
+
+    async def shutdown(self) -> None:
+        """
+        Gracefully shutdown the tracker.
+        
+        Awaits all pending P&L update tasks to ensure data consistency
+        before the application exits.
+        """
+        if not self._pending_pnl_tasks:
+            logger.info("[TRACKER] Shutdown complete: No pending P&L tasks")
+            return
+            
+        logger.info(f"[TRACKER] Waiting for {len(self._pending_pnl_tasks)} pending P&L tasks...")
+        
+        # Wait for all tasks to complete, with a timeout to prevent hanging
+        try:
+            await asyncio.wait_for(asyncio.gather(*self._pending_pnl_tasks, return_exceptions=True), timeout=5.0)
+            logger.info("[TRACKER] All pending P&L tasks completed")
+        except asyncio.TimeoutError:
+            logger.warning(f"[TRACKER] Shutdown timed out: {len(self._pending_pnl_tasks)} tasks still pending")
+        except Exception as e:
+            logger.error(f"[TRACKER] Error during shutdown: {e}")

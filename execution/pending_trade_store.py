@@ -4,6 +4,11 @@ Pending Trade Persistence Store.
 SQLite-backed storage for pending (in-flight) real trades.
 Enables recovery after restart by persisting contract IDs and trade metadata.
 
+Zombie Trade Prevention (TRACKER-STORE-AUDIT):
+- retry_count column tracks failed re-subscription attempts
+- Trades exceeding MAX_RECOVERY_RETRIES are marked FAILED_TO_TRACK
+- get_zombie_trades() returns trades requiring operator attention
+
 Usage:
     >>> store = PendingTradeStore(Path("data_cache/pending_trades.db"))
     >>> store.add_trade(contract_id="12345", direction="CALL", ...)
@@ -21,6 +26,9 @@ from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
+# TRACKER-STORE-AUDIT: Max retries before marking trade as zombie
+MAX_RECOVERY_RETRIES = 5
+
 
 class PendingTradeStore:
     """
@@ -33,6 +41,7 @@ class PendingTradeStore:
     - stake: Stake amount for P&L calculation
     - probability: Model confidence at trade time
     - executed_at: Timestamp of trade execution
+    - retry_count: Number of failed re-subscription attempts (zombie prevention)
     
     Thread-safe with WAL mode for concurrent access.
     """
@@ -47,6 +56,7 @@ class PendingTradeStore:
         executed_at TEXT NOT NULL,
         contract_type TEXT DEFAULT 'RISE_FALL',
         status TEXT DEFAULT 'CONFIRMED',
+        retry_count INTEGER DEFAULT 0,
         metadata TEXT
     )
     """
@@ -91,13 +101,21 @@ class PendingTradeStore:
                 raise
 
     def _init_schema(self) -> None:
-        """Initialize database schema."""
+        """Initialize database schema with migrations."""
         with self._transaction() as conn:
             conn.execute(self.CREATE_TABLE_SQL)
-            # Add status column if missing (migration)
+            
+            # Migration: Add status column if missing
             try:
                 conn.execute("ALTER TABLE pending_trades ADD COLUMN status TEXT DEFAULT 'CONFIRMED'")
                 logger.info("Migrated pending_trades: added status column")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            
+            # TRACKER-STORE-AUDIT: Migration for retry_count column (zombie prevention)
+            try:
+                conn.execute("ALTER TABLE pending_trades ADD COLUMN retry_count INTEGER DEFAULT 0")
+                logger.info("Migrated pending_trades: added retry_count column")
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
@@ -254,6 +272,82 @@ class PendingTradeStore:
         if removed:
             logger.debug(f"Removed pending trade: {contract_id}")
         return cast(bool, removed)
+    
+    def increment_retry_count(self, contract_id: str) -> int:
+        """
+        Increment retry count for a trade and return new count.
+        
+        TRACKER-STORE-AUDIT: Tracks re-subscription attempts for zombie prevention.
+        
+        Args:
+            contract_id: Contract ID to update
+            
+        Returns:
+            New retry count (or -1 if trade not found)
+        """
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE pending_trades SET retry_count = retry_count + 1 WHERE contract_id = ?",
+                (contract_id,),
+            )
+            if cursor.rowcount == 0:
+                return -1
+            
+            # Get new count
+            result = conn.execute(
+                "SELECT retry_count FROM pending_trades WHERE contract_id = ?",
+                (contract_id,),
+            ).fetchone()
+            return cast(int, result[0]) if result else -1
+    
+    def mark_failed_to_track(self, contract_id: str) -> bool:
+        """
+        Mark a trade as FAILED_TO_TRACK (zombie - requires operator attention).
+        
+        TRACKER-STORE-AUDIT: Called when MAX_RECOVERY_RETRIES exceeded.
+        
+        Args:
+            contract_id: Contract ID to mark
+            
+        Returns:
+            True if trade was found and updated
+        """
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE pending_trades SET status = 'FAILED_TO_TRACK' WHERE contract_id = ?",
+                (contract_id,),
+            )
+            updated = cursor.rowcount > 0
+        
+        if updated:
+            logger.error(f"⚠️ Trade marked as FAILED_TO_TRACK (zombie): {contract_id}")
+        return cast(bool, updated)
+    
+    def get_zombie_trades(self) -> list[dict[str, Any]]:
+        """
+        Get trades that failed to track (zombies requiring operator attention).
+        
+        TRACKER-STORE-AUDIT: Returns trades with status=FAILED_TO_TRACK.
+        
+        Returns:
+            List of zombie trade dictionaries
+        """
+        import json
+        
+        conn = self._get_connection()
+        cursor = conn.execute("SELECT * FROM pending_trades WHERE status = 'FAILED_TO_TRACK'")
+        
+        trades = []
+        for row in cursor:
+            trades.append({
+                "contract_id": row["contract_id"],
+                "direction": row["direction"],
+                "entry_price": row["entry_price"],
+                "stake": row["stake"],
+                "retry_count": row["retry_count"] if "retry_count" in row.keys() else 0,
+                "executed_at": row["executed_at"],
+            })
+        return trades
 
     def get_all_pending(self) -> list[dict[str, Any]]:
         """
