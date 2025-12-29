@@ -27,6 +27,7 @@ from execution.executor import DerivTradeExecutor
 from execution.safety import SafeTradeExecutor, ExecutionSafetyConfig
 from execution.sqlite_shadow_store import SQLiteShadowStore
 from config.logging_config import setup_logging
+from utils.bootstrap import create_trading_stack
 
 log_file = setup_logging(script_name="backtest", level="INFO")
 logger = logging.getLogger(__name__)
@@ -42,19 +43,28 @@ async def run_backtest(args):
     logger.info(f"Starting backtest on {data_path}")
     
     # 1. Initialize Components
+    # Bootstrap stack (inject BacktestClient)
     client = BacktestClient(initial_balance=10000.0)
+    
+    stack = create_trading_stack(
+        settings, 
+        checkpoint_path=None, 
+        device="cpu", # Force CPU for backtest
+        verify_ckpt=False,
+        client=client
+    )
+    
+    engine = stack["engine"]
+    shadow_store = stack["shadow_store"]
+    feature_builder = stack["feature_builder"]
+    model = stack["model"] # Loaded random/default
     
     # Simple Sizer
     from execution.position_sizer import FixedStakeSizer
     sizer = FixedStakeSizer(stake=10.0)
     
-    # Shadow Store (for tracking decisions) -> In memory or temp
-    shadow_store = SQLiteShadowStore(Path("backtest_shadow.db"))
-    
-    # Engine
-    engine = DecisionEngine(settings, shadow_store=shadow_store, model_version="backtest_v1")
-    
     # Executor
+    # Note: engine.policy is available from bootstrap
     raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer, policy=engine.policy)
     safety_config = ExecutionSafetyConfig(max_trades_per_minute=100, kill_switch_enabled=False)
     # Use in-memory DB or temp file for backtest safety state

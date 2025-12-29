@@ -27,7 +27,8 @@ def create_trading_stack(
     settings: Settings,
     checkpoint_path: Optional[Path] = None,
     device: Optional[str] = None,
-    verify_ckpt: bool = True
+    verify_ckpt: bool = True,
+    client: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Initialize the complete trading stack.
@@ -37,6 +38,7 @@ def create_trading_stack(
         checkpoint_path: Path to model checkpoint (optional).
         device: 'cpu' or 'cuda' (overrides settings if provided).
         verify_ckpt: Whether to verify checkpoint integrity.
+        client: Optional client instance (e.g. BacktestClient). If None, creates DerivClient.
 
     Returns:
         Dict containing:
@@ -108,7 +110,9 @@ def create_trading_stack(
     feature_builder = get_feature_builder(settings)
     
     # 5. Connectors & Stores
-    client = DerivClient(settings)
+    if client is None:
+        client = DerivClient(settings)
+    
     shadow_store = SQLiteShadowStore(Path(settings.system.system_db_path))
     
     # 6. Safety & Decision

@@ -33,16 +33,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config.settings import load_settings
-from data.buffer import MarketDataBuffer  # Abstracted buffering logic
-from data.features import FeatureBuilder  # CANONICAL feature pipeline
-from data.ingestion.client import DerivClient
-from data.ingestion.deriv_adapter import DerivEventAdapter
-from execution.decision import DecisionEngine
-from execution.executor import DerivTradeExecutor
-from execution.regime import RegimeVeto
-from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
-
-# from execution.shadow_logger import ShadowLogger  # DEPRECATED: Use SQLiteShadowStore
+from data.buffer import MarketDataBuffer
+from observability.calibration import CalibrationMonitor
 from execution.sqlite_shadow_store import SQLiteShadowStore  # Full context capture
 from models.core import DerivOmniModel
 from observability import TradingMetrics
@@ -54,6 +46,7 @@ from observability.dashboard import (
 from observability.model_health import ModelHealthMonitor
 from execution.shadow_resolution import ShadowTradeResolver
 from execution.real_trade_tracker import RealTradeTracker
+from utils.bootstrap import create_trading_stack
 
 # I02: Checkpoint verification utility
 from tools.verify_checkpoint import verify_checkpoint
@@ -80,112 +73,7 @@ log_dir = log_file.parent if log_file else None
 from scripts.console_utils import console_log
 
 
-class CalibrationMonitor:
-    """
-    Monitor reconstruction errors for calibration issues.
-
-    Provides:
-    - Tracking of reconstruction error history
-    - Shadow-only mode when errors are persistently high
-    - Escalating alerts for sustained calibration issues
-
-    This enables graceful degradation: instead of blocking all trades
-    when thresholds are miscalibrated, the system can fall back to
-    shadow-only mode to continue learning while protecting the account.
-    """
-
-    def __init__(
-        self, error_threshold: float = 1.0, consecutive_threshold: int = 5, window_size: int = 20
-    ):
-        """
-        Args:
-            error_threshold: Errors above this trigger shadow-only mode
-            consecutive_threshold: Number of consecutive high errors to trigger alert
-            window_size: Size of rolling window for statistics
-        """
-        self.error_threshold = error_threshold
-        self.consecutive_threshold = consecutive_threshold
-        self.window_size = window_size
-
-        self.errors: list = []
-        self.consecutive_high_count = 0
-        self.shadow_only_mode = False
-        self.shadow_only_reason = ""
-        self.alert_escalation_level = 0  # 0=none, 1=warning, 2=critical
-
-    def record(self, error: float) -> None:
-        """Record a new reconstruction error and update state."""
-        self.errors.append(error)
-        if len(self.errors) > self.window_size:
-            self.errors.pop(0)
-
-        # Track consecutive high errors
-        if error > self.error_threshold:
-            self.consecutive_high_count += 1
-        else:
-            self.consecutive_high_count = 0
-
-        # Activate shadow-only mode if too many consecutive high errors
-        if self.consecutive_high_count >= self.consecutive_threshold:
-            if not self.shadow_only_mode:
-                self.shadow_only_mode = True
-                self.shadow_only_reason = (
-                    f"Reconstruction error exceeded {self.error_threshold} for "
-                    f"{self.consecutive_high_count} consecutive inferences"
-                )
-                logger.critical(
-                    f"[SHADOW-ONLY] Activating shadow-only mode: {self.shadow_only_reason}"
-                )
-                self.alert_escalation_level = 2
-
-        # Escalate alerts based on persistence
-        if len(self.errors) >= self.window_size:
-            high_error_ratio = sum(1 for e in self.errors if e > self.error_threshold) / len(
-                self.errors
-            )
-            if high_error_ratio > 0.5 and self.alert_escalation_level < 2:
-                self.alert_escalation_level = 1
-                logger.warning(
-                    f"[CALIBRATION] {high_error_ratio * 100:.0f}% of recent inferences have "
-                    f"high reconstruction error. Consider model retraining."
-                )
-
-    def should_skip_real_trades(self) -> bool:
-        """Return True if real trades should be skipped (shadow-only mode)."""
-        return self.shadow_only_mode
-
-    def recover_if_healthy(self) -> None:
-        """Recover from shadow-only mode if errors normalize."""
-        if not self.shadow_only_mode:
-            return
-
-        if len(self.errors) >= self.window_size:
-            recent_high_ratio = sum(1 for e in self.errors if e > self.error_threshold) / len(
-                self.errors
-            )
-            if recent_high_ratio < 0.2:
-                self.shadow_only_mode = False
-                self.shadow_only_reason = ""
-                self.alert_escalation_level = 0
-                logger.info(
-                    "[SHADOW-ONLY] Recovered: reconstruction errors normalized. "
-                    "Real trading re-enabled."
-                )
-
-    def get_statistics(self) -> dict:
-        """Get current calibration monitoring statistics."""
-        if not self.errors:
-            return {"samples": 0}
-
-        return {
-            "samples": len(self.errors),
-            "mean_error": sum(self.errors) / len(self.errors),
-            "max_error": max(self.errors),
-            "min_error": min(self.errors),
-            "shadow_only_mode": self.shadow_only_mode,
-            "alert_level": self.alert_escalation_level,
-            "consecutive_high": self.consecutive_high_count,
-        }
+# IMPL: CalibrationMonitor moved to observability/calibration.py
 
 
 async def run_live_trading(args):
@@ -214,151 +102,47 @@ async def run_live_trading(args):
         f"Metrics collector initialized (prometheus={'enabled' if metrics.use_prometheus else 'disabled'})"
     )
 
-    # Determine checkpoint to load
+    # Determine checkpoint to load (same logic)
     checkpoint_name = args.checkpoint
     checkpoint_path = None
     if not checkpoint_name:
         default_ckpt = Path(args.checkpoint_dir) / "best_model.pt"
         if default_ckpt.exists():
-            checkpoint_name = "best_model"
             checkpoint_path = default_ckpt
             logger.info("No checkpoint specified, auto-selecting 'best_model'")
         else:
             if not args.test:
-                logger.critical(
-                    "FATAL: No checkpoint found and 'best_model.pt' missing. "
-                    "Cannot trade with random weights. Exiting."
-                )
-                console_log("ERROR: No model checkpoint found - refusing to trade", "ERROR")
-                return 1
-            logger.warning("Test mode: Model initialized with RANDOM weights (acceptable for testing).")
+                 logger.critical("FATAL: No checkpoint found and 'best_model.pt' missing.")
+                 return 1
+            logger.warning("Test mode: Model initialized with RANDOM weights.")
     else:
         checkpoint_path = Path(args.checkpoint_dir) / f"{checkpoint_name}.pt"
-
-    # Pre-inspect checkpoint to determine architecture (BiLSTM vs TFT)
-    # This prevents crashing when loading legacy BiLSTM checkpoints into a TFT model
-    checkpoint = None
-    if checkpoint_path and checkpoint_path.exists():
-        console_log(f"Inspecting checkpoint: {checkpoint_name}...", "MODEL")
-        try:
-            # Load to CPU first to inspect structure
-            # SECURITY: Try weights_only=True first (safer)
-            try:
-                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-            except Exception:
-                logger.warning("[SECURITY] Checkpoint requires pickle (weights_only=False). This is risky if source is untrusted.")
-                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False) # nosec
-            
-            # Detect architecture type
-            state_dict = checkpoint.get("model_state_dict", checkpoint)
-            has_tft = any("temporal.tft" in k for k in state_dict.keys())
-            
-            if has_tft:
-                settings.hyperparams.use_tft = True
-                logger.info("[INIT] Detected TFT architecture in checkpoint")
-                console_log("Architecture: TFT (Transformer)", "INFO")
-            else:
-                settings.hyperparams.use_tft = False
-                logger.info("[INIT] Detected BiLSTM architecture in checkpoint (Legacy)")
-                console_log("Architecture: BiLSTM (Legacy)", "INFO")
-                
-        except Exception as e:
-            logger.error(f"Failed to inspect checkpoint: {e}")
-            # Fall through - will try to load normally and might fail
-    
-    # I02 Fix: Checkpoint verification before loading
-    if checkpoint_path and checkpoint_path.exists() and not getattr(args, 'skip_checkpoint_verify', False):
-        console_log("Verifying checkpoint integrity...", "MODEL")
-        try:
-            if not verify_checkpoint(checkpoint_path):
-                console_log("FATAL: Checkpoint verification failed!", "ERROR")
-                logger.critical(
-                    f"[I02] Checkpoint verification failed for {checkpoint_path}. "
-                    f"Use --skip-checkpoint-verify to bypass (not recommended)."
-                )
-                return 1
-            console_log("Checkpoint verification passed", "SUCCESS")
-        except Exception as e:
-            console_log(f"Checkpoint verification error: {e}", "ERROR")
-            logger.error(f"[I02] Checkpoint verification error: {e}")
-            return 1
-    elif getattr(args, 'skip_checkpoint_verify', False):
-        console_log("WARNING: Checkpoint verification skipped by user request", "WARN")
-        logger.warning("[I02] Checkpoint verification skipped via --skip-checkpoint-verify")
-    
-    # Initialize model with correct architecture
-    console_log("Loading neural network model...", "MODEL")
-    model = DerivOmniModel(settings).to(device)
-    model.eval()
-    console_log(f"Model ready: {model.count_parameters():,} parameters", "SUCCESS")
-    logger.info(f"Model initialized ({model.count_parameters():,} parameters)")
-
-    # Load checkpoint weights
-    # Load checkpoint weights
-    if checkpoint:
-        console_log(f"Loading weights from {checkpoint_name}...", "MODEL")
-        # Move state dict to correct device
-        # Note: checkpoint is already loaded
-        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         
-        # Extract semantic version from manifest for proper shadow trade tracking
-        if "manifest" in checkpoint:
-            manifest = checkpoint["manifest"]
-            model_version = manifest.get("model_version", checkpoint_name)
-            git_sha = manifest.get("git_sha", "unknown")[:8]
-            logger.info(f"Loaded checkpoint with manifest: version={model_version}, git={git_sha}")
-            console_log(f"Checkpoint loaded (v{model_version})", "SUCCESS")
-        else:
-            # Fallback for old checkpoints without manifest
-            model_version = checkpoint_name
-            console_log("Checkpoint loaded (no manifest)", "SUCCESS")
+    # BOOTSTRAP: Centralized Initialization
+    # Replaces manual creation of Model, Client, Engine, etc.
+    try:
+        stack = create_trading_stack(
+            settings, 
+            checkpoint_path=checkpoint_path, 
+            device=None, # Auto-detect
+            verify_ckpt=not getattr(args, 'skip_checkpoint_verify', False)
+        )
+    except Exception as e:
+        logger.critical(f"Failed to bootstrap trading stack: {e}")
+        console_log(f"BOOTSTRAP FAILED: {e}", "ERROR")
+        return 1
         
-        logger.info(f"Loaded checkpoint: {checkpoint_path}")
-    else:
-        model_version = "live_unversioned"
-
-    # Initialize components
-    console_log("Initializing trading components...", "WAIT")
-    client = DerivClient(settings)
-    # NOTE: ShadowLogger deprecated per architectural audit
-    # SQLiteShadowStore is now the sole shadow persistence path
-
-    # SQLite-backed shadow store for FULL CONTEXT CAPTURE
-    # This enables the continual learning pipeline by storing tick/candle windows
-    shadow_store = SQLiteShadowStore(Path(settings.system.system_db_path))
+    model = stack["model"]
+    client = stack["client"]
+    engine = stack["engine"]
+    shadow_store = stack["shadow_store"]
+    feature_builder = stack["feature_builder"]
+    regime_veto = stack["regime_veto"]
+    device = stack["device"]
     
-        # M13: DB Pruning - DEPRECATED: Moved to background task
-        
-    console_log("Shadow store ready (SQLite)", "SUCCESS")
-
-    # Regime veto authority (can block all trades during anomalous conditions)
-    # Regime veto authority (can block all trades during anomalous conditions)
-    regime_veto = RegimeVeto(
-        threshold_caution=settings.hyperparams.regime_caution_threshold,
-        threshold_veto=settings.hyperparams.regime_veto_threshold,
-    )
-
-    engine = DecisionEngine(
-        settings, regime_veto=regime_veto, shadow_store=shadow_store, model_version=model_version
-    )
-
-    # Shadow Trade Resolver (Resolves outcomes after configured duration)
-    resolver = ShadowTradeResolver(
-        shadow_store, 
-        duration_minutes=settings.shadow_trade.duration_minutes,
-        client=client,
-        staleness_threshold_minutes=settings.shadow_trade.staleness_threshold_minutes,
-        timeframe=settings.trading.timeframe,  # I03 Fix: Use configured timeframe
-    )
-
-    # Initialize Observability Monitors
-    model_monitor = ModelHealthMonitor()
-    system_monitor = SystemHealthMonitor()
-    system_monitor.register_component("model", create_model_health_checker(model_monitor))
-
-    # CANONICAL FEATURE PIPELINE - single entry point for all feature engineering
-    feature_builder = FeatureBuilder(settings)
-    logger.info(f"Feature pipeline v{feature_builder.get_schema_version()}: canonical path active")
+    console_log(f"Stack initialized (Model v{engine.model_version})", "SUCCESS")
+    console_log(f"Shadow Store: SQLite", "SUCCESS")
+    logger.info(f"MarketDataBuffer initialized with warmup={settings.data_shapes.warmup_steps}")
 
     # Buffer abstraction - encapsulates tick/candle management and candle close detection
     # C04: Add warmup steps to buffer sizes to prevent feature flickering

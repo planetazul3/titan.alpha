@@ -107,13 +107,23 @@ def verify_checkpoint(checkpoint_path: Path):
             recon_error = model.get_volatility_anomaly_score(v_tensor).item()
             
         print(f"   SUCCESS: Inference completed.")
-        print(f"   Outputs: { {k: f'{v.item():.4f}' for k, v in probs.items()} }")
+        
+        # Robustly print outputs
+        output_str = {}
+        for k, v in probs.items():
+            if v.numel() == 1:
+                output_str[k] = f"{v.item():.4f}"
+            else:
+                output_str[k] = f"Tensor{list(v.shape)} mean={v.float().mean().item():.4f}"
+        
+        print(f"   Outputs: {output_str}")
         print(f"   Reconstruction Error: {recon_error:.4f}")
         
         # Validate outputs
         for k, v in probs.items():
-            if not (0 <= v.item() <= 1):
-                print(f"   ERROR: Probability {k}={v.item():.4f} is out of [0, 1] range!")
+            # Check range [0, 1] for probabilities
+            if v.min() < 0 or v.max() > 1:
+                print(f"   ERROR: Probability {k} out of range [0, 1]! Range: [{v.min():.4f}, {v.max():.4f}]")
                 return False
         
         if recon_error < 0:

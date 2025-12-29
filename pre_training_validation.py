@@ -8,7 +8,7 @@ from models.tft import TemporalFusionTransformer
 from models.temporal_v2 import TemporalExpertV2
 from data.auto_features import AutoFeatureGenerator, FeatureCandidate
 from execution.rl_integration import RLTradingIntegration
-from config.settings import Settings
+from config.settings import load_settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +16,7 @@ logger = logging.getLogger("PreTrainingValidator")
 
 class PreTrainingValidator:
     def __init__(self):
-        self.settings = Settings()
+        self.settings = load_settings()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Running validation on {self.device}")
 
