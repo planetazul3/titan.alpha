@@ -90,6 +90,10 @@ class DerivDataset(Dataset):
         self.tick_len = settings.data_shapes.sequence_length_ticks
         self.candle_len = settings.data_shapes.sequence_length_candles
         self.warmup_steps = settings.data_shapes.warmup_steps
+        
+        # Audit Fix: Dynamic Label Thresholds
+        self.threshold_touch = settings.data_shapes.label_threshold_touch
+        self.threshold_range = settings.data_shapes.label_threshold_range
 
         # CANONICAL feature pipeline - single source of truth
         self.feature_builder = FeatureBuilder(settings)
@@ -107,8 +111,21 @@ class DerivDataset(Dataset):
         return cache_dir
 
     def _compute_hash(self, files: list[Path]) -> str:
-        """Compute hash of file states (names + mtimes + sizes)."""
+        """Compute hash of file states (names + mtimes + sizes) + config."""
         hasher = hashlib.md5()
+        
+        # Audit Fix: Include configuration parameters in hash
+        # If lookahead, seq_len, or thresholds change, cache must be rebuilt
+        config_str = (
+            f"lookahead={self.lookahead}:"
+            f"tick_len={self.tick_len}:"
+            f"candle_len={self.candle_len}:"
+            f"warmup={self.warmup_steps}:"
+            f"touch={self.threshold_touch}:"
+            f"range={self.threshold_range}"
+        )
+        hasher.update(config_str.encode())
+        
         for f in sorted(files):
             stat = f.stat()
             # Include name, size, time
@@ -410,14 +427,14 @@ class DerivDataset(Dataset):
         future_high = np.max(future_candles[:, 1])
         future_low = np.min(future_candles[:, 2])
         price_range = (future_high - future_low) / current_close
-        touch = 1.0 if price_range > 0.005 else 0.0  # 0.5% movement
+        touch = 1.0 if price_range > self.threshold_touch else 0.0
 
 
         # Range: Did price stay within 0.3% band?
         max_deviation = (
             max(abs(future_high - current_close), abs(future_low - current_close)) / current_close
         )
-        stays_in_range = 1.0 if max_deviation < 0.003 else 0.0
+        stays_in_range = 1.0 if max_deviation < self.threshold_range else 0.0
 
         return {
             "rise_fall": torch.tensor(rise_fall, dtype=torch.float32),

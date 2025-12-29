@@ -187,6 +187,14 @@ class DataShapes(BaseModel):
     warmup_steps: int = Field(
         default=50, description="Warmup steps for technical indicators", ge=0
     )
+    
+    # Audit Fix: Parameterized Label Thresholds
+    label_threshold_touch: float = Field(
+        default=0.005, description="Price movement threshold for Touch contracts (e.g. 0.5%)", gt=0.0
+    )
+    label_threshold_range: float = Field(
+        default=0.003, description="Range threshold for Range/Stay Between contracts (e.g. 0.3%)", gt=0.0
+    )
 
     @field_validator("sequence_length_ticks", "sequence_length_candles")
     @classmethod

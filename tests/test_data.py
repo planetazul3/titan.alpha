@@ -237,3 +237,74 @@ class TestFeatureBuilder:
         # Invalid shapes should raise
         with pytest.raises(ValueError, match="shape mismatch"):
             schema.validate_ticks(np.zeros((50,), dtype=np.float32))
+
+    def test_dataset_hash_sensitivity(self, mock_settings):
+        """Test that dataset hash changes with configuration."""
+        # Need to mock pathlib for this or use temporary files.
+        # Easier to unit test _compute_hash directly knowing it uses self.attributes
+        from data.dataset import DerivDataset
+        from pathlib import Path
+        
+        # Mock dataset instance without full init
+        dataset = DerivDataset.__new__(DerivDataset)
+        dataset.lookahead = 5
+        dataset.tick_len = 100
+        dataset.candle_len = 50
+        dataset.warmup_steps = 10
+        dataset.threshold_touch = 0.005
+        dataset.threshold_range = 0.003
+        
+        files = [Path("file1.parquet")]
+        # Mock file stat
+        with pytest.MonkeyPatch.context() as m:
+            mock_stat = MagicMock()
+            mock_stat.st_size = 100
+            mock_stat.st_mtime = 1000
+            m.setattr(Path, "stat", lambda x: mock_stat)
+            
+            hash1 = dataset._compute_hash(files)
+            
+            # Change threshold -> Hash should change
+            dataset.threshold_touch = 0.006
+            hash2 = dataset._compute_hash(files)
+            assert hash1 != hash2
+            
+            # Change lookahead -> Hash should change
+            dataset.lookahead = 6
+            hash3 = dataset._compute_hash(files)
+            assert hash2 != hash3
+
+    def test_label_generation_thresholds(self, mock_settings):
+        """Test label generation uses configured thresholds."""
+        from data.dataset import DerivDataset
+        
+        # Manually verify logic since _generate_labels depends on self.candles
+        dataset = DerivDataset.__new__(DerivDataset)
+        dataset.lookahead = 2
+        dataset.threshold_touch = 0.1  # 10% (High threshold)
+        dataset.threshold_range = 0.05 # 5%
+        
+        # [Open, High, Low, Close, Volume, Epoch]
+        # Current: Close=100
+        # Future 1: High=105, Low=95, Close=100 (5% movement)
+        dataset.candles = np.array([
+            [100, 100, 100, 100, 0, 0],   # Current (idx-1)
+            [100, 105, 95, 100, 0, 1],    # Future 1
+            [100, 105, 95, 100, 0, 2],    # Future 2
+        ], dtype=np.float32)
+        
+        labels = dataset._generate_labels(1)
+        
+        # Touch: Range is (105-95)/100 = 0.10 (10%)
+        # Threshold is 0.10. 0.10 > 0.10 is False. Touch = 0
+        # Wait, float comparison... let's trigger it.
+        # If range > threshold. 0.10 > 0.10 is False? Or close?
+        # Let's make threshold 0.09
+        
+        dataset.threshold_touch = 0.09
+        labels_trigger = dataset._generate_labels(1)
+        assert labels_trigger["touch"] == 1.0
+        
+        dataset.threshold_touch = 0.11
+        labels_no_trigger = dataset._generate_labels(1)
+        assert labels_no_trigger["touch"] == 0.0
