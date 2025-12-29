@@ -88,10 +88,12 @@ class DecisionEngine:
         )
         
         # Register Regime Veto (L4) into the policy
+        # Now strictly enforced via context passing to check_vetoes
         self.policy.register_veto(
             level=VetoPrecedence.REGIME,
-            check_fn=lambda: self.regime_veto.assess(self._last_reconstruction_error).is_vetoed(),
-            reason=lambda: f"Market anomaly detected (Regime Veto L4). Error: {self._last_reconstruction_error:.3f}"
+            check_fn=lambda reconstruction_error=0.0, **kwargs: self.regime_veto.assess(reconstruction_error).is_vetoed(),
+            reason=lambda: f"Market anomaly detected (Regime Veto L4). Error: {self._last_reconstruction_error:.3f}",
+            use_context=True
         )
         
         if TRACING_ENABLED:
@@ -114,17 +116,6 @@ class DecisionEngine:
         self._last_safety_sync: float = 0.0
         self._safety_sync_interval: float = 5.0  # seconds
         
-        # Initialize Execution Policy
-        # self.policy = ExecutionPolicy() # Removed, now initialized above
-        # SafetyProfile.apply(self.policy, self.settings) # Removed, now initialized above
-        
-        # Register Regime Veto (L4)
-        # Note: We can't check reconstruction error here directly, so we'll check it
-        # dynamically during process_model_output. But for now we just initialize policy.
-        # The actual veto check in process_model_output will drive the policy check.
-        # To make policy strictly enforce it, we'd need to pass reconstruction_error to check_vetoes
-        # or have a shared state. For now, DecisionEngine.process_model_output orchestrates it.
-
         logger.info(
             f"DecisionEngine initialized with regime thresholds: "
             f"CAUTION={self.regime_veto.threshold_caution:.3f}, "
@@ -188,7 +179,8 @@ class DecisionEngine:
                 span.set_attribute("reconstruction_error", reconstruction_error)
                 
                 # Check execution policy
-                policy_veto = self.policy.check_vetoes()
+                # STRICT ENFORCEMENT: reconstruction_error passed explicitly to policy
+                policy_veto = self.policy.check_vetoes(reconstruction_error=reconstruction_error)
                 if policy_veto:
                     span.set_attribute("veto.type", "policy")
                     span.set_attribute("veto.reason", str(policy_veto))
@@ -203,15 +195,7 @@ class DecisionEngine:
                 regime_assessment = self.regime_veto.assess(reconstruction_error)
                 span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
 
-                if regime_assessment.is_vetoed():
-                    span.set_attribute("veto.type", "regime")
-                    logger.warning(
-                        f"TRADE BLOCKED BY REGIME VETO: error {reconstruction_error:.4f} "
-                        f"> veto_threshold {self.regime_veto.threshold_veto:.3f}"
-                    )
-                    self._stats["processed"] += 1
-                    self._stats["regime_vetoed"] += 1
-                    return []
+                # Note: Manual regime veto check removed here as it is strictly enforced by policy above.
 
                 # R02: Filter probabilities into signals
                 all_signals = filter_signals(probs, self.settings, timestamp)
@@ -242,7 +226,8 @@ class DecisionEngine:
         else:
             # Fallback when tracing disabled
             # 1. Check Execution Policy Vetoes (IMPORTANT-004)
-            policy_veto = self.policy.check_vetoes()
+            # STRICT ENFORCEMENT: reconstruction_error passed explicitly to policy
+            policy_veto = self.policy.check_vetoes(reconstruction_error=reconstruction_error)
             if policy_veto:
                 logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
                 self._stats["processed"] += 1
@@ -252,24 +237,10 @@ class DecisionEngine:
                     self._stats["ignored"] += 1
                 return []
 
-            # ══════════════════════════════════════════════════════════════════════
-            # ══════════════════════════════════════════════════════════════════════
-            # STEP 1: REGIME VETO CHECK (ABSOLUTE AUTHORITY - NO BYPASS POSSIBLE)
-            # ══════════════════════════════════════════════════════════════════════
-            # Check regime assessment via RegimeVeto (primary safety mechanism)
+            # Check regime assessment via RegimeVeto (still needed for caution/filtering downstream)
             regime_assessment = self.regime_veto.assess(reconstruction_error)
 
-            # ══════════════════════════════════════════════════════════════════════
-            # CRITICAL: Strict Regime Veto Check via RegimeAssessment
-            # ══════════════════════════════════════════════════════════════════════
-            if regime_assessment.is_vetoed():
-                logger.warning(
-                    f"TRADE BLOCKED BY REGIME VETO: error {reconstruction_error:.4f} "
-                    f"> veto_threshold {self.regime_veto.threshold_veto:.3f}"
-                )
-                self._stats["processed"] += 1
-                self._stats["regime_vetoed"] += 1
-                return []  # BLOCKED
+            # Note: Manual regime veto check removed here as it is strictly enforced by policy above.
 
             # R02: Filter probabilities into signals
             all_signals = filter_signals(probs, self.settings, timestamp)

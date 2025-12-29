@@ -109,9 +109,9 @@ class ExecutionPolicy:
             circuit_breaker_reset_minutes: Minutes before circuit breaker auto-resets.
                                            Use settings.execution_safety.circuit_breaker_reset_minutes.
         """
-        # Veto registry: precedence level -> list of (check_fn, reason_provider, details_fn)
+        # Veto registry: precedence level -> list of (check_fn, reason_provider, details_fn, use_context)
         # reason_provider can be a str or a Callable[[], str]
-        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[[], bool], str | Callable[[], str], Optional[Callable[[], dict]]]]] = {
+        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[..., bool], str | Callable[[], str], Optional[Callable[[], dict]], bool]]] = {
             level: [] for level in VetoPrecedence
         }
         
@@ -164,30 +164,36 @@ class ExecutionPolicy:
     def register_veto(
         self,
         level: VetoPrecedence,
-        check_fn: Callable[[], bool],
+        check_fn: Callable[..., bool],
         reason: str | Callable[[], str],
         details_fn: Optional[Callable[[], dict]] = None,
+        use_context: bool = False,
     ) -> None:
         """
         Register a veto condition.
         
         Args:
             level: Precedence level for this veto
-            check_fn: Callable that returns True if veto should trigger
+            check_fn: Callable that returns True if veto should trigger.
+                      Can accept kwargs if use_context=True.
             reason: Human-readable explanation or callable returning one
             details_fn: Optional callable that returns context dict for logging
+            use_context: If True, check_fn will be called with kwargs passed to check_vetoes
         """
-        self._vetoes[level].append((check_fn, reason, details_fn))
+        self._vetoes[level].append((check_fn, reason, details_fn, use_context))
         display_reason = reason() if callable(reason) else reason
         logger.debug(f"Registered veto: L{level} - {display_reason}")
     
-    def check_vetoes(self) -> Optional[VetoDecision]:
+    def check_vetoes(self, **kwargs) -> Optional[VetoDecision]:
         """
         Check all vetoes in precedence order.
         
         Returns first blocking veto encountered, or None if all clear.
         This ensures highest-precedence vetoes always take priority.
         
+        Args:
+            **kwargs: Context arguments passed to vetoes registered with use_context=True.
+
         Returns:
             VetoDecision if any veto triggers, None otherwise
         """
@@ -199,9 +205,15 @@ class ExecutionPolicy:
             if level == VetoPrecedence.CIRCUIT_BREAKER and self._circuit_breaker_active:
                 self._maybe_auto_reset_circuit_breaker()
 
-            for check_fn, reason_provider, details_fn in self._vetoes[level]:
+            for check_fn, reason_provider, details_fn, use_context in self._vetoes[level]:
                 try:
-                    if check_fn():
+                    is_vetoed = False
+                    if use_context:
+                        is_vetoed = check_fn(**kwargs)
+                    else:
+                        is_vetoed = check_fn()
+
+                    if is_vetoed:
                         # Veto triggered
                         self._veto_counts[level] += 1
                         
