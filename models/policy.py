@@ -135,6 +135,11 @@ class TradingActor(nn.Module):
         self.mean_head = nn.Linear(hidden_dims[-1], action_dim)
         self.log_std_head = nn.Linear(hidden_dims[-1], action_dim)
         
+        # [Constraint] Negative Mean Siltation Fix:
+        # Initialize mean_head bias to small positive value to encourage 
+        # initial exploration above zero (overcoming sigmoid floor).
+        nn.init.constant_(self.mean_head.bias, 0.1)
+        
         logger.info(f"TradingActor initialized: state={state_dim}, action={action_dim}")
     
     def forward(
@@ -197,10 +202,29 @@ class TradingActor(nn.Module):
         
         return action, log_prob, mean
     
-    def get_action(self, state: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
-        """Get action for inference."""
+    def get_action(
+        self, 
+        state: torch.Tensor, 
+        deterministic: bool = False,
+        min_stake: float = 0.35
+    ) -> torch.Tensor:
+        """
+        Get action for inference with broker constraints.
+        
+        Args:
+            state: State tensor
+            deterministic: Whether to use mean action (default: False for training, True for eval)
+            min_stake: Minimum stake constraint from broker
+        """
         action, _, _ = self.sample(state, deterministic)
-        return action
+        
+        # [Feedback] Action Continuity:
+        # Clamp to min_stake to ensure valid broker actions.
+        # Note: If model wants to trade significantly > 0, we ensure it's at least min_stake.
+        # If model outputs strictly 0 (unlikely with sigmoid), max handles it.
+        # However, we only apply this validation check.
+        
+        return torch.max(action, torch.tensor(min_stake, device=action.device))
 
 
 class TradingCritic(nn.Module):

@@ -81,6 +81,27 @@ class TestTradingActor:
             action2 = actor.get_action(state, deterministic=True)
         
         assert torch.allclose(action1, action2)
+    
+    def test_min_stake_clamping(self):
+        """Test action is clamped to min_stake."""
+        actor = TradingActor(state_dim=32, action_dim=1, max_stake=10.0)
+        actor.eval()
+        state = torch.randn(1, 32)
+        
+        # Force a very small raw output by mocking sample or ensuring small output
+        # Easiest way is to verify get_action returns >= min_stake
+        
+        with torch.no_grad():
+            action = actor.get_action(state, deterministic=True, min_stake=0.35)
+        
+        assert (action >= 0.35).all()
+        
+    def test_bias_initialization(self):
+        """Test mean head bias is initialized to positive value."""
+        actor = TradingActor(state_dim=32, action_dim=1)
+        
+        # Check bias of the last layer (mean_head)
+        assert torch.allclose(actor.mean_head.bias, torch.tensor(0.1))
 
     def test_gradients_flow(self):
         """Test gradients flow through actor."""
