@@ -54,28 +54,15 @@ pip install --upgrade pip
 pip install ta-lib
 pip install -r requirements.txt
 
-# 4. CUSTOM FORK INSTALLATION
+# 4. CUSTOM FORK INSTALLATION (Clean Install)
 # -----------------------------------------------------------------------------
-echo "🔧 Setting up custom python-deriv-api fork..."
+echo "🔧 Installing custom python-deriv-api from Fork..."
 
-# We ensure we don't use the empty folder from the main repo
-if [ -d "python-deriv-api" ]; then
-    rm -rf python-deriv-api
-fi
+# Use pip to install directly from git. keeping the repo clean.
+# This avoids leaving a 'python-deriv-api' folder in your workspace.
+pip install git+https://github.com/planetazul3/python-deriv-api.git@master
 
-# CLONE YOUR FORK
-# NOTE: Ensure you have added 'planetazul3/python-deriv-api' to Jules' allowed repos!
-echo "⬇️ Cloning fork from planetazul3..."
-git clone https://github.com/planetazul3/python-deriv-api.git
-
-# Install
-if [ -d "python-deriv-api" ]; then
-    pip install -e ./python-deriv-api
-    echo "✅ Fork installed successfully."
-else
-    echo "❌ Error: Clone failed. Please check permissions in Jules settings."
-    exit 1
-fi
+echo "✅ Fork installed successfully."
 
 # 5. Verification
 # -----------------------------------------------------------------------------
