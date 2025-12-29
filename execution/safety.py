@@ -8,6 +8,17 @@ Provides a safety layer around trade execution to enforce:
 - Kill switch functionality
 
 Uses persistent storage to maintain safety state across restarts.
+
+Architecture (RISK-ARCH-REVIEW):
+- **ExecutionPolicy**: The sole decision maker for "should we trade?"
+  SafeTradeExecutor can register its rate-limit checks with ExecutionPolicy.
+- **SafeTradeExecutor**: The execution layer that:
+  1. Records trade outcomes to persistent storage
+  2. Executes trades with retry logic
+  3. Provides rate-limit state to ExecutionPolicy via veto registration
+  
+This separation ensures unified veto logging through the policy layer while
+keeping persistence and execution concerns in SafeTradeExecutor.
 """
 
 import asyncio
@@ -15,10 +26,13 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol, Optional
+from typing import Any, Callable, Protocol, Optional, TYPE_CHECKING
 
 from execution.executor import TradeExecutor, TradeResult, TradeSignal
 from execution.safety_store import SQLiteSafetyStateStore
+
+if TYPE_CHECKING:
+    from execution.policy import ExecutionPolicy
 
 try:
     from opentelemetry import trace
@@ -45,6 +59,19 @@ class SafeTradeExecutor:
     """
     Wrapper around TradeExecutor that enforces safety policies.
     
+    ARCHITECTURE (RISK-ARCH-REVIEW):
+    This class focuses on EXECUTION AND PERSISTENCE. For unified veto decisions,
+    use `register_with_policy()` to register rate-limit checks with ExecutionPolicy.
+    
+    Responsibilities:
+    - Record trade outcomes to persistent SQLite store
+    - Execute trades with retry logic for API errors
+    - Provide rate-limit state for ExecutionPolicy integration
+    - Validate stake amounts before execution
+    
+    The policy layer (ExecutionPolicy) owns the "should we trade?" decision.
+    This class owns the "how do we execute and record?" implementation.
+    
     Persists state to prevent limit bypassing via restarts.
     """
     
@@ -53,21 +80,24 @@ class SafeTradeExecutor:
         inner_executor: TradeExecutor,
         config: ExecutionSafetyConfig,
         state_file: str | Path,
-        stake_resolver: Optional[Callable[[TradeSignal], float | Any]] = None  # Any for Coroutine
+        stake_resolver: Optional[Callable[[TradeSignal], float | Any]] = None,
+        policy: Optional["ExecutionPolicy"] = None,
     ):
         """
         Initialize safe executor.
         
         Args:
-            executor: Raw execution implementation
+            inner_executor: Raw execution implementation
             config: Safety limits configuration
             state_file: Path to SQLite state DB
-            stake_resolver: Function to resolve stake amount for a signal (for pre-check)
+            stake_resolver: Function to resolve stake amount for a signal
+            policy: Optional ExecutionPolicy to register rate-limit vetoes with
         """
         self.inner = inner_executor
         self.config = config
         self.store = SQLiteSafetyStateStore(state_file)
         self.stake_resolver = stake_resolver
+        self._policy = policy
         
         # In-memory short-term rate limits (reset on restart is acceptable for per-minute)
         # For daily limits, we check the DB.
@@ -78,12 +108,61 @@ class SafeTradeExecutor:
             self.tracer = trace.get_tracer(__name__)
         else:
             self.tracer = None
+        
+        # RISK-ARCH-REVIEW: Register rate-limit vetoes with policy if provided
+        if policy is not None:
+            self.register_with_policy(policy)
             
-        logger.info(f"SafeTradeExecutor initialized with DB: {state_file}")
+        logger.info(f"SafeTradeExecutor initialized with DB: {state_file}, policy_integrated={policy is not None}")
+    
+    def register_with_policy(self, policy: "ExecutionPolicy") -> None:
+        """
+        Register rate-limit checks with ExecutionPolicy for unified veto logging.
+        
+        RISK-ARCH-REVIEW: This ensures all veto decisions flow through the policy layer.
+        Rate limits are registered as RATE_LIMIT precedence (L3).
+        
+        Args:
+            policy: ExecutionPolicy to register vetoes with
+        """
+        from execution.policy import VetoPrecedence
+        
+        self._policy = policy
+        
+        # Register global rate limit veto
+        policy.register_veto(
+            level=VetoPrecedence.RATE_LIMIT,
+            check_fn=lambda: not self._check_global_rate_limit(),
+            reason=lambda: f"Global rate limit: {len(self._minute_trades)}/{self.config.max_trades_per_minute} per minute",
+            details_fn=lambda: {
+                "trades_this_minute": len(self._minute_trades),
+                "limit": self.config.max_trades_per_minute,
+            }
+        )
+        
+        logger.info("SafeTradeExecutor registered rate-limit vetoes with ExecutionPolicy")
+    
+    def _check_global_rate_limit(self) -> bool:
+        """Check if global rate limit allows trading."""
+        now = datetime.now(timezone.utc).timestamp()
+        window = 60.0
+        self._minute_trades = [t for t in self._minute_trades if now - t < window]
+        return len(self._minute_trades) < self.config.max_trades_per_minute
 
     async def execute(self, signal: TradeSignal) -> TradeResult:
         """
         Execute trade with safety checks.
+        
+        ARCHITECTURE NOTE (RISK-ARCH-REVIEW):
+        If policy is registered, kill switch and daily loss checks are handled by
+        the policy layer (DecisionEngine.process_model_output). This method focuses on:
+        - Per-symbol rate limits (local check)
+        - Stake validation
+        - Execution with retries
+        - State persistence
+        
+        For full unified veto checking, ensure ExecutionPolicy.check_vetoes() is
+        called before reaching this method.
         
         Args:
             signal: Trade signal
@@ -91,15 +170,15 @@ class SafeTradeExecutor:
         Returns:
             TradeResult (success or failure with error)
         """
-        # 1. Check Kill Switch
-        if self.config.kill_switch_enabled:
+        # 1. Fallback Kill Switch check (if not using policy integration)
+        if self._policy is None and self.config.kill_switch_enabled:
             return self._reject("Kill switch enabled")
 
-        # 2. Check State-Based Limits (Daily)
-        if not await self._check_daily_limits():
+        # 2. Fallback Daily Limits check (if not using policy integration)
+        if self._policy is None and not await self._check_daily_limits():
             return self._reject("Daily limits exceeded")
 
-        # 3. Check Short-Term Rate Limits
+        # 3. Check Short-Term Rate Limits (symbol-specific, always local)
         if not self._check_rate_limits(get_symbol_from_signal(signal)):
              return self._reject("Rate limit exceeded")
              

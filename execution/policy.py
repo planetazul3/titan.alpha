@@ -43,9 +43,12 @@ class VetoPrecedence(IntEnum):
     
     Based on algorithmic trading risk management hierarchy:
     - Emergency controls (kill switch, circuit breakers) have highest precedence
-    - Risk limits (P&L caps) come next
+    - Risk limits (P&L caps, rate limits) come next
     - Model quality controls (calibration, regime) follow
     - Signal quality (confidence) has lowest precedence
+    
+    RISK-ARCH-REVIEW: Rate limits are now registered here for unified veto logging.
+    SafeTradeExecutor registers its rate-limit checks as RATE_LIMIT vetoes.
     
     This ensures that critical safety mechanisms cannot be bypassed by
     any other conditions.
@@ -54,9 +57,10 @@ class VetoPrecedence(IntEnum):
     KILL_SWITCH = 0  # Emergency manual halt (highest precedence)
     CIRCUIT_BREAKER = 1  # Consecutive failures threshold
     DAILY_LOSS = 2  # Daily P&L limit exceeded
-    CALIBRATION = 3  # Reconstruction error threshold
-    REGIME = 4  # Market anomaly detection
-    CONFIDENCE = 5  # Minimum probability threshold (lowest precedence)
+    RATE_LIMIT = 3  # Per-minute/symbol rate limits (RISK-ARCH-REVIEW)
+    CALIBRATION = 4  # Reconstruction error threshold
+    REGIME = 5  # Market anomaly detection
+    CONFIDENCE = 6  # Minimum probability threshold (lowest precedence)
 
 
 @dataclass
