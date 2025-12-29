@@ -74,3 +74,18 @@ echo "✅ Fork installed successfully."
 # 5. Verification
 # -----------------------------------------------------------------------------
 python -c "import deriv_api; print(f'✅ Success! Deriv API loaded from: {deriv_api.__file__}')"
+
+# 6. CLEANUP (Crucial for Jules Verification)
+# -----------------------------------------------------------------------------
+# Jules requires a clean working tree to finish snapshot creation.
+echo "🧹 Cleaning up workspace to satisfy Jules verification..."
+
+# Remove local python version file created by pyenv
+if [ -f ".python-version" ]; then
+    rm ".python-version"
+fi
+
+# Final reset to ensure no untracked files or modifications remain
+# This won't affect the installed packages in the environment
+git reset --hard HEAD
+echo "✨ Workspace is clean. Setup complete."
