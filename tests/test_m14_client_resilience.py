@@ -64,5 +64,91 @@ class TestClientResilience:
             
         assert not client.is_connected
 
+
+class TestCircuitBreakerProbeLock:
+    """Test HALF_OPEN probe lock-out behavior."""
+
+    def test_half_open_allows_only_one_probe(self):
+        """Verify only ONE request passes in HALF_OPEN state."""
+        from data.ingestion.client import CircuitBreaker, CircuitState
+        
+        cb = CircuitBreaker(failure_threshold=1, initial_cooldown=0.01)
+        
+        # Trigger OPEN state
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+        
+        # Wait for cooldown to transition to HALF_OPEN
+        import time
+        time.sleep(0.02)
+        
+        # First request should be allowed (probe)
+        assert cb.should_allow_request() is True
+        assert cb.state == CircuitState.HALF_OPEN
+        
+        # Second concurrent request should be blocked
+        assert cb.should_allow_request() is False
+        assert cb.should_allow_request() is False  # Still blocked
+
+    def test_half_open_probe_reset_on_success(self):
+        """Verify probe lock resets after success."""
+        from data.ingestion.client import CircuitBreaker, CircuitState
+        
+        cb = CircuitBreaker(failure_threshold=1, initial_cooldown=0.01)
+        
+        cb.record_failure()
+        import time
+        time.sleep(0.02)
+        
+        # First probe allowed
+        assert cb.should_allow_request() is True
+        assert cb._probing is True
+        
+        # Success resets everything
+        cb.record_success()
+        assert cb.state == CircuitState.CLOSED
+        assert cb._probing is False
+        
+        # Now all requests allowed
+        assert cb.should_allow_request() is True
+        assert cb.should_allow_request() is True
+
+    def test_half_open_probe_reset_on_failure(self):
+        """Verify probe lock resets when going back to OPEN."""
+        from data.ingestion.client import CircuitBreaker, CircuitState
+        
+        cb = CircuitBreaker(failure_threshold=1, initial_cooldown=0.01)
+        
+        cb.record_failure()
+        import time
+        time.sleep(0.02)
+        
+        # First probe allowed
+        assert cb.should_allow_request() is True
+        assert cb._probing is True
+        
+        # Failure during probe goes back to OPEN
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+        assert cb._probing is False  # Reset when leaving HALF_OPEN
+
+    def test_state_change_tracks_duration(self, caplog):
+        """Verify state transitions log duration in previous state."""
+        import logging
+        from data.ingestion.client import CircuitBreaker, CircuitState
+        
+        with caplog.at_level(logging.INFO):
+            cb = CircuitBreaker(failure_threshold=1, initial_cooldown=0.01)
+            
+            import time
+            time.sleep(0.05)
+            
+            # Trigger state change
+            cb.record_failure()
+        
+        # Check log contains duration info
+        assert any("was in closed for" in record.message.lower() for record in caplog.records)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

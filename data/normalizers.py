@@ -81,7 +81,7 @@ def log_returns(prices: np.ndarray, fill_first: bool = True) -> np.ndarray:
 
 
 def z_score_normalize(
-    values: np.ndarray, window: int | None = None, epsilon: float = 1e-6
+    values: np.ndarray, window: int | None = None, epsilon: float | None = None
 ) -> np.ndarray:
     """
     Apply Z-score normalization: (x - mean) / std.
@@ -93,7 +93,8 @@ def z_score_normalize(
         values: Input array to normalize
         window: Rolling window size for local normalization.
                 If None, uses global statistics.
-        epsilon: Small value to avoid division by zero (default 1e-6)
+        epsilon: Small value to avoid division by zero.
+                 If None, uses ZSCORE_EPSILON from config/constants.py (default 1e-8).
 
     Returns:
         Normalized array of same shape, with NaN filled as 0
@@ -107,6 +108,10 @@ def z_score_normalize(
         >>> normalized = z_score_normalize(values)
         >>> # Mean ≈ 0, std ≈ 1
     """
+    from config.constants import ZSCORE_EPSILON
+    
+    if epsilon is None:
+        epsilon = ZSCORE_EPSILON
     if not isinstance(values, np.ndarray):
         raise TypeError(f"values must be np.ndarray, got {type(values)}")
 

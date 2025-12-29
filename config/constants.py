@@ -109,6 +109,16 @@ DEFAULT_API_TIMEOUT: Final[float] = 10.0
 CONTRACT_SETTLE_TIMEOUT: Final[float] = 180.0
 """Maximum wait time for contract settlement in seconds."""
 
+# Backoff Configuration
+BACKOFF_BASE_SECONDS: Final[float] = 2.0
+"""Base delay for exponential backoff calculations."""
+
+BACKOFF_MIN_JITTER: Final[float] = 0.5
+"""Minimum jitter multiplier (delay * jitter_min = minimum actual delay)."""
+
+BACKOFF_MAX_JITTER: Final[float] = 1.5
+"""Maximum jitter multiplier (delay * jitter_max = maximum actual delay)."""
+
 # Feature Engineering
 CANDLE_FEATURE_COUNT: Final[int] = 10
 """Number of features per candle: O, H, L, C, V, T, RSI, BB_width, BB_%b, ATR."""
@@ -121,3 +131,30 @@ MAX_CONSECUTIVE_NANS: Final[int] = 10
 DEFAULT_CANDLE_INTERVAL: Final[int] = 60
 """Default candle interval in seconds (1 minute)."""
 
+# Data Integrity - Gap Detection Thresholds (seconds)
+GAP_THRESHOLDS: Final[dict[str, int]] = {
+    # Synthetic indices - high frequency, tight thresholds
+    "R_100": 5,
+    "R_50": 5,
+    "R_25": 5,
+    "R_10": 5,
+    "1HZ100V": 2,  # 1-second volatility index
+    "1HZ50V": 2,
+    # Default for forex/crypto - variable liquidity
+    "default": 60,
+}
+"""
+Symbol-specific gap thresholds for tick data integrity checks.
+
+Synthetic indices (R_*) have continuous price feeds, so gaps > 5s indicate issues.
+Forex/crypto pairs may have longer gaps during low liquidity periods.
+"""
+
+# Normalization
+ZSCORE_EPSILON: Final[float] = 1e-8
+"""
+Epsilon for z-score normalization denominator.
+
+Set to 1e-8 to handle log returns (typically 1e-4 to 1e-3 magnitude).
+Previous value of 1e-6 could dominate the denominator in low-volatility periods.
+"""

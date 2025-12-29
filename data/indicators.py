@@ -153,3 +153,49 @@ def adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) 
         high.astype(np.float64), low.astype(np.float64), close.astype(np.float64), timeperiod=period
     )
     return np.nan_to_num(result, nan=0.0)
+
+
+def compute_warmup_periods(
+    rsi_period: int = 14,
+    bb_period: int = 20,
+    atr_period: int = 14,
+    macd_slow: int = 26,
+    macd_signal: int = 9,
+    stoch_fastk: int = 14,
+    stoch_slowk: int = 3,
+    stoch_slowd: int = 3,
+    adx_period: int = 14,
+) -> dict[str, int]:
+    """
+    Compute warmup periods for all indicators.
+    
+    During warmup, indicator values are placeholders (not real calculations).
+    Use this to determine how many bars to skip before trusting indicator values.
+    
+    Args:
+        rsi_period: RSI calculation period
+        bb_period: Bollinger Bands period
+        atr_period: ATR period
+        macd_slow: MACD slow EMA period
+        macd_signal: MACD signal line period
+        stoch_fastk: Stochastic fast %K period
+        stoch_slowk: Stochastic slow %K period
+        stoch_slowd: Stochastic slow %D period
+        adx_period: ADX period
+        
+    Returns:
+        Dictionary mapping indicator name to warmup period in bars.
+        Includes 'total' key with the maximum warmup needed for all indicators.
+    """
+    warmups = {
+        "rsi": rsi_period + 1,
+        "bollinger": bb_period,
+        "atr": atr_period,
+        "ema": bb_period,  # Uses same period as BB by default
+        "sma": bb_period,
+        "macd": macd_slow + macd_signal - 1,
+        "stochastic": stoch_fastk + stoch_slowk + stoch_slowd - 2,
+        "adx": adx_period * 2,  # ADX needs ~2x period to stabilize
+    }
+    warmups["total"] = max(warmups.values())
+    return warmups

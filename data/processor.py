@@ -31,6 +31,31 @@ from data import indicators, normalizers
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_output(arr: np.ndarray, name: str = "output") -> np.ndarray:
+    """
+    Final sanity check: verify absence of NaN/Inf values.
+    
+    This is a defensive layer to catch any edge cases missed by individual
+    indicator calculations. If issues are detected, they are logged and
+    replaced with 0 to prevent model failures.
+    
+    Args:
+        arr: Array to validate
+        name: Name for logging context
+        
+    Returns:
+        Sanitized array with NaN/Inf replaced by 0
+    """
+    if not np.all(np.isfinite(arr)):
+        nan_count = int(np.sum(np.isnan(arr)))
+        inf_count = int(np.sum(np.isinf(arr)))
+        logger.warning(
+            f"Sanitizing {name}: {nan_count} NaN, {inf_count} Inf values replaced with 0"
+        )
+        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(arr.dtype)
+    return arr
+
+
 class TickPreprocessor:
     """
     Preprocessor for raw tick price data.
@@ -104,6 +129,8 @@ class TickPreprocessor:
                 pad_width = self.target_length - curr_len
                 result = np.pad(normalized, (pad_width, 0), mode="constant", constant_values=0)
 
+            # Sanity check: ensure no NaN/Inf in output
+            result = _sanitize_output(result, "TickPreprocessor")
             return result.astype(np.float32)
 
         except Exception as e:
@@ -236,6 +263,8 @@ class CandlePreprocessor:
                 pad = np.zeros((pad_len, 10))
                 result = np.vstack([pad, features])
 
+            # Sanity check: ensure no NaN/Inf in output
+            result = _sanitize_output(result, "CandlePreprocessor")
             return result.astype(np.float32)
 
         except Exception as e:
@@ -254,6 +283,20 @@ class VolatilityMetricsExtractor:
     - Mean Bollinger Band width
 
     These metrics feed into the volatility autoencoder expert.
+    
+    NORMALIZATION CONTRACT:
+    ========================
+    The normalization factors in settings.normalization MUST match the values
+    used during model training. Changing these values without retraining will
+    cause regime veto miscalibration (false positives/negatives).
+    
+    Default values (embedded in config/settings.py):
+    - norm_factor_volatility: 20   (realized_vol * 20 -> ~0.02-1.0)
+    - norm_factor_atr: 100         (atr_normalized * 100 -> ~0.1-1.0)
+    - norm_factor_rsi_std: 0.02    (rsi_std * 0.02 -> ~0.1-0.5)
+    - norm_factor_bb_width: 10     (bb_width * 10 -> ~0.1-1.0)
+    
+    If loading a model checkpoint, verify these match the training config.
     """
 
     def __init__(self, settings: Settings):

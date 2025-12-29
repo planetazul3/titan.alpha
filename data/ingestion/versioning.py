@@ -48,6 +48,9 @@ class DatasetMetadata:
     # Checksum (optional)
     sha256: str | None = None
 
+    # Production protection
+    locked: bool = False  # Prevent modification when in production use
+
     # Metadata
     created_at: str = ""
     download_duration_seconds: float | None = None
@@ -215,3 +218,72 @@ def create_metadata(
         created_at=datetime.now(timezone.utc).isoformat(),
         download_duration_seconds=download_duration,
     )
+
+
+def is_dataset_locked(parquet_path: Path) -> bool:
+    """
+    Check if a dataset is locked for production use.
+    
+    Locked datasets should not be modified or deleted by maintenance scripts.
+    
+    Args:
+        parquet_path: Path to the Parquet data file.
+        
+    Returns:
+        True if dataset is locked, False otherwise.
+    """
+    metadata = load_metadata(parquet_path)
+    return metadata.locked if metadata else False
+
+
+def lock_dataset(parquet_path: Path, reason: str = "") -> bool:
+    """
+    Lock a dataset to prevent accidental modification.
+    
+    Use this when a dataset is being used for production training or trading.
+    
+    Args:
+        parquet_path: Path to the Parquet data file.
+        reason: Optional reason for locking (logged but not stored).
+        
+    Returns:
+        True if lock was successful, False if already locked or metadata missing.
+    """
+    metadata = load_metadata(parquet_path)
+    if metadata is None:
+        logger.error(f"Cannot lock {parquet_path}: no metadata found")
+        return False
+    
+    if metadata.locked:
+        logger.warning(f"Dataset {parquet_path.name} is already locked")
+        return False
+    
+    metadata.locked = True
+    save_metadata(parquet_path, metadata)
+    logger.info(f"Locked dataset {parquet_path.name}" + (f": {reason}" if reason else ""))
+    return True
+
+
+def unlock_dataset(parquet_path: Path) -> bool:
+    """
+    Unlock a dataset for maintenance operations.
+    
+    Args:
+        parquet_path: Path to the Parquet data file.
+        
+    Returns:
+        True if unlock was successful, False if not locked or metadata missing.
+    """
+    metadata = load_metadata(parquet_path)
+    if metadata is None:
+        logger.error(f"Cannot unlock {parquet_path}: no metadata found")
+        return False
+    
+    if not metadata.locked:
+        logger.debug(f"Dataset {parquet_path.name} is not locked")
+        return False
+    
+    metadata.locked = False
+    save_metadata(parquet_path, metadata)
+    logger.info(f"Unlocked dataset {parquet_path.name}")
+    return True

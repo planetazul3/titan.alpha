@@ -58,16 +58,29 @@ class IntegrityChecker:
     detailed reports for data quality assessment.
     """
 
-    # Default gap threshold for tick data (seconds)
+    # Default gap threshold for tick data (seconds) - used if no symbol specified
     DEFAULT_TICK_GAP_THRESHOLD = 10
 
-    def __init__(self, tick_gap_threshold: int = DEFAULT_TICK_GAP_THRESHOLD):
+    def __init__(
+        self,
+        symbol: str | None = None,
+        tick_gap_threshold: int | None = None,
+    ):
         """
         Args:
-            tick_gap_threshold: Maximum expected interval between ticks (seconds).
-                               Intervals larger than this are flagged as gaps.
+            symbol: Optional symbol for symbol-specific gap thresholds.
+            tick_gap_threshold: Explicit override for gap threshold (seconds).
+                               If provided, takes precedence over symbol lookup.
         """
-        self.tick_gap_threshold = tick_gap_threshold
+        if tick_gap_threshold is not None:
+            self.tick_gap_threshold = tick_gap_threshold
+        elif symbol:
+            from config.constants import GAP_THRESHOLDS
+            self.tick_gap_threshold = GAP_THRESHOLDS.get(
+                symbol, GAP_THRESHOLDS.get("default", self.DEFAULT_TICK_GAP_THRESHOLD)
+            )
+        else:
+            self.tick_gap_threshold = self.DEFAULT_TICK_GAP_THRESHOLD
 
     def check_gaps_ticks(self, ticks: list[dict[str, Any]]) -> list[GapInfo]:
         """

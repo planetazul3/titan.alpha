@@ -214,41 +214,67 @@ class PartitionedDownloader:
     def find_resume_point(self, data_type: str, granularity: int | None = None) -> int | None:
         """
         Find the latest epoch from existing partitions for resume capability.
-        Verifies checksums of existing partitions to ensure resume data is valid.
+        Verifies checksums of existing partitions and checks for continuity gaps.
 
         Returns:
-            Latest end_epoch + 1 if partitions exist and are valid, None otherwise.
+            Latest end_epoch + 1 if partitions exist, are valid, and continuous.
+            If a gap is detected, returns the epoch after the last continuous partition.
+            None if no valid partitions exist.
         """
         from data.ingestion.versioning import verify_checksum
         
         partition_dir = self._get_partition_dir(data_type, granularity)
 
-        latest_epoch = None
-        latest_file = None
+        # Collect all valid partitions with their metadata
+        valid_partitions: list[tuple[Path, DatasetMetadata]] = []
         
-        # Sort partitions by name (YYYY-MM) to find the most recent one
+        # Sort partitions by name (YYYY-MM) chronologically
         parquet_files = sorted(partition_dir.glob("*.parquet"))
         
-        for parquet_file in reversed(parquet_files):
+        for parquet_file in parquet_files:
             metadata = load_metadata(parquet_file)
-            if not metadata or not metadata.end_epoch:
+            if not metadata or not metadata.end_epoch or not metadata.start_epoch:
+                logger.debug(f"Skipping {parquet_file.name}: missing metadata or epoch info")
                 continue
                 
             # Verify checksum if present in metadata
             if metadata.sha256:
                 if not verify_checksum(parquet_file, metadata.sha256):
-                    logger.warning(f"Checksum validation failed for {parquet_file.name}, skipping resume from this partition")
-                    continue
+                    logger.warning(f"Checksum validation failed for {parquet_file.name}, stopping resume chain")
+                    break  # Stop at first invalid partition
             
-            if latest_epoch is None or metadata.end_epoch > latest_epoch:
-                latest_epoch = metadata.end_epoch
-                latest_file = parquet_file
+            valid_partitions.append((parquet_file, metadata))
 
-        if latest_epoch:
-            logger.info(f"Found valid existing data in {latest_file.name} up to epoch {latest_epoch}")
-            return latest_epoch + 1
+        if not valid_partitions:
+            return None
 
-        return None
+        # Check continuity between sequential partitions
+        # Max allowed gap: 2x granularity for candles, 60 seconds for ticks
+        max_gap = (granularity * 2) if granularity else 60
+        
+        last_continuous_idx = 0
+        for i in range(1, len(valid_partitions)):
+            prev_file, prev_meta = valid_partitions[i - 1]
+            curr_file, curr_meta = valid_partitions[i]
+            
+            gap = curr_meta.start_epoch - prev_meta.end_epoch
+            
+            if gap > max_gap:
+                logger.warning(
+                    f"Gap detected between {prev_file.name} (end: {prev_meta.end_epoch}) "
+                    f"and {curr_file.name} (start: {curr_meta.start_epoch}): {gap}s gap"
+                )
+                # Resume from the end of the last continuous partition before the gap
+                resume_point = prev_meta.end_epoch + 1
+                logger.info(f"Resuming from gap point: epoch {resume_point}")
+                return resume_point
+            
+            last_continuous_idx = i
+
+        # All partitions are continuous - resume from the latest
+        latest_file, latest_meta = valid_partitions[last_continuous_idx]
+        logger.info(f"Found valid continuous data in {latest_file.name} up to epoch {latest_meta.end_epoch}")
+        return latest_meta.end_epoch + 1
 
     def _save_partition(
         self,

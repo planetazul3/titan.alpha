@@ -72,6 +72,11 @@ class CircuitBreaker:
         self._failure_count = 0
         self._last_failure_time: float = 0.0
         self._current_cooldown = initial_cooldown
+        
+        # Probe lock for HALF_OPEN state - only one request allowed
+        self._probing: bool = False
+        # Timestamp for tracking duration in each state
+        self._state_entered_at: float = time.monotonic()
     
     @property
     def state(self) -> CircuitState:
@@ -83,11 +88,23 @@ class CircuitBreaker:
         return self._state
     
     def _set_state(self, new_state: CircuitState) -> None:
-        """Set state and notify callback."""
+        """Set state and notify callback with duration logging."""
         if new_state != self._state:
             old_state = self._state
+            now = time.monotonic()
+            duration = now - self._state_entered_at
+            
             self._state = new_state
-            logger.info(f"Circuit breaker: {old_state.value} → {new_state.value}")
+            self._state_entered_at = now
+            
+            # Reset probe lock when leaving HALF_OPEN
+            if old_state == CircuitState.HALF_OPEN:
+                self._probing = False
+            
+            logger.info(
+                f"Circuit breaker: {old_state.value} → {new_state.value} "
+                f"(was in {old_state.value} for {duration:.1f}s)"
+            )
             if self.on_state_change:
                 try:
                     self.on_state_change(new_state)
@@ -98,6 +115,7 @@ class CircuitBreaker:
         """Record a successful operation, resetting the circuit."""
         self._failure_count = 0
         self._current_cooldown = self.initial_cooldown
+        self._probing = False  # Reset probe lock
         self._set_state(CircuitState.CLOSED)
     
     def record_failure(self) -> None:
@@ -118,12 +136,21 @@ class CircuitBreaker:
             )
     
     def should_allow_request(self) -> bool:
-        """Check if a request should be allowed."""
+        """
+        Check if a request should be allowed.
+        
+        In HALF_OPEN state, only ONE probe request is allowed at a time.
+        Other concurrent requests must wait or fail until the probe completes.
+        """
         current_state = self.state  # This may auto-transition
         if current_state == CircuitState.CLOSED:
             return True
         elif current_state == CircuitState.HALF_OPEN:
-            return True  # Allow probe
+            # Only allow first probe request; others must wait
+            if self._probing:
+                return False
+            self._probing = True
+            return True
         else:  # OPEN
             return False
     
