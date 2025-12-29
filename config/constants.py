@@ -150,6 +150,13 @@ Synthetic indices (R_*) have continuous price feeds, so gaps > 5s indicate issue
 Forex/crypto pairs may have longer gaps during low liquidity periods.
 """
 
+# Warmup Configuration
+MIN_WARMUP_STEPS: Final[int] = 120
+"""
+Minimum number of steps required to warm up technical indicators.
+Ensures indicators like EMA/MACD have stabilized before inference.
+"""
+
 # Normalization
 ZSCORE_EPSILON: Final[float] = 1e-8
 """

@@ -18,6 +18,7 @@ Usage:
 """
 
 import logging
+import hashlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -246,6 +247,22 @@ class FeatureBuilder:
     def get_schema(self) -> FeatureSchema:
         """Get the feature schema."""
         return self.schema
+
+    def get_schema_hash(self) -> str:
+        """
+        Compute hash of feature configuration.
+        
+        This hash identifies the exact feature engineering config.
+        Models should verify this matches the hash they were trained with.
+        """
+        config_str = (
+            f"v={FEATURE_SCHEMA_VERSION}:"
+            f"tick_len={self.schema.tick_length}:"
+            f"candle_len={self.schema.candle_length}:"
+            f"candle_feats={self.schema.candle_features}:"
+            f"vol_feats={self.schema.volatility_features}"
+        )
+        return hashlib.md5(config_str.encode()).hexdigest()
 
 
 # Singleton-like access for convenience (initialized on first use)
