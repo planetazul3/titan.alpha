@@ -230,3 +230,47 @@ class TestTemporalFusionTransformer:
             output2, _, _ = tft(x)
         
         assert torch.allclose(output1, output2)
+    
+    def test_pooling_methods(self):
+        """Test different pooling methods via TemporalExpert integration."""
+        from models.temporal import TemporalExpert
+        
+        settings = Settings()
+        # Test default (attention)
+        model_attn = TemporalExpert(settings, use_tft=True)
+        # Manually override for testing
+        model_attn.pooling_method = "attention"
+        model_attn.attention = InterpretableMultiHeadAttention(hidden_size=64, num_heads=4) # Mock approx
+        
+        # Actually better to test integration via settings
+        
+        # Case 1: Attention
+        settings_attn = Settings()
+        # Create a mutable copy/mock if needed, but Pydantic is frozen.
+        # We can just instantiate TemporalExpert and patch the attribute.
+        
+        expert = TemporalExpert(settings_attn, use_tft=True)
+        expert.pooling_method = "attention"
+        # Re-init attention because init logic depends on setting (which we can't easily change due to frozen settings)
+        # But we can manually add the layer
+        from models.attention import AdditiveAttention
+        expert.attention = AdditiveAttention(hidden_dim=settings.hyperparams.lstm_hidden_size)
+        
+        candles = torch.randn(2, 20, settings.data_shapes.feature_dim_candles)
+        out_attn = expert(candles)
+        assert out_attn.shape == (2, 64) # embedding dim
+        
+        # Case 2: Last
+        expert.pooling_method = "last"
+        out_last = expert(candles)
+        assert out_last.shape == (2, 64)
+        
+        # Case 3: Mean
+        expert.pooling_method = "mean"
+        out_mean = expert(candles)
+        assert out_mean.shape == (2, 64)
+        
+        # Verify they are different (attention/mean integrate whole seq, last only sees last)
+        # Note: TFT connects last step to everything via attention, so 'last' is still powerful. 
+        # But numerically they should differ.
+        assert not torch.allclose(out_attn, out_last)

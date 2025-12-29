@@ -138,6 +138,11 @@ class ModelHyperparams(BaseModel):
     
     # EWC Configuration
     ewc_sample_size: int = Field(default=5000, description="Number of samples for Fisher Information computation", gt=100)
+    
+    # Audit Fix: TFT Pooling
+    tft_pooling_method: Literal["last", "attention", "mean"] = Field(
+        default="attention", description="Pooling method for TFT output embedding"
+    )
 
     @field_validator("learning_rate", "batch_size")
     @classmethod

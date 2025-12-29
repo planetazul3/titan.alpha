@@ -394,6 +394,8 @@ class InterpretableMultiHeadAttention(nn.Module):
             key: Key tensor (defaults to query for self-attention)
             value: Value tensor (defaults to query for self-attention)
             mask: Optional attention mask
+                  - Logic: 0/False indicates padding (ignored), 1/True indicates valid.
+                  - Expected Shape: [batch, seq_len] or broadcastable to [batch, heads, seq, seq]
         
         Returns:
             Tuple of:

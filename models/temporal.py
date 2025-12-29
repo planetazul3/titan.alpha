@@ -30,8 +30,14 @@ class TemporalExpert(nn.Module):
                 dropout=settings.hyperparams.dropout_rate,
                 static_input_size=static_dim,
             )
-            # TFT outputs hidden_size dimensions
+        # TFT outputs hidden_size dimensions
             encoder_out_dim = hidden_size
+            
+            # Audit Fix: Support Attention Pooling for TFT
+            self.pooling_method = getattr(settings.hyperparams, "tft_pooling_method", "attention")
+            if self.pooling_method == "attention":
+                self.attention = AdditiveAttention(hidden_dim=encoder_out_dim)
+            
         else:
             self.lstm = BiLSTMBlock(
                 input_size=input_size,
@@ -64,9 +70,23 @@ class TemporalExpert(nn.Module):
             # output: (batch, seq_len, hidden_size)
             tft_out, _, _ = self.tft(candles, mask=mask, static_covariates=static_context)
             
-            # Use the last time step for embedding
-            # (batch, hidden_size)
-            context = tft_out[:, -1, :]
+            if self.pooling_method == "attention":
+                # Attention Pooling: Weighted sum of all time steps
+                # Focuses on most relevant moments in history
+                context, _ = self.attention(tft_out, mask=mask)
+            elif self.pooling_method == "mean":
+                # Mean Pooling: Average of all time steps (respecting mask)
+                if mask is not None:
+                     # mask: (batch, seq_len) -> (batch, seq_len, 1)
+                     mask_expanded = mask.unsqueeze(-1).float()
+                     tft_out = tft_out * mask_expanded
+                     context = tft_out.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1.0)
+                else:
+                    context = tft_out.mean(dim=1)
+            else:
+                # Last Step: Standard sequence modeling (default "future-looking")
+                # (batch, hidden_size)
+                context = tft_out[:, -1, :]
         else:
             # lstm_out: (batch, seq_len, hidden*2)
             lstm_out, _ = self.lstm(candles)
