@@ -39,6 +39,12 @@ class DecisionEngine:
     3. **Regime Caution**: If anomaly > caution_threshold, strict filtering (demote weak signals to shadow).
     4. **Confidence Filtering**: Standard probability threshold check.
     5. **Shadow Trade Logging**: All valid signals are logged for counterfactual analysis.
+    
+    Performance Optimizations:
+    - **Consolidated Veto Checks**: Policy vetoes checked ONCE at entry point (process_model_output),
+      not redundantly in _process_signals. Reduces latency on the critical tick-processing path.
+    - **Throttled Safety Sync**: SQLite safety state sync is throttled to once per 5 seconds
+      (configurable via _safety_sync_interval) to minimize disk I/O during high-frequency ticks.
     """
 
     def __init__(
@@ -100,6 +106,10 @@ class DecisionEngine:
         
         # Track pending background tasks for graceful shutdown
         self._pending_shadow_tasks: set[asyncio.Task] = set()
+        
+        # PERF: Throttle safety state sync to reduce SQLite I/O
+        self._last_safety_sync: float = 0.0
+        self._safety_sync_interval: float = 5.0  # seconds
         
         # Initialize Execution Policy
         # self.policy = ExecutionPolicy() # Removed, now initialized above
@@ -329,6 +339,9 @@ class DecisionEngine:
         
         This is the internal workhorse that handles already-filtered signals.
         Used by process_with_context to avoid calling filter_signals twice.
+        
+        PERF: Policy veto checks are performed ONCE at the entry point
+        (process_model_output), NOT here. This consolidates the check for lower latency.
         """
         if self.tracer:
             with self.tracer.start_as_current_span("decision_engine._process_signals") as span:
@@ -339,14 +352,7 @@ class DecisionEngine:
                     self._stats["regime_vetoed"] += 1
                     return []
 
-                # Execution Policy Veto Check
-                policy_veto = self.policy.check_vetoes()
-                if policy_veto:
-                    span.set_attribute("veto.type", "policy")
-                    logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
-                    self._stats["processed"] += 1
-                    self._stats["ignored"] += 1
-                    return []
+                # NOTE: Policy veto check intentionally omitted here - already done at entry point
 
                 # R02: Validate contract types
                 valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
@@ -413,13 +419,7 @@ class DecisionEngine:
                 self._stats["regime_vetoed"] += 1
                 return []
 
-            # Execution Policy Veto Check
-            policy_veto = self.policy.check_vetoes()
-            if policy_veto:
-                logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto.reason}")
-                self._stats["processed"] += 1
-                self._stats["ignored"] += 1
-                return []
+            # NOTE: Policy veto check intentionally omitted here - already done at entry point
 
             # R02: Validate contract types
             valid_contract_types = {ct.value for ct in CONTRACT_TYPES}
@@ -505,16 +505,32 @@ class DecisionEngine:
         else:
             return "trusted"
 
-    async def sync_safety_state(self) -> None:
+    async def sync_safety_state(self, force: bool = False) -> None:
         """
         Sync current P&L from SafetyStateStore (IMPORTANT-004).
+        
+        PERF: Throttled to reduce SQLite disk I/O in high-frequency tick processing.
+        Default interval is 5 seconds. Use force=True to bypass throttling.
+        
+        Args:
+            force: If True, bypass throttling and sync immediately.
         """
-        if self.safety_store:
-            try:
-                _, daily_pnl = await self.safety_store.get_daily_stats_async()
-                self._current_daily_pnl = daily_pnl
-            except Exception as e:
-                logger.error(f"Failed to sync safety state: {e}")
+        if not self.safety_store:
+            return
+            
+        import time
+        now = time.monotonic()
+        
+        # PERF: Skip sync if within throttle interval (unless forced)
+        if not force and (now - self._last_safety_sync) < self._safety_sync_interval:
+            return
+            
+        try:
+            _, daily_pnl = await self.safety_store.get_daily_stats_async()
+            self._current_daily_pnl = daily_pnl
+            self._last_safety_sync = now
+        except Exception as e:
+            logger.error(f"Failed to sync safety state: {e}")
 
 
 
