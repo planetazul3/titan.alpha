@@ -19,7 +19,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def resolve_device(preference: Literal["cpu", "cuda", "mps", "auto"] = "auto") -> torch.device:
+def resolve_device(preference: str = "auto") -> torch.device:
     """
     Resolve compute device based on availability and preference.
 
@@ -48,15 +48,34 @@ def resolve_device(preference: Literal["cpu", "cuda", "mps", "auto"] = "auto") -
         >>> batch = batch.to(device)
     """
     valid_preferences = ("cpu", "cuda", "mps", "auto")
-    if preference not in valid_preferences:
+    # Allow "cuda:X" format
+    if not (preference in valid_preferences or preference.startswith("cuda:")):
         raise ValueError(
-            f"Invalid device preference '{preference}'. Must be one of {valid_preferences}"
+            f"Invalid device preference '{preference}'. Must be one of {valid_preferences} or 'cuda:X'"
         )
 
     # CPU requested - always available
     if preference == "cpu":
         logger.info("Using CPU device (user preference)")
         return torch.device("cpu")
+
+    # Handle explicit CUDA definition (e.g. "cuda:1")
+    if preference.startswith("cuda:"):
+        if not torch.cuda.is_available():
+             raise RuntimeError(f"CUDA device '{preference}' requested but CUDA is not available.")
+        
+        # Verify index
+        try:
+            parts = preference.split(":")
+            if len(parts) == 2 and parts[1].isdigit():
+                idx = int(parts[1])
+                if idx >= torch.cuda.device_count():
+                     raise RuntimeError(f"CUDA device index {idx} out of range (count={torch.cuda.device_count()})")
+        except ValueError:
+            pass # Let torch.device handle validation if we miss something specific
+
+        logger.info(f"Using pinned CUDA device: {preference}")
+        return torch.device(preference)
 
     # CUDA requested or auto mode
     if preference in ["cuda", "auto"]:
@@ -87,6 +106,30 @@ def resolve_device(preference: Literal["cpu", "cuda", "mps", "auto"] = "auto") -
     return torch.device("cpu")
 
 
+def is_compilation_supported() -> bool:
+    """
+    Check if the current environment supports `torch.compile()`.
+
+    Returns:
+        bool: True if torch.compile is available and supported on this platform.
+    """
+    # 1. Check PyTorch version (>= 2.0.0)
+    try:
+        version_major = int(torch.__version__.split('.')[0])
+        if version_major < 2:
+            return False
+    except (ValueError, IndexError):
+        return False
+        
+    # 2. Check Platform
+    # Windows support for torch.compile is experimental/limited in 2.0
+    import platform
+    if platform.system() == "Windows":
+        return False
+        
+    return hasattr(torch, "compile")
+
+
 def get_device_info() -> dict[str, Any]:
     """
     Return comprehensive information about available compute devices.
@@ -111,6 +154,7 @@ def get_device_info() -> dict[str, Any]:
         "mps_available": hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
         "cpu_count": torch.get_num_threads(),
         "torch_version": torch.__version__,
+        "compile_supported": is_compilation_supported(),
     }
 
     # Add CUDA-specific information
