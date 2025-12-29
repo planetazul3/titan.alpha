@@ -358,7 +358,7 @@ class DerivClient:
 
         logger.info(f"Fetching {count} historical ticks for {self.symbol}...")
         res = await self.api.ticks_history(
-            {"ticks_history": self.symbol, "count": count, "end": "latest", "style": "ticks"}
+            {"ticks_history": self.symbol, "count": count, "end": "latest", "style": "ticks", "adjust_start_time": 1}
         )
 
         ticks = [float(p) for p in res.get("history", {}).get("prices", [])]
