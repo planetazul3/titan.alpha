@@ -378,7 +378,8 @@ async def run_live_trading(args):
         candle_count = 0
         inference_count = 0
         last_tick_time = datetime.now()
-        last_tick_log_count = 0  # For periodic tick logging
+        last_tick_log_count = 0  # For refined tick logging
+        last_inference_time = 0.0  # CRITICAL RULE 1: Inference Cooldown
         
         # H11: Startup buffers and synchronization
         startup_buffer_ticks: list[float] = []
@@ -457,6 +458,7 @@ async def run_live_trading(args):
 
                     # H07: Stale Data Check
                     # Prevent trading on old data if system lags
+                    # CRITICAL RULE 2: Timezone for Shadow Resolution (Must be UTC)
                     now_utc = datetime.now(timezone.utc)
                     latency = (now_utc - candle_event.timestamp).total_seconds()
                     
@@ -470,14 +472,24 @@ async def run_live_trading(args):
                         continue
 
                     # Run inference only when: candle closed + buffer ready
-                    # M01: Removed flaky wall-clock cooldown. Event-driven is_new_candle is sufficient.
+                    # CRITICAL RULE 1: Inference Cooldown (> 30s)
+                    # We trade 1-minute contracts. Running faster than 30s risks "overlapping" logic
+                    # and violating broker rate limits.
+                    import time
+                    time_since_last = time.time() - last_inference_time
+                    cooldown_active = time_since_last < 30.0
+
                     if is_new_candle and buffer.is_ready():
-                        console_log(
-                            f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
-                            f"(latency: {latency:.1f}s)",
-                            "MODEL",
-                        )
-                        logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
+                        if cooldown_active:
+                            logger.debug(f"[COOLDOWN] Skipping inference ({time_since_last:.1f}s < 30s)")
+                            # Do NOT continue; we still need to resolve shadow trades below!
+                        else:
+                            console_log(
+                                f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
+                                f"(latency: {latency:.1f}s)",
+                                "MODEL",
+                            )
+                            logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
 
                         try:
                             await run_inference(
@@ -496,8 +508,11 @@ async def run_live_trading(args):
                         except Exception as inf_e:
                             logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
                             metrics.record_error("inference_failure")
+                        
+                        last_inference_time = time.time() # Update for cooldown
 
                     # Resolve shadow trades on EVERY candle close (not just during inference)
+                    # CRITICAL RULE 3: Shadow Resolution Runs on Every Candle Close
                     # This ensures 1-minute trades resolve immediately after expiry
                     if is_new_candle:
                         # Use candle timestamp for deterministic resolution (handles lag/replay)
