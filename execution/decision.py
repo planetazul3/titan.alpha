@@ -70,7 +70,10 @@ class DecisionEngine:
         self.safety_store = safety_store
         self.duration_resolver = ContractDurationResolver(settings)
         self.model_version = model_version
-        self.policy = policy or ExecutionPolicy()
+        # AUDIT-FIX: Pass configurable circuit breaker timeout from settings
+        self.policy = policy or ExecutionPolicy(
+            circuit_breaker_reset_minutes=settings.execution_safety.circuit_breaker_reset_minutes
+        )
         
         # State trackers for policy providers
         self._current_daily_pnl = 0.0

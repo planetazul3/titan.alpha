@@ -12,13 +12,17 @@ trading best practices research, vetoes are ordered by criticality:
 5. Regime Veto (L4): Market anomaly detection
 6. Confidence Threshold (L5): Minimum probability requirement
 
+Configuration:
+- Circuit breaker auto-reset timeout configurable via settings.execution_safety.circuit_breaker_reset_minutes
+- All vetoes support optional details_fn for structured observability logging
+
 Usage:
     >>> from execution.policy import ExecutionPolicy, VetoPrecedence
-    >>> policy = ExecutionPolicy()
+    >>> policy = ExecutionPolicy(circuit_breaker_reset_minutes=15)
     >>> policy.register_veto(VetoPrecedence.KILL_SWITCH, lambda: kill_switch_active, "Manual halt")
     >>> veto = policy.check_vetoes()
     >>> if veto:
-    ...     print(f"Trade blocked by {veto.reason}")
+    ...     print(f"Trade blocked by {veto.reason}, details={veto.details}")
 """
 
 from __future__ import annotations
@@ -86,12 +90,21 @@ class ExecutionPolicy:
     Design principles:
     - Vetoes are checked in precedence order (highest to lowest)
     - First blocking veto terminates the check
-    - All vetoes are logged for observability
+    - All vetoes are logged for observability (with optional details_fn)
     - Statistics track veto frequency by type
+    
+    Configuration:
+    - circuit_breaker_reset_minutes: Auto-reset timeout (from settings or default 15)
     """
     
-    def __init__(self):
-        """Initialize empty execution policy."""
+    def __init__(self, circuit_breaker_reset_minutes: int = 15):
+        """
+        Initialize execution policy.
+        
+        Args:
+            circuit_breaker_reset_minutes: Minutes before circuit breaker auto-resets.
+                                           Use settings.execution_safety.circuit_breaker_reset_minutes.
+        """
         # Veto registry: precedence level -> list of (check_fn, reason_provider, details_fn)
         # reason_provider can be a str or a Callable[[], str]
         self._vetoes: dict[VetoPrecedence, list[tuple[Callable[[], bool], str | Callable[[], str], Optional[Callable[[], dict]]]]] = {
@@ -109,11 +122,19 @@ class ExecutionPolicy:
         self._circuit_breaker_reason = ""
         self._circuit_breaker_triggered_at: Optional[float] = None
         
-        # Register standard circuit breaker check
+        # AUDIT-FIX: Externalized circuit breaker timeout from settings
+        self._circuit_breaker_reset_minutes = circuit_breaker_reset_minutes
+        
+        # Register standard circuit breaker check with details_fn for observability
         self.register_veto(
             VetoPrecedence.CIRCUIT_BREAKER,
             lambda: self._circuit_breaker_active,
-            lambda: f"Circuit breaker active: {self._circuit_breaker_reason}" if self._circuit_breaker_reason else "Circuit breaker active"
+            lambda: f"Circuit breaker active: {self._circuit_breaker_reason}" if self._circuit_breaker_reason else "Circuit breaker active",
+            details_fn=lambda: {
+                "triggered_at": self._circuit_breaker_triggered_at,
+                "reason": self._circuit_breaker_reason,
+                "reset_minutes": self._circuit_breaker_reset_minutes,
+            }
         )
     
     def trigger_circuit_breaker(self, reason: str) -> None:
@@ -225,20 +246,20 @@ class ExecutionPolicy:
 
     def _maybe_auto_reset_circuit_breaker(self) -> None:
         """
-        Check if circuit breaker should be automatically reset based on settings.
+        Check if circuit breaker should be automatically reset based on configured timeout.
+        
+        Uses _circuit_breaker_reset_minutes which is configured at initialization
+        from settings.execution_safety.circuit_breaker_reset_minutes.
         """
-        # Note: In a real system, we'd need settings passed here or available globally.
-        # For now we use a default of 15 minutes unless overridden.
         import time
         if not self._circuit_breaker_active or self._circuit_breaker_triggered_at is None:
             return
-            
-        # Simplified: We assume 15 minute auto-reset for REC-003
-        # In production this would come from settings.execution_safety.circuit_breaker_reset_minutes
-        timeout = 15 * 60 
         
-        if time.time() - self._circuit_breaker_triggered_at >= timeout:
-            logger.info(f"Auto-resetting circuit breaker after {timeout/60:.0f} minutes")
+        # AUDIT-FIX: Use configurable timeout instead of hardcoded 15 minutes
+        timeout_seconds = self._circuit_breaker_reset_minutes * 60
+        
+        if time.time() - self._circuit_breaker_triggered_at >= timeout_seconds:
+            logger.info(f"Auto-resetting circuit breaker after {self._circuit_breaker_reset_minutes} minutes")
             self.reset_circuit_breaker()
     
     def clear_statistics(self) -> None:
@@ -278,6 +299,8 @@ class SafetyProfile:
     
     Acts as a bridge between Settings.execution_safety and the 
     ExecutionPolicy/SafeTradeExecutor components.
+    
+    All vetoes registered here include details_fn for structured observability logging.
     """
     
     @staticmethod
@@ -291,6 +314,7 @@ class SafetyProfile:
         Apply safety settings to an execution policy.
         
         Registers standard vetoes for the system-wide protection hierarchy.
+        All vetoes include details_fn to capture raw metrics for post-mortem analysis.
         
         Args:
             policy: The ExecutionPolicy to configure.
@@ -300,23 +324,29 @@ class SafetyProfile:
         """
         config = settings.execution_safety
         
-        # L0: Kill Switch
+        # L0: Kill Switch (with details for observability)
         policy.register_veto(
             level=VetoPrecedence.KILL_SWITCH,
             check_fn=lambda: config.kill_switch_enabled,
-            reason="Kill switch enabled (manual halt)"
+            reason="Kill switch enabled (manual halt)",
+            details_fn=lambda: {"kill_switch_enabled": config.kill_switch_enabled}
         )
         
-        # L2: Daily Loss Limit
+        # L2: Daily Loss Limit (with raw P&L in details)
         if pnl_provider:
             limit = config.max_daily_loss
             policy.register_veto(
                 level=VetoPrecedence.DAILY_LOSS,
                 check_fn=lambda: pnl_provider() <= -limit if limit > 0 else False,
-                reason=lambda: f"Daily loss limit hit: {pnl_provider():.2f} <= -{limit:.2f}"
+                reason=lambda: f"Daily loss limit hit: {pnl_provider():.2f} <= -{limit:.2f}",
+                details_fn=lambda: {
+                    "current_pnl": pnl_provider(),
+                    "limit": limit,
+                    "threshold": -limit,
+                }
             )
             
-        # L3: Calibration / Stability
+        # L3: Calibration / Stability (with raw metrics in details)
         # High-order stability check (e.g. model completely failing to reconstruct normal data)
         if calibration_provider:
             # We use a very high threshold for absolute calibration failure
@@ -325,5 +355,9 @@ class SafetyProfile:
             policy.register_veto(
                 level=VetoPrecedence.CALIBRATION,
                 check_fn=lambda: calibration_provider() >= cal_threshold,
-                reason=lambda: f"Model calibration failure: {calibration_provider():.3f} >= {cal_threshold:.3f}"
+                reason=lambda: f"Model calibration failure: {calibration_provider():.3f} >= {cal_threshold:.3f}",
+                details_fn=lambda: {
+                    "reconstruction_error": calibration_provider(),
+                    "threshold": cal_threshold,
+                }
             )

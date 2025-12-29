@@ -71,7 +71,11 @@ async def test_idempotency_failure_blocks_execution():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_triggers_on_repeated_failures():
-    """Test that repeated idempotency failures trigger the circuit breaker."""
+    """Test that repeated execution failures trigger the circuit breaker.
+    
+    Multi-failure circuit breaker now triggers on 5 consecutive failures
+    within a 10-minute rolling window (per executor_resolver_audit.md fix).
+    """
     client = MagicMock()
     client.get_balance = AsyncMock(return_value=1000.0)
     
@@ -93,18 +97,15 @@ async def test_circuit_breaker_triggers_on_repeated_failures():
         metadata={}
     )
     
-    # 1st failure
-    await executor.execute(signal)
-    assert policy._circuit_breaker_active is False
+    # Failures 1-4: Circuit breaker should NOT be active
+    for i in range(4):
+        await executor.execute(signal)
+        assert policy._circuit_breaker_active is False, f"Should not trigger on failure {i+1}"
     
-    # 2nd failure
-    await executor.execute(signal)
-    assert policy._circuit_breaker_active is False
-    
-    # 3rd failure
+    # 5th failure: Circuit breaker should trigger
     await executor.execute(signal)
     assert policy._circuit_breaker_active is True
-    assert "Consecutive idempotency failures" in policy._circuit_breaker_reason
+    assert "Multi-failure circuit breaker" in policy._circuit_breaker_reason
 
 @pytest.mark.asyncio
 async def test_policy_integration_blocks_decision():
