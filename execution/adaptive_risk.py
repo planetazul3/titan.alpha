@@ -83,6 +83,7 @@ class PerformanceTracker:
         self._returns: deque = deque(maxlen=window_size)
         self._peak_equity = 0.0
         self._current_drawdown = 0.0
+        self._consecutive_losses = 0
     
     def record(
         self,
@@ -98,6 +99,11 @@ class PerformanceTracker:
         """
         self._returns.append(pnl)
         
+        if pnl < 0:
+            self._consecutive_losses += 1
+        else:
+            self._consecutive_losses = 0
+
         if current_equity is not None:
             if current_equity > self._peak_equity:
                 self._peak_equity = current_equity
@@ -137,6 +143,10 @@ class PerformanceTracker:
         """Get current drawdown."""
         return self._current_drawdown
     
+    def get_consecutive_losses(self) -> int:
+        """Get current consecutive losses."""
+        return self._consecutive_losses
+
     def get_profit_factor(self) -> float:
         """Get profit factor (gains / losses)."""
         if not self._returns:
@@ -222,11 +232,8 @@ class AdaptiveRiskManager:
             metrics = self.state_store.get_risk_metrics()
             self.performance._current_drawdown = metrics.get("current_drawdown", 0.0)
             self.performance._peak_equity = metrics.get("peak_equity", 0.0)
-            # We map "consecutive_losses" concept if PerformanceTracker had it, 
-            # or just use it as simple example.
-            # PerformanceTracker doesn't strictly track consecutive_losses publically, 
-            # but we can restore peak equity/drawdown at least.
-            logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}")
+            self.performance._consecutive_losses = metrics.get("consecutive_losses", 0)
+            logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}, losses={self.performance._consecutive_losses}")
         except Exception as e:
             logger.error(f"Failed to load risk state: {e}")
 
@@ -237,7 +244,7 @@ class AdaptiveRiskManager:
         try:
             self.state_store.update_risk_metrics(
                 drawdown=self.performance.get_drawdown(),
-                losses=0, # Tracker doesn't expose it easily yet without modification, keeping 0 for now
+                losses=self.performance.get_consecutive_losses(),
                 peak_equity=self.performance._peak_equity
             )
         except Exception as e:
