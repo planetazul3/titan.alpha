@@ -147,6 +147,12 @@ class PerformanceTracker:
         """Get current consecutive losses."""
         return self._consecutive_losses
 
+    def get_total_losses(self) -> float:
+        """Get total magnitude of losses in the current window."""
+        if not self._returns:
+            return 0.0
+        return abs(sum(r for r in self._returns if r < 0))
+
     def get_profit_factor(self) -> float:
         """Get profit factor (gains / losses)."""
         if not self._returns:
@@ -379,6 +385,8 @@ class AdaptiveRiskManager:
             "win_rate": self.performance.get_win_rate(),
             "drawdown": self.performance.get_drawdown(),
             "profit_factor": self.performance.get_profit_factor(),
+            "total_losses": self.performance.get_total_losses(),
+            "consecutive_losses": self.performance.get_consecutive_losses(),
             "should_pause": self.should_pause(),
             "trades_since_limit": self._trades_since_limit_hit,
         }

@@ -54,6 +54,21 @@ class TestPerformanceTracker:
         # Profit factor = 80 / 20 = 4.0
         assert tracker.get_profit_factor() == 4.0
 
+    def test_total_losses(self):
+        """Test total losses calculation."""
+        tracker = PerformanceTracker()
+        tracker.record(10.0)
+        tracker.record(-5.0)
+        tracker.record(-3.0)
+        tracker.record(2.0)
+
+        # Losses: |-5| + |-3| = 8.0
+        assert tracker.get_total_losses() == 8.0
+
+        tracker.record(-1.0)
+        # Losses: 8.0 + |-1| = 9.0
+        assert tracker.get_total_losses() == 9.0
+
 
 class TestRiskLimits:
     """Tests for RiskLimits."""
