@@ -472,6 +472,15 @@ class PartitionedDownloader:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
                         logger.error(f"Error: {e} (attempt {retry_count}/{max_retries})")
+                        
+                        # Fix: Force reconnection on error to ensure healthy socket
+                        try:
+                            logger.info("Attempting proactive reconnection...")
+                            await self.client.disconnect()
+                            await self.client.connect()
+                        except Exception as rec_e:
+                             logger.warning(f"Reconnection attempt failed: {rec_e}")
+
                         await asyncio.sleep(wait_time)
                         continue
 
@@ -632,6 +641,15 @@ class PartitionedDownloader:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
                         logger.error(f"Error: {e} (attempt {retry_count}/{max_retries})")
+
+                        # Fix: Force reconnection on error to ensure healthy socket
+                        try:
+                            logger.info("Attempting proactive reconnection...")
+                            await self.client.disconnect()
+                            await self.client.connect()
+                        except Exception as rec_e:
+                             logger.warning(f"Reconnection attempt failed: {rec_e}")
+
                         await asyncio.sleep(wait_time)
                         continue
 
