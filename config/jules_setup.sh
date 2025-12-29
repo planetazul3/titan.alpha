@@ -8,6 +8,9 @@ set -e
 
 echo "🔧 Configuring environment for x.titan (Fork Strategy)..."
 
+# 0. Save Repo Root
+REPO_ROOT=$(pwd)
+
 # 1. Install TA-Lib (System Dependency)
 # -----------------------------------------------------------------------------
 # Note: Jules pre-installs many tools. We use sudo for system libs.
@@ -22,6 +25,10 @@ if [ ! -f "/usr/lib/libta_lib.so" ] && [ ! -f "/usr/local/lib/libta_lib.so" ]; t
     sudo make install > /dev/null
     cd ..
     rm -rf ta-lib*
+    
+    # CRITICAL: Go back to repo root to find requirements.txt later
+    echo "🔙 Returning to repository root: $REPO_ROOT"
+    cd "$REPO_ROOT"
 else
     echo "✅ TA-Lib system library found."
 fi
