@@ -223,45 +223,40 @@ class TestSafeTradeExecutor:
         pass
 
     @pytest.mark.asyncio
-    async def test_exponential_backoff_retries(
+    async def test_transport_errors_fail_fast(
         self, mock_executor, sample_signal, config, temp_state_file
     ):
-        """Should retry with exponential backoff on failures."""
-        # Fail first 2 attempts with Exceptions, succeed on 3rd
+        """Transport errors should fail fast (handled by DerivClient, not retried here)."""
+        # Transport errors are now NOT retried at safety level
+        # They fail fast to let DerivClient handle reconnection
         mock_executor.execute = AsyncMock(
-            side_effect=[
-                ConnectionError("Transient error"),
-                ConnectionError("Transient error"),
-                TradeResult(success=True, contract_id="RETRY_SUCCESS"),
-            ]
+            side_effect=ConnectionError("Network error")
         )
 
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=temp_state_file)
         result = await safe_executor.execute(sample_signal)
 
-        assert result.success is True
-        assert result.contract_id == "RETRY_SUCCESS"
-        assert mock_executor.execute.call_count == 3
+        # Should fail immediately without retries
+        assert result.success is False
+        assert "Transport Error" in result.error
+        assert mock_executor.execute.call_count == 1  # No retries for transport errors
 
     @pytest.mark.asyncio
-    async def test_fails_after_max_retries(
+    async def test_permanent_errors_fail_immediately(
         self, mock_executor, sample_signal, config, temp_state_file
     ):
-        """Should fail after exhausting all retries."""
-        # Always fail with Exception
+        """Permanent/non-retryable errors should fail immediately."""
+        # Non-retryable errors (ValueError, logic errors) fail fast
         mock_executor.execute = AsyncMock(
-            side_effect=ConnectionError("Persistent error")
+            side_effect=ValueError("Invalid parameter")
         )
 
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=temp_state_file)
         result = await safe_executor.execute(sample_signal)
 
         assert result.success is False
-        assert "Persistent error" in result.error
-        assert mock_executor.execute.call_count == 3  # max_retry_attempts
-
-        # Feature removed/missing in current implementation
-        pass
+        assert "Permanent Error" in result.error
+        assert mock_executor.execute.call_count == 1  # No retries
 
     @pytest.mark.asyncio
     async def test_pnl_tracking(self, mock_executor, sample_signal, config, temp_state_file):

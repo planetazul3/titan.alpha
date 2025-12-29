@@ -182,19 +182,33 @@ class SafeTradeExecutor:
         return True
 
     async def _execute_with_retry(self, signal: TradeSignal) -> TradeResult:
-        """Execute with exponential backoff on transient errors."""
-        # Define retryable exceptions
-        # We try to import APIError dynamically to avoid hard dependency if possible, 
-        # or just assume it's available since this is part of the system.
-        retryable_errors: tuple[type[Exception], ...] = (
-            ConnectionError, 
-            TimeoutError, 
-            asyncio.TimeoutError
-        )
+        """Execute with exponential backoff on business logic errors only.
         
+        IMPORTANT: Transport-level errors (ConnectionError, TimeoutError) are 
+        intentionally NOT retried here because DerivClient._reconnect already 
+        handles them with its own exponential backoff (up to 5 attempts).
+        
+        This layer only retries on business logic errors from the API:
+        - MarketIsClosed
+        - InvalidContractParameters  
+        - ContractBuyValidationError (retryable subset)
+        
+        This prevents "nested retry storms" where both layers back off
+        independently, causing unpredictable multi-minute delays.
+        """
+        # Business logic error codes that are worth retrying at safety level
+        # These are temporary conditions that may resolve shortly
+        RETRYABLE_API_CODES = frozenset([
+            "MarketIsClosed",
+            "MarketIsClosedForThePeriod",
+            "TradingIsDisabled",
+            "RateLimit",
+        ])
+        
+        APIError = None
         try:
-            from deriv_api import APIError
-            retryable_errors += (APIError,)
+            from deriv_api import APIError as _APIError
+            APIError = _APIError
         except ImportError:
             pass
 
@@ -202,17 +216,37 @@ class SafeTradeExecutor:
             try:
                 result = await self.inner.execute(signal)
                 return result
-            except retryable_errors as e:
-                # Retryable error
-                logger.warning(f"Transient execution error (attempt {attempt+1}): {e}")
-                if attempt < self.config.max_retry_attempts - 1:
-                    await asyncio.sleep(self.config.retry_base_delay * (2 ** attempt))
-                else:
-                    return TradeResult(success=False, error=str(e))
             except Exception as e:
-                # M15: Non-retryable error (logic bug, validation, etc.) - Fail fast!
-                logger.error(f"Non-retryable execution error: {e}", exc_info=True)
-                return TradeResult(success=False, error=f"Permanent Error: {e}")
+                error_code = getattr(e, "code", None) or ""
+                
+                # Check if this is a retryable business logic error
+                is_retryable_api = (
+                    APIError is not None 
+                    and isinstance(e, APIError) 
+                    and error_code in RETRYABLE_API_CODES
+                )
+                
+                if is_retryable_api:
+                    # Business logic error - retry with backoff
+                    logger.warning(
+                        f"Retryable business error (attempt {attempt+1}/{self.config.max_retry_attempts}): "
+                        f"[{error_code}] {e}"
+                    )
+                    if attempt < self.config.max_retry_attempts - 1:
+                        await asyncio.sleep(self.config.retry_base_delay * (2 ** attempt))
+                    else:
+                        return TradeResult(success=False, error=f"Max retries exhausted: {e}")
+                elif isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+                    # Transport error - DerivClient handles reconnection
+                    # Fail fast here to let caller decide
+                    logger.warning(
+                        f"Transport error (handled by DerivClient): {type(e).__name__}: {e}"
+                    )
+                    return TradeResult(success=False, error=f"Transport Error: {e}")
+                else:
+                    # Non-retryable error (logic bug, validation, etc.) - Fail fast!
+                    logger.error(f"Non-retryable execution error: {e}", exc_info=True)
+                    return TradeResult(success=False, error=f"Permanent Error: {e}")
                 
         return TradeResult(success=False, error="Max retries exhausted")
 
@@ -253,8 +287,114 @@ class SafeTradeExecutor:
         return {
             "kill_switch": self.config.kill_switch_enabled,
             "max_trades_per_min": self.config.max_trades_per_minute,
-            "max_daily_loss": self.config.max_daily_loss
+            "max_daily_loss": self.config.max_daily_loss,
+            "last_reconciliation": getattr(self, "_last_reconciliation", None)
         }
+
+    async def reconcile_with_api(
+        self, 
+        client: Any, 
+        pending_store: Optional[Any] = None
+    ) -> dict:
+        """
+        Reconcile safety state with API on startup.
+        
+        Queries open contracts from the Deriv API and compares with the
+        pending trade store to detect discrepancies:
+        - api_only: Contracts on API not in store (potential missed tracking)
+        - store_only: Contracts in store not on API (already settled)
+        
+        This is a DIAGNOSTIC tool - it logs discrepancies but does not
+        auto-resolve them (safety-first approach).
+        
+        Args:
+            client: DerivClient instance (must be connected)
+            pending_store: Optional PendingTradeStore instance
+            
+        Returns:
+            Reconciliation results dict with:
+            - api_open_count: Number of open contracts from API
+            - store_pending_count: Number of pending trades in store
+            - matched: List of matched contract IDs
+            - api_only: Contracts on API but not in store
+            - store_only: Contracts in store but not on API
+        """
+        result = {
+            "api_open_count": 0,
+            "store_pending_count": 0,
+            "matched": [],
+            "api_only": [],
+            "store_only": [],
+            "error": None
+        }
+        
+        try:
+            # Get open contracts from API
+            api_response = await client.get_open_contracts()
+            
+            # Parse contract IDs from API response
+            api_contracts = set()
+            if isinstance(api_response, dict):
+                # proposal_open_contract returns a dict with contract details
+                poc = api_response.get("proposal_open_contract", {})
+                if poc and isinstance(poc, dict):
+                    cid = poc.get("contract_id")
+                    if cid:
+                        api_contracts.add(str(cid))
+            elif isinstance(api_response, list):
+                for item in api_response:
+                    if isinstance(item, dict):
+                        cid = item.get("contract_id") or item.get("id")
+                        if cid:
+                            api_contracts.add(str(cid))
+                            
+            result["api_open_count"] = len(api_contracts)
+            
+            # Get pending trades from store
+            store_contracts = set()
+            if pending_store is not None:
+                try:
+                    pending = pending_store.get_all_pending()
+                    for trade in pending:
+                        cid = trade.get("contract_id")
+                        if cid:
+                            store_contracts.add(str(cid))
+                except Exception as e:
+                    logger.warning(f"Could not read pending store: {e}")
+                    
+            result["store_pending_count"] = len(store_contracts)
+            
+            # Compare
+            result["matched"] = list(api_contracts & store_contracts)
+            result["api_only"] = list(api_contracts - store_contracts)
+            result["store_only"] = list(store_contracts - api_contracts)
+            
+            # Log reconciliation results
+            if result["api_only"]:
+                logger.warning(
+                    f"⚠️ Reconciliation found {len(result['api_only'])} open contracts "
+                    f"NOT in pending store: {result['api_only']}"
+                )
+            if result["store_only"]:
+                logger.info(
+                    f"Reconciliation: {len(result['store_only'])} stored trades "
+                    f"already settled: {result['store_only']}"
+                )
+            
+            logger.info(
+                f"Reconciliation complete: {result['api_open_count']} API contracts, "
+                f"{result['store_pending_count']} pending in store, "
+                f"{len(result['matched'])} matched"
+            )
+            
+            # Track last reconciliation time
+            self._last_reconciliation = datetime.now(timezone.utc).isoformat()
+            
+        except Exception as e:
+            logger.error(f"Reconciliation failed: {e}")
+            result["error"] = str(e)
+            
+        return result
 
 
 def get_symbol_from_signal(signal: TradeSignal) -> str:
