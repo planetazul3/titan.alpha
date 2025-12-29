@@ -10,6 +10,7 @@ echo "🔧 Configuring environment for x.titan (Fork Strategy)..."
 
 # 1. Install TA-Lib (System Dependency)
 # -----------------------------------------------------------------------------
+# Note: Jules pre-installs many tools. We use sudo for system libs.
 if [ ! -f "/usr/lib/libta_lib.so" ] && [ ! -f "/usr/local/lib/libta_lib.so" ]; then
     echo "⬇️ Installing TA-Lib C Library..."
     cd /tmp
@@ -23,6 +24,17 @@ if [ ! -f "/usr/lib/libta_lib.so" ] && [ ! -f "/usr/local/lib/libta_lib.so" ]; t
     rm -rf ta-lib*
 else
     echo "✅ TA-Lib system library found."
+fi
+
+# 1.1 Configure Python Version (Jules default is 3.12, we need 3.10)
+# -----------------------------------------------------------------------------
+if command -v pyenv >/dev/null; then
+    echo "🐍 Setting Python to 3.10 via pyenv..."
+    pyenv install 3.10.18 -s  # Install only if missing
+    pyenv local 3.10.18
+    pyenv rehash
+else
+    echo "⚠️ pyenv not found, using system python (hope it is compatible)"
 fi
 
 # 2. Configure Environment Variables
