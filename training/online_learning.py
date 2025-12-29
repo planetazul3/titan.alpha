@@ -86,12 +86,13 @@ class ReplayBuffer:
         """Add experience to buffer."""
         self._buffer.append(experience)
     
-    def sample(self, batch_size: int) -> list[Experience]:
+    def sample(self, batch_size: int, stratified: bool = True) -> list[Experience]:
         """
         Sample random batch of experiences.
         
         Args:
             batch_size: Number of experiences to sample
+            stratified: If True, stratifies by volatility (Low/Med/High)
         
         Returns:
             List of sampled experiences
@@ -99,7 +100,98 @@ class ReplayBuffer:
         import random
         if len(self._buffer) < batch_size:
             return list(self._buffer)
-        return random.sample(list(self._buffer), batch_size)
+            
+        if not stratified:
+            return random.sample(list(self._buffer), batch_size)
+            
+        # Stratified Sampling by Volatility Regime
+        # We use a heuristic: 'vol_metrics' usually contains [vol_short, vol_long, ...]
+        # We'll use the first metric (vol_short)
+        
+        low_vol = []
+        med_vol = []
+        high_vol = []
+        
+        # Calculate approximate quantiles from buffer (simplified: fixed thresholds or dynamic?)
+        # For speed, let's use fixed thresholds derived from normalization assumption (z-score approx 0)
+        # But data might not be z-scored here in raw form.
+        # Let's use dynamic quantiles of the current buffer.
+        
+        all_vols = [e.vol_metrics[0].item() for e in self._buffer]
+        if not all_vols:
+             return random.sample(list(self._buffer), batch_size)
+
+        # Efficient approximate partitioning
+        # Sort is O(N log N), acceptable for buffer size ~1000-5000
+        # For larger buffers, reservoir sampling per bucket is better.
+        
+        import statistics
+        try:
+             # Fast 33/66 percentiles
+             # We can just sort and split
+             sorted_indices = sorted(range(len(all_vols)), key=lambda k: all_vols[k])
+             n = len(sorted_indices)
+             t1 = int(n * 0.33)
+             t2 = int(n * 0.66)
+             
+             # Map back to experiences
+             # This is a bit heavy for every sample call if calc_quantiles every time.
+             # Optimization: bucket on insert? 
+             # For now, let's just do random sampling if not enough diversity, 
+             # or simple bucket rejection?
+             
+             # Actually, simpler robust approach:
+             # Just split into 3 groups based on min/max range of current buffer
+             min_v = min(all_vols)
+             max_v = max(all_vols)
+             range_v = max_v - min_v
+             if range_v < 1e-6:
+                 return random.sample(list(self._buffer), batch_size)
+                 
+             b1_thresh = min_v + range_v * 0.33
+             b2_thresh = min_v + range_v * 0.66
+             
+             buffer_list = list(self._buffer)
+             for e in buffer_list:
+                 v = e.vol_metrics[0].item()
+                 if v <= b1_thresh:
+                     low_vol.append(e)
+                 elif v <= b2_thresh:
+                     med_vol.append(e)
+                 else:
+                     high_vol.append(e)
+        except Exception:
+             # Fallback
+             return random.sample(list(self._buffer), batch_size)
+        
+        # Stratified draw: try to get equal parts
+        n_per_stratum = batch_size // 3
+        remainder = batch_size % 3
+        
+        samples = []
+        
+        # Helper to safely sample
+        def safe_sample(pool, k):
+            if not pool: return []
+            return random.sample(pool, min(len(pool), k))
+            
+        samples.extend(safe_sample(low_vol, n_per_stratum + (1 if remainder > 0 else 0)))
+        samples.extend(safe_sample(med_vol, n_per_stratum + (1 if remainder > 1 else 0)))
+        samples.extend(safe_sample(high_vol, n_per_stratum))
+        
+        # If we didn't fill the batch (due to empty buckets), fill from remainder
+        if len(samples) < batch_size:
+             needed = batch_size - len(samples)
+             
+             if len(self._buffer) > len(samples):
+                 # Sample random indices not already chosen
+                 chosen_ids = {id(e) for e in samples}
+                 remaining_candidates = [e for e in self._buffer if id(e) not in chosen_ids]
+                 
+                 if remaining_candidates:
+                    samples.extend(random.sample(remaining_candidates, min(len(remaining_candidates), needed)))
+        
+        return samples[:batch_size]
     
     def get_resolved_experiences(self) -> list[Experience]:
         """Get all experiences with known outcomes."""
@@ -140,6 +232,7 @@ class FisherInformation:
         dataloader: DataLoader,
         loss_fn: nn.Module,
         num_samples: int | None = None,
+        alpha: float = 1.0,
     ) -> None:
         """
         Compute diagonal Fisher Information.
@@ -150,16 +243,19 @@ class FisherInformation:
             dataloader: Data loader for experiences
             loss_fn: Loss function for computing gradients
             num_samples: Number of samples to use (None = all)
+            alpha: Decay factor for accumulation (1.0 = overwrite, <1.0 = moving average)
+                   new_fisher = alpha * computed_fisher + (1 - alpha) * old_fisher
         """
-        # Store optimal parameters
+        # Store optimal parameters (Snapshot current)
         for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self._optimal_params[name] = param.data.clone()
+             if param.requires_grad:
+                 self._optimal_params[name] = param.data.clone()
         
-        # Initialize Fisher accumulator
+        # Initialize Fisher accumulator for this RUN
+        current_run_fisher = {}
         for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self._fisher[name] = torch.zeros_like(param)
+             if param.requires_grad:
+                 current_run_fisher[name] = torch.zeros_like(param)
         
         self.model.train()
         
@@ -217,24 +313,31 @@ class FisherInformation:
             # Accumulate squared gradients (Fisher diagonal)
             for name, param in self.model.named_parameters():
                 if param.requires_grad and param.grad is not None:
-                    self._fisher[name] += param.grad.data ** 2
+                    current_run_fisher[name] += param.grad.data ** 2
             
             n_samples += len(targets)
         
         # Normalize by number of samples
-        for name in self._fisher:
-            self._fisher[name] /= n_samples
+        for name in current_run_fisher:
+            current_run_fisher[name] /= n_samples
         
         # Clamp Fisher values to prevent extreme values that could destabilize EWC
         fisher_min = 1e-8  # Prevent division issues
         fisher_max = 1e6   # Prevent extreme penalties
         total_clamped = 0
         total_params = 0
-        for name in self._fisher:
-            original = self._fisher[name]
-            self._fisher[name] = torch.clamp(original, min=fisher_min, max=fisher_max)
-            total_clamped += (original != self._fisher[name]).sum().item()
-            total_params += original.numel()
+        
+        for name in current_run_fisher:
+             original = current_run_fisher[name]
+             clamped = torch.clamp(original, min=fisher_min, max=fisher_max)
+             total_clamped += (original != clamped).sum().item()
+             total_params += original.numel()
+             
+             # Apply Moving Average/Overwrite
+             if name in self._fisher and alpha < 1.0:
+                 self._fisher[name] = alpha * clamped + (1.0 - alpha) * self._fisher[name]
+             else:
+                 self._fisher[name] = clamped
         
         # Log Fisher statistics for debugging
         all_fisher = torch.cat([f.flatten() for f in self._fisher.values()])
