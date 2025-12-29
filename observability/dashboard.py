@@ -25,12 +25,15 @@ Example:
     ...         handle_alert(alert)
 """
 
+import json
 import logging
+import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, cast
 
 logger = logging.getLogger(__name__)
@@ -251,6 +254,7 @@ class AlertManager:
         self,
         dedup_window_seconds: int = 300,
         max_active_alerts: int = 100,
+        db_path: str = "system_events.db",
     ):
         """
         Initialize alert manager.
@@ -258,9 +262,11 @@ class AlertManager:
         Args:
             dedup_window_seconds: Window for deduplication
             max_active_alerts: Maximum active alerts to track
+            db_path: Path to SQLite database for persistence
         """
         self.dedup_window = timedelta(seconds=dedup_window_seconds)
         self.max_active = max_active_alerts
+        self.db_path = db_path
         
         self._alerts: dict[str, Alert] = {}
         self._alert_counter = 0
@@ -268,6 +274,53 @@ class AlertManager:
         self._handlers: dict[AlertSeverity, list[Callable]] = {
             s: [] for s in AlertSeverity
         }
+        
+        self._init_db()
+        
+    def _init_db(self) -> None:
+        """Initialize SQLite database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS alerts (
+                        alert_id TEXT PRIMARY KEY,
+                        severity TEXT,
+                        source TEXT,
+                        message TEXT,
+                        status TEXT,
+                        created_at TEXT,
+                        acknowledged_at TEXT,
+                        resolved_at TEXT,
+                        metadata TEXT
+                    )
+                """)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to initialize alert DB: {e}")
+
+    def _persist_alert(self, alert: Alert) -> None:
+        """Persist alert to SQLite."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO alerts (
+                        alert_id, severity, source, message, status,
+                        created_at, acknowledged_at, resolved_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    alert.alert_id,
+                    alert.severity.value,
+                    alert.source,
+                    alert.message,
+                    alert.status.value,
+                    alert.created_at.isoformat(),
+                    alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+                    alert.resolved_at.isoformat() if alert.resolved_at else None,
+                    json.dumps(alert.metadata)
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist alert {alert.alert_id}: {e}")
     
     def raise_alert(
         self,
@@ -309,6 +362,7 @@ class AlertManager:
         )
         
         self._alerts[alert.alert_id] = alert
+        self._persist_alert(alert)
         
         # Trigger handlers
         for handler in self._handlers.get(severity, []):
@@ -329,6 +383,7 @@ class AlertManager:
             alert = self._alerts[alert_id]
             alert.status = AlertStatus.ACKNOWLEDGED
             alert.acknowledged_at = datetime.now(timezone.utc)
+            self._persist_alert(alert)
             return True
         return False
     
@@ -338,6 +393,7 @@ class AlertManager:
             alert = self._alerts[alert_id]
             alert.status = AlertStatus.RESOLVED
             alert.resolved_at = datetime.now(timezone.utc)
+            self._persist_alert(alert)
             self._history.append(alert)
             del self._alerts[alert_id]
             return True
@@ -435,6 +491,19 @@ class AutoResponder:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             logger.warning(f"Auto-response: Pausing trading due to {alert.message}")
+            
+            # Create Pause Manifest
+            try:
+                manifest = {
+                    "timestamp": action["timestamp"],
+                    "reason": alert.message,
+                    "alert_details": alert.to_dict(),
+                    "action": "pause_trading"
+                }
+                with open("pause_manifest.json", "w") as f:
+                    json.dump(manifest, f, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to write pause manifest: {e}")
         
         elif alert.severity == AlertSeverity.ERROR and self.reduce_risk_on_error:
             if self._risk_callback:

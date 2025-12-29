@@ -23,6 +23,7 @@ class TradingMetrics:
 
     predictions: list[float] = field(default_factory=list)
     targets: list[int] = field(default_factory=list)
+    payout_ratio: float = 0.9
 
     def reset(self):
         """Clear accumulated predictions."""
@@ -82,8 +83,8 @@ class TradingMetrics:
         auc = self._compute_auc(preds, targets)
 
         # Trading metrics
-        pf = compute_profit_factor(preds, targets, threshold)
-        ev = compute_expected_value(preds, targets, threshold)
+        pf = compute_profit_factor(preds, targets, threshold, self.payout_ratio)
+        ev = compute_expected_value(preds, targets, threshold, self.payout_ratio)
 
         return {
             "accuracy": accuracy,

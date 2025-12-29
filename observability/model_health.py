@@ -30,12 +30,14 @@ Example:
     ...     print(f"Issues: {health.issues}")
 """
 
+import json
 import logging
 import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -277,6 +279,66 @@ class DistributionDriftTracker:
         """
         ks_stat, p_value = self.compute_ks_statistic()
         return p_value < significance, ks_stat
+
+    def save_baseline(self, path: str) -> None:
+        """
+        Save baseline distribution to file.
+        
+        Args:
+            path: Path to save file (JSON)
+        """
+        try:
+            # Save only the baseline portion
+            split_point = len(self._all_predictions) - self.recent_window
+            if split_point > 0:
+                baseline = list(self._all_predictions)[:split_point]
+            else:
+                baseline = list(self._all_predictions)
+                
+            data = {
+                "baseline": baseline,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "count": len(baseline)
+            }
+            
+            with open(path, "w") as f:
+                json.dump(data, f)
+            logger.info(f"Saved drift baseline to {path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save drift baseline: {e}")
+
+    def load_baseline(self, path: str) -> bool:
+        """
+        Load baseline distribution from file.
+        
+        Args:
+            path: Path to load file from
+            
+        Returns:
+            True if loaded successfully
+        """
+        try:
+            p = Path(path)
+            if not p.exists():
+                return False
+                
+            with open(p, "r") as f:
+                data = json.load(f)
+                
+            baseline = data.get("baseline", [])
+            if not baseline:
+                return False
+                
+            # Clear and reload
+            self._all_predictions.clear()
+            self._all_predictions.extend(baseline)
+            logger.info(f"Loaded {len(baseline)} baseline samples from {path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load drift baseline: {e}")
+            return False
 
 
 class ModelHealthMonitor:
