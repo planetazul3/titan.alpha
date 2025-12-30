@@ -333,39 +333,31 @@ class TestStratifiedSampling:
         buffer = ReplayBuffer(capacity=100)
         
         # Create SKEWED buffer: 90 Low Vol, 5 Med Vol, 5 High Vol
-        # Low Vol: 0.1
-        # Med Vol: 0.5
-        # High Vol: 0.9
+        # Using z-score assumption: Low < -0.43, High > 0.43
+        # Low Vol: -1.0
+        # Med Vol: 0.0
+        # High Vol: 1.0
         
         for _ in range(90):
-            buffer.add(mock_experience(0.1))
+            buffer.add(mock_experience(-1.0))
         for _ in range(5):
-             buffer.add(mock_experience(0.5))
+             buffer.add(mock_experience(0.0))
         for _ in range(5):
-             buffer.add(mock_experience(0.9))
+             buffer.add(mock_experience(1.0))
              
         # Random sampling should be dominated by Low Vol (approx 90%)
         random_batch = buffer.sample(batch_size=30, stratified=False)
-        low_count_random = sum(1 for e in random_batch if e.vol_metrics[0] < 0.2)
+        low_count_random = sum(1 for e in random_batch if e.vol_metrics[0] < -0.43)
         assert low_count_random > 20, "Random sampling should reflect skew"
         
         # Stratified sampling should ideally have equal representation (10 Low, 10 Med, 10 High)
         # But we only have 5 Med and 5 High available.
-        # So it should take all 5 Med, all 5 High, and fill rest with Low (or duplicate? implementation details)
-        # My implementation takes min(available, needed).
-        # desired per stratum = 30 / 3 = 10.
-        # Low: takes 10.
-        # Med: takes 5 (all).
-        # High: takes 5 (all).
-        # Total 20. Remainder 10.
-        # Fills remainder from rest. Remaining pool is mostly Low.
-        # So we expect roughly 20 Low, 5 Med, 5 High.
-        # This is strictly better than 27 Low, 1.5 Med, 1.5 High.
+        # So it should take all 5 Med, all 5 High, and fill rest with Low.
         
         stratified_batch = buffer.sample(batch_size=30, stratified=True)
-        low_count = sum(1 for e in stratified_batch if e.vol_metrics[0] < 0.2)
-        med_count = sum(1 for e in stratified_batch if 0.4 < e.vol_metrics[0] < 0.6)
-        high_count = sum(1 for e in stratified_batch if e.vol_metrics[0] > 0.8)
+        low_count = sum(1 for e in stratified_batch if e.vol_metrics[0] < -0.43)
+        med_count = sum(1 for e in stratified_batch if -0.43 <= e.vol_metrics[0] <= 0.43)
+        high_count = sum(1 for e in stratified_batch if e.vol_metrics[0] > 0.43)
         
         assert med_count == 5, f"Should capture all medium exp, got {med_count}"
         assert high_count == 5, f"Should capture all high exp, got {high_count}"
@@ -373,16 +365,16 @@ class TestStratifiedSampling:
         
     def test_stratified_sampling_even_buffer(self, mock_experience):
         buffer = ReplayBuffer(capacity=100)
-        # Even buffer
-        for _ in range(10): buffer.add(mock_experience(0.1))
-        for _ in range(10): buffer.add(mock_experience(0.5))
-        for _ in range(10): buffer.add(mock_experience(0.9))
+        # Even buffer using z-score values
+        for _ in range(10): buffer.add(mock_experience(-1.0))
+        for _ in range(10): buffer.add(mock_experience(0.0))
+        for _ in range(10): buffer.add(mock_experience(1.0))
         
         batch = buffer.sample(batch_size=15, stratified=True)
         
-        low = sum(1 for e in batch if e.vol_metrics[0] < 0.2)
-        med = sum(1 for e in batch if 0.4 < e.vol_metrics[0] < 0.6)
-        high = sum(1 for e in batch if e.vol_metrics[0] > 0.8)
+        low = sum(1 for e in batch if e.vol_metrics[0] < -0.43)
+        med = sum(1 for e in batch if -0.43 <= e.vol_metrics[0] <= 0.43)
+        high = sum(1 for e in batch if e.vol_metrics[0] > 0.43)
         
         # Should be roughly equal (5, 5, 5)
         # Since logic splits evenly and all are available

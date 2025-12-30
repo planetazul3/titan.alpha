@@ -72,6 +72,11 @@ class ReplayBuffer:
     Provides sampling for mini-batch updates.
     """
     
+    # Thresholds for normalized volatility (z-score assumption)
+    # Approx tertiles of standard normal distribution
+    LOW_THRESHOLD = -0.43
+    HIGH_THRESHOLD = 0.43
+
     def __init__(self, capacity: int = 1000):
         """
         Initialize replay buffer.
@@ -80,11 +85,48 @@ class ReplayBuffer:
             capacity: Maximum experiences to store
         """
         self.capacity = capacity
-        self._buffer: deque = deque(maxlen=capacity)
+
+        # Internal buckets for stratified sampling
+        self._low_vol = deque()
+        self._med_vol = deque()
+        self._high_vol = deque()
+
+        # Track insertion order for global FIFO eviction
+        # Stores bucket index: 0=low, 1=med, 2=high
+        self._insertion_order = deque(maxlen=capacity)
     
     def add(self, experience: Experience) -> None:
         """Add experience to buffer."""
-        self._buffer.append(experience)
+        # Determine bucket based on fixed thresholds
+        # Optimization: Bucket on insert to avoid sorting during sample
+        try:
+            vol = experience.vol_metrics[0].item()
+            if vol < self.LOW_THRESHOLD:
+                bucket_idx = 0
+                target_bucket = self._low_vol
+            elif vol < self.HIGH_THRESHOLD:
+                bucket_idx = 1
+                target_bucket = self._med_vol
+            else:
+                bucket_idx = 2
+                target_bucket = self._high_vol
+        except Exception:
+            # Fallback for unexpected format
+            bucket_idx = 1
+            target_bucket = self._med_vol
+
+        # Handle global capacity
+        if len(self._insertion_order) >= self.capacity:
+            oldest_bucket_idx = self._insertion_order.popleft()
+            if oldest_bucket_idx == 0:
+                self._low_vol.popleft()
+            elif oldest_bucket_idx == 1:
+                self._med_vol.popleft()
+            else:
+                self._high_vol.popleft()
+
+        target_bucket.append(experience)
+        self._insertion_order.append(bucket_idx)
     
     def sample(self, batch_size: int, stratified: bool = True) -> list[Experience]:
         """
@@ -98,111 +140,68 @@ class ReplayBuffer:
             List of sampled experiences
         """
         import random
-        if len(self._buffer) < batch_size:
-            return list(self._buffer)
+        from itertools import chain
+
+        current_size = len(self._insertion_order)
+        if current_size < batch_size:
+            return list(chain(self._low_vol, self._med_vol, self._high_vol))
             
         if not stratified:
-            return random.sample(list(self._buffer), batch_size)
+            # Random sample from all buckets combined
+            # To be efficient, we flatten. For capacity ~10k this is fast enough.
+            all_items = list(chain(self._low_vol, self._med_vol, self._high_vol))
+            return random.sample(all_items, batch_size)
             
         # Stratified Sampling by Volatility Regime
-        # We use a heuristic: 'vol_metrics' usually contains [vol_short, vol_long, ...]
-        # We'll use the first metric (vol_short)
-        
-        low_vol = []
-        med_vol = []
-        high_vol = []
-        
-        # Calculate approximate quantiles from buffer (simplified: fixed thresholds or dynamic?)
-        # For speed, let's use fixed thresholds derived from normalization assumption (z-score approx 0)
-        # But data might not be z-scored here in raw form.
-        # Let's use dynamic quantiles of the current buffer.
-        
-        all_vols = [e.vol_metrics[0].item() for e in self._buffer]
-        if not all_vols:
-             return random.sample(list(self._buffer), batch_size)
-
-        # Efficient approximate partitioning
-        # Sort is O(N log N), acceptable for buffer size ~1000-5000
-        # For larger buffers, reservoir sampling per bucket is better.
-        
-        import statistics
-        try:
-             # Fast 33/66 percentiles
-             # We can just sort and split
-             sorted_indices = sorted(range(len(all_vols)), key=lambda k: all_vols[k])
-             n = len(sorted_indices)
-             t1 = int(n * 0.33)
-             t2 = int(n * 0.66)
-             
-             # Map back to experiences
-             # This is a bit heavy for every sample call if calc_quantiles every time.
-             # Optimization: bucket on insert? 
-             # For now, let's just do random sampling if not enough diversity, 
-             # or simple bucket rejection?
-             
-             # Actually, simpler robust approach:
-             # Just split into 3 groups based on min/max range of current buffer
-             min_v = min(all_vols)
-             max_v = max(all_vols)
-             range_v = max_v - min_v
-             if range_v < 1e-6:
-                 return random.sample(list(self._buffer), batch_size)
-                 
-             b1_thresh = min_v + range_v * 0.33
-             b2_thresh = min_v + range_v * 0.66
-             
-             buffer_list = list(self._buffer)
-             for e in buffer_list:
-                 v = e.vol_metrics[0].item()
-                 if v <= b1_thresh:
-                     low_vol.append(e)
-                 elif v <= b2_thresh:
-                     med_vol.append(e)
-                 else:
-                     high_vol.append(e)
-        except Exception:
-             # Fallback
-             return random.sample(list(self._buffer), batch_size)
-        
-        # Stratified draw: try to get equal parts
+        # Draw equal parts from each pre-filled bucket
         n_per_stratum = batch_size // 3
         remainder = batch_size % 3
         
         samples = []
         
-        # Helper to safely sample
         def safe_sample(pool, k):
             if not pool: return []
-            return random.sample(pool, min(len(pool), k))
+            # pool is a deque, random.sample requires sequence
+            # Converting deque to list is O(N) but restricted to bucket size
+            return random.sample(list(pool), min(len(pool), k))
             
-        samples.extend(safe_sample(low_vol, n_per_stratum + (1 if remainder > 0 else 0)))
-        samples.extend(safe_sample(med_vol, n_per_stratum + (1 if remainder > 1 else 0)))
-        samples.extend(safe_sample(high_vol, n_per_stratum))
+        samples.extend(safe_sample(self._low_vol, n_per_stratum + (1 if remainder > 0 else 0)))
+        samples.extend(safe_sample(self._med_vol, n_per_stratum + (1 if remainder > 1 else 0)))
+        samples.extend(safe_sample(self._high_vol, n_per_stratum))
         
         # If we didn't fill the batch (due to empty buckets), fill from remainder
         if len(samples) < batch_size:
              needed = batch_size - len(samples)
              
-             if len(self._buffer) > len(samples):
-                 # Sample random indices not already chosen
-                 chosen_ids = {id(e) for e in samples}
-                 remaining_candidates = [e for e in self._buffer if id(e) not in chosen_ids]
-                 
-                 if remaining_candidates:
-                    samples.extend(random.sample(remaining_candidates, min(len(remaining_candidates), needed)))
+             # Identify candidates not already chosen
+             # We can do this efficiently by sampling from the remaining pool
+             # But 'remaining pool' is complex to construct efficiently.
+             # Fallback: flatten all, exclude chosen by id.
+
+             all_items = list(chain(self._low_vol, self._med_vol, self._high_vol))
+             chosen_ids = {id(e) for e in samples}
+             candidates = [e for e in all_items if id(e) not in chosen_ids]
+
+             if candidates:
+                samples.extend(random.sample(candidates, min(len(candidates), needed)))
         
         return samples[:batch_size]
     
     def get_resolved_experiences(self) -> list[Experience]:
         """Get all experiences with known outcomes."""
-        return [e for e in self._buffer if e.outcome >= 0]
+        from itertools import chain
+        # Efficiently iterate all buckets
+        return [e for e in chain(self._low_vol, self._med_vol, self._high_vol) if e.outcome >= 0]
     
     def __len__(self) -> int:
-        return len(self._buffer)
+        return len(self._insertion_order)
     
     def clear(self) -> None:
         """Clear all experiences."""
-        self._buffer.clear()
+        self._low_vol.clear()
+        self._med_vol.clear()
+        self._high_vol.clear()
+        self._insertion_order.clear()
 
 
 class FisherInformation:
