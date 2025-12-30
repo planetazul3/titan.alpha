@@ -31,13 +31,13 @@ from execution.sqlite_shadow_store import SQLiteShadowStore
 @pytest.fixture
 def mock_settings():
     """Create real settings for testing."""
-    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes
+    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes, ShadowTradeConfig
     
     trading = Trading.model_construct(
         symbol="R_100",
         stake_amount=1.0,
-        barrier_offset="+0.50",
-        barrier2_offset="-0.50"
+        barrier_offset=0.50,
+        barrier2_offset=-0.50
     )
     thresholds = Thresholds.model_construct(
         confidence_threshold_high=0.75,
@@ -54,12 +54,20 @@ def mock_settings():
         sequence_length_ticks=100,
         sequence_length_candles=50
     )
+    shadow_trade = ShadowTradeConfig.model_construct(
+        min_probability_track=0.40,
+        duration_rise_fall=1,
+        duration_touch=5,
+        duration_range=5,
+        duration_minutes=1
+    )
     
     return Settings.model_construct(
         trading=trading,
         thresholds=thresholds,
         hyperparams=hyperparams,
         data_shapes=data_shapes,
+        shadow_trade=shadow_trade,
         environment="development"
     )
 
@@ -273,16 +281,6 @@ class TestLiveFlowIntegration:
         """Shadow trades should be captured during decision processing."""
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         shadow_store = SQLiteShadowStore(tmp_path / "shadow.db")
-
-        # Add missing mock settings for C02 and I01 fixes
-        mock_settings.shadow_trade = MagicMock()
-        mock_settings.shadow_trade.min_probability_track = 0.40
-        mock_settings.shadow_trade.duration_rise_fall = 1
-        mock_settings.shadow_trade.duration_touch = 5
-        mock_settings.shadow_trade.duration_range = 5
-        mock_settings.shadow_trade.duration_minutes = 1
-        mock_settings.trading.barrier_offset = "+0.50"
-        mock_settings.trading.barrier2_offset = "-0.50"
 
         engine = DecisionEngine(
             mock_settings,

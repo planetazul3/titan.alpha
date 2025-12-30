@@ -6,6 +6,8 @@ class TestLossBalance(unittest.TestCase):
     def test_loss_magnitude_balance(self):
         """Verify that reconstruction loss is scaled up to be comparable to classification loss."""
         loss_fn = MultiTaskLoss()
+        # Disable uncertainty weighting so manual weights are used
+        loss_fn.log_vars.requires_grad_(False)
         
         # 1. Simulate typical Classification Inputs (Batch Size 2)
         # Target: 1.0, Logit: 0.0 (sigmoid(0) = 0.5) -> Error ~0.69

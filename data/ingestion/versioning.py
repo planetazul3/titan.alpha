@@ -201,11 +201,18 @@ def create_metadata(
     Returns:
         Populated DatasetMetadata instance.
     """
-    if hasattr(records, "empty") and records.empty:
-        epochs = []
-    elif not hasattr(records, "empty") and not records:
+    # Handle DataFrame: use .empty and column access
+    if hasattr(records, "empty"):
+        if records.empty:
+            epochs = []
+        else:
+            # It's a non-empty DataFrame - access the epoch column directly
+            epochs = records["epoch"].tolist()
+    elif not records:
+        # Empty list
         epochs = []
     else:
+        # List of dicts
         epochs = [r["epoch"] for r in records]
 
     return DatasetMetadata(

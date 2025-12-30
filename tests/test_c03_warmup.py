@@ -17,6 +17,8 @@ def mock_settings():
     settings.data_shapes.sequence_length_ticks = 20
     settings.data_shapes.sequence_length_candles = 10
     settings.data_shapes.warmup_steps = 20  # Warmup > RSI period (14)
+    settings.data_shapes.label_threshold_touch = 0.005
+    settings.data_shapes.label_threshold_range = 0.003
     
     # Mock normalization factors (REQUIRED by VolatilityMetricsExtractor)
     settings.normalization = MagicMock()
