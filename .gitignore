@@ -14,3 +14,7 @@ checkpoints/
 test_data/*.db
 test_data/*.db-shm
 test_data/*.db-wal
+
+# Runtime artifacts
+pause_manifest.json
+system_events.db
