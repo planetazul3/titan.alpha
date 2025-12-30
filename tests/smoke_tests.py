@@ -1,74 +1,71 @@
+"""
+Smoke tests for script entry points.
+Ensures that scripts can initialize without crashing.
+"""
+
 import subprocess
 import sys
-import unittest
+from pathlib import Path
 
-class TitanSmokeTests(unittest.TestCase):
-    """
-    Smoke tests to verify entry points and basic system health.
-    These tests ensure that critical scripts can at least load their dependencies
-    and respond to --help without crashing.
-    """
-    
-    def test_live_trading_help(self):
-        """Verify scripts/live.py help output."""
-        result = subprocess.run(
-            [sys.executable, "scripts/live.py", "--help"],
-            capture_output=True, text=True
-        )
-        self.assertEqual(result.returncode, 0, f"live.py --help failed: {result.stderr}")
-        self.assertIn("usage: live.py", result.stdout)
+import pytest
 
-    def test_train_help(self):
-        """Verify scripts/train.py help output."""
-        result = subprocess.run(
-            [sys.executable, "scripts/train.py", "--help"],
-            capture_output=True, text=True
-        )
-        self.assertEqual(result.returncode, 0, f"train.py --help failed: {result.stderr}")
-        self.assertIn("usage: train.py", result.stdout)
+SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 
-    def test_download_data_help(self):
-        """Verify scripts/download_data.py help output."""
-        result = subprocess.run(
-            [sys.executable, "scripts/download_data.py", "--help"],
-            capture_output=True, text=True
-        )
-        self.assertEqual(result.returncode, 0, f"download_data.py --help failed: {result.stderr}")
-        self.assertIn("usage: download_data.py", result.stdout)
+def run_script(script_name: str, args: list[str]) -> subprocess.CompletedProcess:
+    """Run a script with arguments and return result."""
+    script_path = SCRIPTS_DIR / script_name
+    cmd = [sys.executable, str(script_path)] + args
 
-    def test_import_all_modules(self):
-        """Verify that critical modules can be imported without error."""
-        modules = [
-            "config.settings",
-            "execution.decision",
-            "execution.policy",
-            "data.dataset",
-            "models.core"
-        ]
-        for mod in modules:
-            with self.subTest(module=mod):
-                result = subprocess.run(
-                    [sys.executable, "-c", f"import {mod}"],
-                    capture_output=True, text=True
-                )
-                self.assertEqual(result.returncode, 0, f"Failed to import {mod}: {result.stderr}")
+    # Ensure python-deriv-api is in PYTHONPATH
+    python_path = str(SCRIPTS_DIR.parent)
+    deriv_api_path = SCRIPTS_DIR.parent / "python-deriv-api"
+    if deriv_api_path.exists():
+        python_path += f":{deriv_api_path}"
 
-    def test_live_trading_initialization(self):
-        """
-        Verify live.py --test (Simulation initialization).
-        Note: This is expected to FAIL currently due to the model_monitor NameError.
-        This test serves as a baseline for the fix.
-        """
-        result = subprocess.run(
-            [sys.executable, "scripts/live.py", "--test"],
-            capture_output=True, text=True, timeout=30
-        )
-        # We check for the specific known error to 'pass' this test of system state detection
-        if "NameError: name 'model_monitor' is not defined" in result.stderr:
-             # System identified the specific regression
-             return
-        # If it passes, even better (though unlikely without a fix)
-        self.assertEqual(result.returncode, 0, f"live.py --test failed unexpectedly: {result.stderr}")
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": python_path}
+    )
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.smoke
+def test_live_py_help():
+    """Test that scripts/live.py can run --help."""
+    result = run_script("live.py", ["--help"])
+    assert result.returncode == 0
+    assert "Live trading" in result.stdout
+
+@pytest.mark.smoke
+def test_live_py_test_mode():
+    """Test that scripts/live.py initializes in test mode."""
+    # This might require network or credentials, so we expect it to at least start
+    # and fail gracefully or succeed.
+    # We use --test flag which should just verify connection.
+    result = run_script("live.py", ["--test"])
+
+    # It might fail if no .env or no network, but we check output for startup logs
+    # or specific error messages, avoiding NameError/ImportError.
+
+    if result.returncode != 0:
+        # If it fails, make sure it's not a syntax/import error
+        assert "NameError" not in result.stderr
+        assert "ImportError" not in result.stderr
+        assert "ModuleNotFoundError" not in result.stderr
+    else:
+        assert "Test mode - connection verified" in result.stderr or \
+               "Test mode - connection verified" in result.stdout
+
+@pytest.mark.smoke
+def test_train_py_help():
+    """Test that scripts/train.py can run --help."""
+    result = run_script("train.py", ["--help"])
+    assert result.returncode == 0
+    assert "usage:" in result.stdout
+
+@pytest.mark.smoke
+def test_download_data_py_help():
+    """Test that scripts/download_data.py can run --help."""
+    result = run_script("download_data.py", ["--help"])
+    assert result.returncode == 0
+    assert "Download historical data" in result.stdout

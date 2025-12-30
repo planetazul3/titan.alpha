@@ -22,7 +22,8 @@ import numpy as np
 
 from config.settings import Settings
 from execution.position_sizer import KellyPositionSizer, PositionSizeResult
-from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto, TrustState
+from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
+from execution.common.types import TrustState
 from execution.regime_v2 import (
     HierarchicalRegimeAssessment,
     HierarchicalRegimeDetector,

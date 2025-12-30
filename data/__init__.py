@@ -25,7 +25,8 @@ Low-level utilities (use FeatureBuilder instead):
 import warnings as _warnings
 
 from data.dataset import DerivDataset
-from data.features import FEATURE_SCHEMA_VERSION, FeatureBuilder, get_feature_builder
+from data.common.schema import FEATURE_SCHEMA_VERSION
+from data.features import FeatureBuilder, get_feature_builder
 from data.indicators import (
     adx,
     atr,
