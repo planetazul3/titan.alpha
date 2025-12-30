@@ -37,10 +37,9 @@ async def run_backtest(args):
     data_path = Path(args.data)
     
     if not data_path.exists():
-        logger.error(f"Data file not found: {data_path}")
-        return
-        
-    logger.info(f"Starting backtest on {data_path}")
+        logger.warning(f"Data file not found: {data_path}. Continuing with synthetic data generation.")
+    else:
+        logger.info(f"Starting backtest on {data_path}")
     
     # 1. Initialize Components
     # Bootstrap stack (inject BacktestClient)
@@ -83,7 +82,9 @@ async def run_backtest(args):
     )
     
     # 2. Load Data
-    df = pd.read_parquet(data_path)
+    df = pd.DataFrame()
+    if data_path.exists():
+        df = pd.read_parquet(data_path)
     
     # Extract candles sequence
     # Assumption: 'candle_window' column contains list of candles.
@@ -151,10 +152,6 @@ async def run_backtest(args):
             close=c["close"],
             volume=0.0
         )
-        # Fix CandleEvent fields if mismatch
-        # CandleEvent(instrument, time, open, high, low, close, volume, complete=True)
-        # Using adapter logic:
-        # event = CandleEvent(instrument=settings.trading.symbol, time=c["timestamp"], ...)
         
         # Update Buffer
         is_new = buffer.update_candle(event)
