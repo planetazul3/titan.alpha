@@ -4,7 +4,8 @@ import pytest
 
 from config.settings import Settings
 from execution.decision import DecisionEngine
-from execution.regime import RegimeVeto, TrustState
+from execution.regime import RegimeVeto
+from execution.common.types import TrustState
 
 
 from config.settings import (

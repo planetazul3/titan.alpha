@@ -148,7 +148,8 @@ class TestRegimeVetoProperties:
         """Regime states must follow threshold ordering."""
         import torch
 
-        from execution.regime import RegimeVeto, TrustState
+        from execution.regime import RegimeVeto
+        from execution.common.types import TrustState
 
         # Avoid boundary conditions where floating point precision matters
         assume(abs(error - caution) > 0.01)

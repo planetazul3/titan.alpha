@@ -201,7 +201,9 @@ def create_metadata(
     Returns:
         Populated DatasetMetadata instance.
     """
-    if not records:
+    if hasattr(records, "empty") and records.empty:
+        epochs = []
+    elif not hasattr(records, "empty") and not records:
         epochs = []
     else:
         epochs = [r["epoch"] for r in records]

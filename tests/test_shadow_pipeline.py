@@ -295,7 +295,7 @@ class TestPipelineIntegration:
                 circuit_breaker_reset_minutes=15
             )
             
-            from execution.regime import TrustState
+            from execution.common.types import TrustState
             hyperparams = ModelHyperparams.model_construct(
                 regime_caution_threshold=0.1,
                 regime_veto_threshold=0.3

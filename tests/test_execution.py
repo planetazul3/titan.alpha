@@ -254,7 +254,8 @@ class TestRegimeVeto:
         """Low reconstruction error should return TRUSTED state."""
         import torch
 
-        from execution.regime import RegimeVeto, TrustState
+        from execution.regime import RegimeVeto
+        from execution.common.types import TrustState
 
         veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         assessment = veto.assess(torch.tensor(0.05))
@@ -267,7 +268,8 @@ class TestRegimeVeto:
         """Medium reconstruction error should return CAUTION state."""
         import torch
 
-        from execution.regime import RegimeVeto, TrustState
+        from execution.regime import RegimeVeto
+        from execution.common.types import TrustState
 
         veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         assessment = veto.assess(torch.tensor(0.15))
@@ -280,7 +282,8 @@ class TestRegimeVeto:
         """High reconstruction error should return VETO state."""
         import torch
 
-        from execution.regime import RegimeVeto, TrustState
+        from execution.regime import RegimeVeto
+        from execution.common.types import TrustState
 
         veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
         assessment = veto.assess(torch.tensor(0.5))
