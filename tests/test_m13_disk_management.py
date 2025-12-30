@@ -4,6 +4,7 @@ import time
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from freezegun import freeze_time
 from config.logging_config import cleanup_logs
 from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.shadow_store import ShadowTradeRecord
@@ -39,12 +40,12 @@ class TestDiskManagement:
         db_path = tmp_path / "test.db"
         store = SQLiteShadowStore(db_path)
         
-        # Helper to insert
-        def insert_record(trade_id: str, days_ago: int):
-            ts = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        def insert_record(trade_id: str):
             record = ShadowTradeRecord(
                 trade_id=trade_id,
-                timestamp=ts,
+                timestamp=datetime.now(timezone.utc),
                 contract_type="CALL",
                 direction="UP",
                 probability=0.8,
@@ -55,21 +56,25 @@ class TestDiskManagement:
                 feature_schema_version="1.0"
             )
             store.append(record)
-            # Hack to force timestamp back because append uses record.timestamp but let's be sure
-            # Actually append uses record.timestamp so it's fine.
             
-        # Insert recent record (1 day old)
-        insert_record("recent", 1)
-        
-        # Insert old record (40 days old)
-        insert_record("old", 40)
+        # 1. Insert old record (40 days ago)
+        with freeze_time(base_time - timedelta(days=40)):
+            insert_record("old")
+
+        # 2. Insert recent record (1 day ago)
+        with freeze_time(base_time - timedelta(days=1)):
+            insert_record("recent")
         
         # Verify both exist
         assert store.get_by_id("recent") is not None
         assert store.get_by_id("old") is not None
         
-        # Prune (keep 30 days)
-        deleted = store.prune(retention_days=30)
+        # 3. Prune (keep 30 days) at base_time
+        with freeze_time(base_time):
+            # Cutoff will be base_time - 30 days
+            # "old" is base_time - 40 days -> should be deleted
+            # "recent" is base_time - 1 day -> should be kept
+            deleted = store.prune(retention_days=30)
         
         # Verify
         assert deleted == 1
