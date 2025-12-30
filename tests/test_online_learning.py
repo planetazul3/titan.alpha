@@ -6,6 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+from unittest.mock import MagicMock, patch
 
 from training.online_learning import (
     EWCLoss,
@@ -23,7 +24,7 @@ class SimpleModel(nn.Module):
         super().__init__()
         self.fc = nn.Linear(10, 1)
     
-    def forward(self, x):
+    def forward(self, x, *args, **kwargs):
         return self.fc(x)
 
 
@@ -311,22 +312,6 @@ class TestOnlineLearningModule:
         assert "total_updates" in stats
         assert stats["buffer_size"] == 0
         assert stats["total_updates"] == 0
-"""
-Tests for EWC Audit Fixes: Stratified Sampling and Fisher Accumulation.
-"""
-import pytest
-import torch
-import torch.nn as nn
-from unittest.mock import MagicMock, patch
-from training.online_learning import ReplayBuffer, Experience, FisherInformation
-
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc = nn.Linear(10, 1)
-
-    def forward(self, x, *args, **kwargs):
-        return self.fc(x)
 
 @pytest.fixture
 def mock_experience():
@@ -407,58 +392,66 @@ class TestStratifiedSampling:
 
 class TestFisherAccumulation:
     def test_fisher_accumulation_alpha(self):
+        """Test Fisher accumulation using deterministic mocks."""
         model = SimpleModel()
         fisher = FisherInformation(model)
         
-        # Fake dataloader
+        # Fake dataloader - content doesn't matter because we mock backward
         dataloader = [
              (torch.randn(1, 10), torch.tensor([1.0]))
         ]
-        loss_fn = nn.MSELoss()
         
         # 1. Compute Initial Fisher
-        # We need gradients. We can mock model or just run it.
-        # Let's run it.
+        # We want specific gradients.
+        # Let's say we want gradient 2.0 for all params.
+        # Fisher = 2.0**2 = 4.0
         
-        fisher.compute(dataloader, loss_fn)
+        def mock_backward_1():
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.grad = torch.ones_like(param) * 2.0
+
+        loss_mock_1 = MagicMock()
+        loss_mock_1.backward.side_effect = mock_backward_1
+        loss_fn_1 = MagicMock(return_value=loss_mock_1)
+
+        fisher.compute(dataloader, loss_fn_1)
         initial_fisher = fisher.get_fisher("fc.weight").clone()
         
+        assert torch.all(initial_fisher == 4.0)
+
         # 2. Compute Update with Alpha = 0.5
-        # We want "new" fisher to be different.
-        # Let's change input data to produce different gradients (hopefully)
-        # Or manually hack the computed gradient inside compute? 
-        # Easier: just run compute again with same data, result should be same (deterministic).
-        # Wait, if result is same, alpha doesn't change anything (x = 0.5x + 0.5x).
+        # We want new gradients to be 4.0.
+        # New Fisher calc = 4.0**2 = 16.0
+        # Accumulated = 0.5 * 16.0 + 0.5 * 4.0 = 8.0 + 2.0 = 10.0
         
-        # We need "new" fisher to be different.
-        dataloader2 = [
-             (torch.randn(1, 10) * 100, torch.tensor([1.0])) # High magnitude inputs -> high gradients
-        ]
+        def mock_backward_2():
+             for param in model.parameters():
+                if param.requires_grad:
+                    param.grad = torch.ones_like(param) * 4.0
+
+        loss_mock_2 = MagicMock()
+        loss_mock_2.backward.side_effect = mock_backward_2
+        loss_fn_2 = MagicMock(return_value=loss_mock_2)
         
-        # Store expectated "new" fisher by running with alpha=1.0 (overwrite) first?
-        # No, let's just run with alpha=0.5 and verify it moved AWAY from initial toward new.
-        
-        # First getting reference for "New"
-        fisher_ref = FisherInformation(model)
-        fisher_ref.compute(dataloader2, loss_fn)
-        new_fisher_val = fisher_ref.get_fisher("fc.weight")
-        
-        assert not torch.allclose(initial_fisher, new_fisher_val), "Gradients should differ"
-        
-        # Now apply accumulation on original object
-        # fisher already has initial_fisher.
-        # old = initial
-        # new computed = new_fisher_val
-        # result should be 0.5 * new + 0.5 * old
-        fisher.compute(dataloader2, loss_fn, alpha=0.5)
+        fisher.compute(dataloader, loss_fn_2, alpha=0.5)
         
         accumulated_fisher = fisher.get_fisher("fc.weight")
         
-        expected = 0.5 * new_fisher_val + 0.5 * initial_fisher
-        
-        # Allow small epsilon due to float math
-        assert torch.allclose(accumulated_fisher, expected, atol=1e-5)
+        # Note: atol=1e-5 is used to handle floating point inaccuracies
+        assert torch.allclose(accumulated_fisher, torch.tensor(10.0), atol=1e-5)
         
         # 3. Test Alpha=1.0 (Overwrite)
-        fisher.compute(dataloader2, loss_fn, alpha=1.0)
-        assert torch.allclose(fisher.get_fisher("fc.weight"), new_fisher_val, atol=1e-5)
+        # Gradient = 3.0 -> Fisher = 9.0
+        def mock_backward_3():
+             for param in model.parameters():
+                if param.requires_grad:
+                    param.grad = torch.ones_like(param) * 3.0
+        
+        loss_mock_3 = MagicMock()
+        loss_mock_3.backward.side_effect = mock_backward_3
+        loss_fn_3 = MagicMock(return_value=loss_mock_3)
+        
+        fisher.compute(dataloader, loss_fn_3, alpha=1.0)
+        
+        assert torch.allclose(fisher.get_fisher("fc.weight"), torch.tensor(9.0), atol=1e-5)
