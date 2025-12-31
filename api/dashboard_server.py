@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 # Database paths (read-only access)
 PROJECT_ROOT = Path(__file__).parent.parent
-SHADOW_DB_PATH = PROJECT_ROOT / "data_cache" / "shadow_trades.db"
-SAFETY_DB_PATH = PROJECT_ROOT / "data_cache" / "safety_state.db"
+SHADOW_DB_PATH = PROJECT_ROOT / "data_cache" / "trading_state.db"
+SAFETY_DB_PATH = PROJECT_ROOT / "data_cache" / "trading_state.db"
 
 from config.settings import load_settings
 

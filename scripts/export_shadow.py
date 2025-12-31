@@ -51,7 +51,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", type=str, default="data_cache/shadow_trades.db", help="Path to SQLite DB")
+    parser.add_argument("--db", type=str, default="data_cache/trading_state.db", help="Path to SQLite DB")
     parser.add_argument("--output", type=str, default="data_cache/shadow_replay.parquet", help="Output Parquet file")
     
     args = parser.parse_args()

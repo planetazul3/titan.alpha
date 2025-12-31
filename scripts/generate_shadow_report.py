@@ -388,8 +388,8 @@ Examples:
     parser.add_argument(
         "--db-path",
         type=str,
-        default="data_cache/shadow_trades.db",
-        help="Path to shadow trade SQLite database (default: data_cache/shadow_trades.db)",
+        default="data_cache/trading_state.db",
+        help="Path to shadow trade SQLite database (default: data_cache/trading_state.db)",
     )
     
     args = parser.parse_args()

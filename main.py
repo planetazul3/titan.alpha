@@ -58,8 +58,8 @@ async def main():
         return
 
     # 4. Initialize Safety and Idempotency Stores
-    shadow_store = SQLiteShadowStore(Path("data_cache/shadow_trades.db"))
-    safety_store = SQLiteSafetyStateStore(Path("data_cache/safety_state.db"))
+    shadow_store = SQLiteShadowStore(Path("data_cache/trading_state.db"))
+    safety_store = SQLiteSafetyStateStore(Path("data_cache/trading_state.db"))
     idempotency_store = SQLiteIdempotencyStore(Path("data_cache/idempotency.db"))
     
     # 5. Initialize Decision Engine with full safety context
@@ -121,7 +121,16 @@ async def main():
     logger.info("Processing decisions...")
     for i in range(batch_size):
         # Extract scalar probabilities for current sample
-        sample_probs = {k: v[i].item() for k, v in probs.items()}
+        sample_probs = {}
+        for k, v in probs.items():
+            if k == "vol_reconstruction":
+                # Reconstruction error is (batch,) or (batch, 4) depending on how it's returned
+                # It's usually a scalar per sample for anomaly score, but let's check
+                # VolatilityExpert.reconstruct returns (batch, input_dim) - it's the reconstructed vector
+                # But predict_probs returns it directly.
+                # We shouldn't use reconstructed vector as probability.
+                continue
+            sample_probs[k] = v[i].item()
 
         logger.info(f"Sample {i} probabilities: {sample_probs}")
 

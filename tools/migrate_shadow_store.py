@@ -121,8 +121,8 @@ def main():
     parser.add_argument(
         "--target",
         type=Path,
-        default=Path("data_cache/shadow_trades.db"),
-        help="Target SQLite database (default: data_cache/shadow_trades.db)",
+        default=Path("data_cache/trading_state.db"),
+        help="Target SQLite database (default: data_cache/trading_state.db)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview migration without writing")
 
