@@ -10,7 +10,7 @@ from data.dataset import DerivDataset
 
 @pytest.fixture
 def settings():
-    return Settings()
+    return Settings(environment="test", deriv_api_token="dummy_token")
 
 def test_tft_masking_integration():
     """Test that TFT accepts and handles mask."""
@@ -42,7 +42,7 @@ def test_tft_masking_integration():
 def test_deriv_dataset_masks(tmp_path):
     """Test DerivDataset returns masks."""
     # Mock settings
-    s = Settings()
+    s = Settings(environment="test", deriv_api_token="dummy_token")
     
     # Create dummy parquet
     import pandas as pd

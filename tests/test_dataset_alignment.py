@@ -20,7 +20,7 @@ class TestDatasetAlignment(unittest.TestCase):
         # Reset singleton to ensure fresh settings are used
         reset_feature_builder()
         
-        self.settings = Settings()
+        self.settings = Settings(environment="test", deriv_api_token="dummy_token")
 
         # Override data shapes for testing
         self.settings.data_shapes.sequence_length_ticks = 10

@@ -21,7 +21,7 @@ def mock_client():
 
 @pytest.fixture
 def settings():
-    s = Settings()
+    s = Settings(environment="test", deriv_api_token="dummy_token")
     s.trading.stake_amount = 10.0
     return s
 

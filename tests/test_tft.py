@@ -235,7 +235,7 @@ class TestTemporalFusionTransformer:
         """Test different pooling methods via TemporalExpert integration."""
         from models.temporal import TemporalExpert
         
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         # Test default (attention)
         model_attn = TemporalExpert(settings, use_tft=True)
         # Manually override for testing
@@ -245,7 +245,7 @@ class TestTemporalFusionTransformer:
         # Actually better to test integration via settings
         
         # Case 1: Attention
-        settings_attn = Settings()
+        settings_attn = Settings(environment="test", deriv_api_token="dummy_token")
         # Create a mutable copy/mock if needed, but Pydantic is frozen.
         # We can just instantiate TemporalExpert and patch the attribute.
         

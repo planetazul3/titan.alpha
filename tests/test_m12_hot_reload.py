@@ -14,7 +14,7 @@ class TestModelHotReload:
         
         # Setup
         model_path = tmp_path / "test_model.pt"
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         model = DerivOmniModel(settings)
         
         # Save initial weights (all zeros)

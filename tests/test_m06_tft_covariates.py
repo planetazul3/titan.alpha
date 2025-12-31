@@ -36,7 +36,7 @@ class TestTFTCovariates:
 
     def test_full_model_integration(self):
         """Verify DerivOmniModel correctly threads volatility stats to TFT."""
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         settings.hyperparams.latent_dim = 8 # Force latent dim to match expectations
         
         model = DerivOmniModel(settings)

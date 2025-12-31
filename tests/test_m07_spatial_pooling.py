@@ -8,7 +8,7 @@ from config.settings import Settings
 class TestSpatialPooling:
     def test_attention_pooling_shape_and_flow(self):
         """Verify SpatialExpert uses attention and outputs correct shape."""
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         model = SpatialExpert(settings, embedding_dim=16)
         
         # Mocking convolution blocks to return deterministic sequences to checking attention?
@@ -28,7 +28,7 @@ class TestSpatialPooling:
 
     def test_temporal_sensitivity(self):
         """Verify that output changes if we swap time steps (unlike global average pooling)."""
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         model = SpatialExpert(settings, embedding_dim=16)
         
         # Create a sequence

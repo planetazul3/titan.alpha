@@ -38,7 +38,7 @@ def test_z_score_near_zero_variance():
 
 def test_feature_builder_constant_data():
     """Test FeatureBuilder with constant market data."""
-    settings = Settings()
+    settings = Settings(environment="test", deriv_api_token="dummy_token")
     builder = FeatureBuilder(settings)
     
     # Constant ticks

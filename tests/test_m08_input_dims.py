@@ -9,7 +9,7 @@ class TestInputDimensions:
         """Verify model respects configured input dimensions."""
         # Create settings with custom dimension
         custom_dim = 15
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         settings.data_shapes.feature_dim_candles = custom_dim
         
         # Instantiate model

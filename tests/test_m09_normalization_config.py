@@ -10,7 +10,7 @@ class TestNormalizationConfig:
     def test_normalization_override(self):
         """Verify that extractor uses values from settings."""
         # Create settings with custom normalization
-        settings = Settings()
+        settings = Settings(environment="test", deriv_api_token="dummy_token")
         # Set all factors to 1.0 for easy checking
         settings.normalization.norm_factor_volatility = 1.0
         settings.normalization.norm_factor_atr = 1.0
