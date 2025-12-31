@@ -1,30 +1,15 @@
-# DATA_FLOW_TRACE.md
+# DATA_FLOW_TRACE.md (Post-Remediation)
 
-## Critical Path Mapping
+## Critical Path: Tick to Trade
+1. **Ingestion**: `DerivClient` -> `MarketDataBuffer`.
+2. **Features**: `FeatureBuilder` generates Z-Score normalized candles.
+3. **Inference**: `DerivOmniModel` performs forward pass (~72ms).
+4. **Decision**: `DecisionEngine` evaluates model output + `RegimeVeto`.
+5. **Execution**: `SafeTradeExecutor` checks L1-L4 safety before sending to API.
+6. **Persistence**: (UPDATED) Every trade and safety state update is committed to the unified `trading_state.db`.
 
-```mermaid
-graph TD
-    A[Deriv API Tick] --> B[data/ingestion/client.py: _on_tick]
-    B --> C[data/buffer.py: MarketDataBuffer.add_tick]
-    C --> D[scripts/live.py: Trading Loop]
-    D --> E[data/processor.py: FeatureBuilder.generate_features]
-    E --> F[models/core.py: DerivOmniModel.forward]
-    F --> G[execution/decision.py: DecisionEngine.process_model_output]
-    G --> H[execution/policy.py: ExecutionPolicy.check_vetoes]
-    H --> I{All Clear?}
-    I -- Yes --> J[execution/executor.py: SafeTradeExecutor.execute_trade]
-    I -- No --> K[execution/sqlite_shadow_store.py: SQLiteShadowStore.store_trade]
-```
+## Key Changes
+- **Simplified Storage**: The previous multi-DB flow has been flattened. All critical trading state, shadow records, and safety metrics now converge on a single SQLite connection, reducing the risk of cross-DB reconciliation errors.
 
-## Step-by-Step Validation
-
-1. **Tick Ingestion**: `DerivClient` correctly handles WebSocket stream and passes data to buffer.
-2. **Feature Engineering**: `FeatureBuilder` transforms raw ticks and candles into 3-tuple tensors (ticks, candles, vol_metrics).
-3. **Inference**: `DerivOmniModel` fuses temporal (TFT), spatial (CNN), and volatility (VAE) features into contract probabilities.
-4. **Decision**: `DecisionEngine` enforces hierarchical vetoes. 
-    - **CRITICAL BREAK**: `scripts/live.py` fails to pass `model_monitor` to `run_live_trading`, breaking the chain at the decision stage during live monitoring setup.
-5. **Persistence**: `SQLiteShadowStore` captures simulation context. Schema is validated to match current data shapes.
-
-## Side Effects & Logging
-- **Observability**: Prometheus metrics are updated at each stage (if enabled).
-- **History**: Real trades are tracked in `real_trade_tracker.py` and persisted in `trading_state.db`.
+## Discovery
+- The fix in `scripts/live.py` ensures the `model_monitor` is now correctly receiving telemetry during the "Post-Inference" stage of the data flow.

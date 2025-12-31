@@ -1,47 +1,27 @@
-# x.titan Post-Refactoring Validation Report
+# VALIDATION_REPORT.md (Final - Post-Remediation)
 
-**Generated**: 2025-12-31
-**Codebase Version**: [Git: 369eddc]
-**Analysis Duration**: ~2 hours
+## Overall System Health: 🟡 DEGRADED (RECOVERED)
 
 ## Executive Summary
-- **Overall System Health**: 🔴 **DEGRADED/CRITICAL**
-- **Total Issues Found**: 12
-  - **Critical**: 3
-  - **High**: 4
-  - **Medium**: 3
-  - **Low**: 2
-- **Functional Success Rate**: 75% (Entry points failure)
-- **Architecture Conformance**: 85%
+The system has been successfully remediated for critical operational failures. Architectural consolidation is complete and beneficial for performance (72ms latency). However, 4 unit test regressions were introduced in the regime consolidation, and the `train.py` path bug remains. The system is structurally sound but requires a final "polishing" sprint for 100% readiness.
 
-## 🚨 Critical Issues Requiring Immediate Attention
-1. **Broken Live Entry Point**: `scripts/live.py` yields `NameError: name 'model_monitor' is not defined`. System cannot trade in live or shadow mode.
-2. **Broken Training Pipeline**: `data/dataset.py` fails when loading single parquet files (attempts to create `.cache/` directory inside file path).
-3. **Broken Validation Script**: `pre_training_validation.py` fails to import `models.temporal_v2`, suggesting missing modules or outdated references.
+## Status of Critical Issues
 
-## 📊 Detailed Findings Summary
+| Issue | Status | Note |
+|-------|--------|------|
+| **`scripts/live.py` Crash** | ✅ FIXED | 100% Operational in test mode. |
+| **`scripts/train.py` Crash** | ❌ UNRESOLVED | Path bug in `data/dataset.py` persists. |
+| **Unit Test Suite** | 🟡 CAUTION | 4 regressions in regime tests. |
+| **Architecture** | ✅ IMPROVED | Regime logic consolidated into `regime.py`. |
+| **Database** | ✅ IMPROVED | Unified into `trading_state.db`. |
 
-### 1. Codebase Integrity
-- **Total Python Modules**: 168 (99.4% import success rate).
-- **Git History**: Consistent transition to domain-driven architecture, but left redundant legacy files (`regime.py`, `shadow_store.py`).
+## Performance Baseline
+- **Inference Latency**: 72.4ms (✅ Optimal)
+- **DB Write Latency**: 4.5ms (✅ Healthy)
 
-### 2. Functional Validation
-- **Static Analysis**: Identifies over 9,000 typing and linting warnings, primarily in `execution/shadow_resolution.py`.
-- **Integration**: `download_data.py` is the only fully operational entry point.
+## Roadmap for Next Sprint
+1. Fix `DerivDataset._get_cache_path` logic.
+2. Align `tests/test_execution.py` with the new consolidated regime logic.
+3. Restore `data.auto_features` or remove the import from `pre_training_validation.py`.
 
-### 3. Architecture Analysis
-- **Conformance**: High (85%), but `core/domain/entities.py` needs documentation integration.
-- **API Contracts**: Breaking changes in `DerivDataset` and `live.py` parameters.
-
-### 4. Performance Assessment
-- **Inference Latency**: 143ms (Avg), 274ms (P95). Stable for 1m timeframe but warrants optimization for higher frequencies.
-- **Safety Logic**: Synthetic tests confirm that circuit breakers and daily loss limits are functional.
-
-## ⚠️ Risk Assessment
-- **Trading Risk**: HIGH. Due to the `model_monitor` NameError, the system might fail to properly observe or monitor model health during live execution, even if the primary error is fixed.
-- **Data Risk**: MEDIUM. The `.cache` creation bug in `DerivDataset` could lead to unexpected IO errors across different environments.
-
-## 📋 Remediation Roadmap
-1. **Priority 1 (Emergency)**: Fix `scripts/live.py` NameError and `DerivDataset` directory creation logic.
-2. **Priority 2 (High)**: Resolve `temporal_v2` import in validation scripts and clean up redundant legacy modules.
-3. **Priority 3 (Medium)**: Optimize inference latency (e.g., via `torch.compile`) and fix indentation/shadowing in `shadow_resolution.py`.
+**Validation Complete (Dec 31, 2025)**

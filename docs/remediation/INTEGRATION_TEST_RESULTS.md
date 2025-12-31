@@ -1,30 +1,21 @@
-# INTEGRATION_TEST_RESULTS.md
+# INTEGRATION_TEST_RESULTS.md (Post-Remediation)
 
-## Test Scenarios Status
+## Entry Point Status
+| Script | Status | Findings |
+|--------|--------|----------|
+| `scripts/download_data.py --test` | ✅ PASS | Functional. |
+| `scripts/train.py` | ❌ FAIL | `FileNotFoundError` in `data/dataset.py` when attempting to create `.cache` folder inside a `.parquet` file path. |
+| `scripts/live.py --test` | ✅ PASS | **REMEDIATED**. `model_monitor` NameError is fixed. System successfully initializes monitors and connects to sandbox API. |
+| `main.py` | ✅ PASS | Full simulation loop completes. |
 
-| Scenario | Status | Error Details |
-|----------|--------|---------------|
-| **Data Ingestion** (`download_data.py --test`) | ✅ PASS | Downloaded 42,768 ticks, 1,427 candles. Integrity checks passed. |
-| **Model Training** (`train.py --test-mode`) | ❌ FAIL | `FileNotFoundError`: Code attempts to create `.cache/` directory inside the parquet file path. |
-| **Shadow Trading** (`live.py --test`) | ❌ FAIL | `NameError`: `model_monitor` is not defined in `scripts/live.py:284`. |
-| **API Backend** | ⚠️ SKIP | Not tested in this phase. |
-| **Dashboard** | ⚠️ SKIP | Not tested in this phase. |
+## Critical Regressions/Persisting Issues
+- **`scripts/train.py`**: The fix for the path-handling bug in `DerivDataset` was incomplete. It still assumes the data source is a directory when creating the cache path.
+- **Traceback**:
+  ```
+  File "data/dataset.py", line 110, in _get_cache_path
+    cache_dir.mkdir(exist_ok=True)
+  FileNotFoundError: [Errno 2] No such file or directory: 'data_cache/2024-01.parquet/.cache'
+  ```
 
-## Detailed Failure Analysis
-
-### 1. `live.py` NameError
-- **File**: `scripts/live.py:284`
-- **Error**: `name 'model_monitor' is not defined`
-- **Impact**: **CRITICAL**. System cannot start the live/shadow trading loop.
-- **Root Cause**: Likely a missing initialization of `model_monitor` or a typo in the variable name after refactoring.
-
-### 2. `train.py` FileNotFoundError
-- **File**: `data/dataset.py:110` (called from `scripts/train.py`)
-- **Error**: `FileNotFoundError: [Errno 2] No such file or directory: 'data_cache/2024-01.parquet/.cache'`
-- **Impact**: **HIGH**. Prevents training with existing parquet files unless a specific directory structure is present.
-- **Root Cause**: The software assumes the data path is a directory and tries to create a `.cache` subdirectory, but fails when the path is a single parquet file.
-
-## Performance Metrics (Partial)
-- **Data Download Speed**: 5466 records/sec
-- **Model Load Time**: ~1.5s (from `live.py` log)
-- **Resource Usage**: ~15% Memory (RSS), high CPU burst during init.
+## Verified Fixes
+- **Live Trading**: Verified that `SystemHealthMonitor` and `ModelHealthMonitor` are correctly instantiated. Proof of work in `/tmp/post_remediation_live_test.log`.

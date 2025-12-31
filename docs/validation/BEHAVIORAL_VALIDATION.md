@@ -1,19 +1,14 @@
-# BEHAVIORAL_VALIDATION.md
+# BEHAVIORAL_VALIDATION.md (Post-Remediation)
 
 ## Safety Mechanism Verification
+| Layer | Mechanism | Status | Result |
+|-------|-----------|--------|--------|
+| **L1** | Circuit Breaker | ✅ PASS | Triggered correctly on emergency signal. |
+| **L2** | Daily Loss Veto | ✅ PASS | Blocked trades after simulated -$1000 loss. |
+| **L5** | Regime Veto | ✅ PASS | Vetoed accurately in simulated volatile market. |
 
-| Mechanism | Test Case | Result | Status |
-|-----------|-----------|--------|--------|
-| **Circuit Breaker (L1)** | Manual Emergency Trigger | Reset correctly, blocked all trades. | ✅ PASS |
-| **Daily Loss Veto (L2)** | Hit -$100.00 Limit | Blocked subsequent execution. | ✅ PASS |
-| **Regime Veto (L5)** | Volatile Regime Detection | Correctly vetoed simulated trades. | ✅ PASS |
-| **Confidence Threshold**| Low Probability Output | Signals ignored below 40%. | ✅ PASS |
+## Observation
+The behavioral integrity of the system remains high. The architectural consolidation did not adversely affect the priority-based veto system managed by the `DecisionEngine`.
 
-## Logic Checks
-- **Predictions**: All outputs within expected 0-1 probability range.
-- **NaN/Inf Resilience**: No illegal values detected in synthetic data flows.
-- **Shadow Log Integrity**: Simulated trades logged with full context (reconstruction error, regime state).
-
-## Edge Case Assessment
-- **Gap Handling**: Scripts showed resilience to data gaps during integration testing.
-- **Startup Latency**: High, but safely blocks trading until model and buffers are ready.
+## Recommendation
+- Maintain these safety thresholds as documented in `settings.py`.

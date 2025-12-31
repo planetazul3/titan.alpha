@@ -1,22 +1,19 @@
-# CONFIGURATION_AUDIT.md
+# CONFIGURATION_AUDIT.md (Post-Remediation)
 
-## Env Variable Assessment
-| Variable | Value/Status | Safety |
-|----------|--------------|--------|
-| `ENVIRONMENT` | `production` | ⚠️ HIGH RISK (for testing) |
-| `TRADING__SYMBOL` | `R_100` | ✅ Normal |
-| `DERIV_API_TOKEN` | [REDACTED] | ⚠️ ACTIVE REAL TOKEN DETECTED |
-| `EXECUTION_SAFETY__MAX_DAILY_LOSS` | 100.0 | ✅ Safe |
-| `EXECUTION_SAFETY__MAX_STAKE_PER_TRADE` | 10.0 | ✅ Safe |
+## Environment Variables
+| Variable | Value (State) | Risk |
+|----------|---------------|------|
+| `ENVIRONMENT` | `production` | 🔴 HIGH (System behaves as production during testing) |
+| `DERIV_API_TOKEN` | `[REDACTED]` | 🔴 HIGH (Active token detected) |
+| `KILL_SWITCH_ENABLED`| `false` | 🟡 MED |
 
-## Config Consistency
-- `config/settings.py` correctly maps to `@property` style access for Pydantic v2.
-- No hardcoded API secrets found in source code (correctly moved to `.env`).
+## Critical Settings Audit
+- **Trade Vetoes**: Correctly mapped to hierarchical regime logic.
+- **Hyperparameters**: Stable; no changes detected in TFT model configurations.
+- **Data Shapes**: Aligned with the current Parquet ingestion schema.
 
-## Dangerous Defaults
-- `ENVIRONMENT=production`: Should be changed to `staging` or `development` during validation to prevent accidental real trades, although `--test` and `--shadow-only` flags mitigate this.
-- `EXECUTION_SAFETY__KILL_SWITCH_ENABLED=false`: Safe for testing, but should be verified before real production deployment.
+## Observation
+While Jules remediated initialization logic, the risky `ENVIRONMENT=production` setting remains. This should be switched to `sandbox` or `development` for non-live verification runs.
 
-## Undocumented Options
-- `CALIBRATION__ERROR_THRESHOLD`: Usage in `CalibrationMonitor` is clear, but not explicitly documented in the top-level README.
-- `SHADOW_TRADE__DURATION_MINUTES`: Defaults to 1; may need tuning for complex contract types.
+## Recommendation
+- Implement a `test_mode` override in `settings.py` that automatically targets the sandbox App ID regardless of the `.env` value.
