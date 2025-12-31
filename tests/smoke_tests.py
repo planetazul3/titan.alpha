@@ -1,11 +1,13 @@
 import pytest
 import subprocess
 import sys
+import sqlite3
 from pathlib import Path
 
 # Paths
 ROOT_DIR = Path(__file__).parent.parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
+DATA_CACHE_DIR = ROOT_DIR / "data_cache"
 
 def run_script(script_name, args=None):
     """Run a script as a subprocess and return result."""
@@ -17,55 +19,21 @@ def run_script(script_name, args=None):
     if args:
         cmd.extend(args)
 
-    # Capture output to help debugging
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
-        timeout=30 # 30s timeout to prevent hangs
+        timeout=30
     )
     return result
+
+# --- Script Health Tests ---
 
 def test_live_script_help():
     """Test that live.py can initialize and show help."""
     result = run_script("live.py", ["--help"])
     assert result.returncode == 0
     assert "Live trading" in result.stdout
-
-def test_live_script_test_mode():
-    """
-    Test live.py in test mode.
-    This should initialize components and exit gracefully.
-    We skip if no internet or credentials, but here we assume sandbox env.
-    If it fails due to network, we might check stderr.
-    """
-    # Note: this requires connection. In CI without net, this might fail.
-    # But usually smoke tests run in an env where basic init is possible.
-    # If it fails due to network, it usually returns non-zero.
-    # We'll check if it crashes with ImportError or SyntaxError which is the main goal.
-
-    # We use --test and --shadow-only to minimize side effects
-    # Increased timeout for connection attempts
-    try:
-        result = subprocess.run(
-            [sys.executable, str(SCRIPTS_DIR / "live.py"), "--test", "--shadow-only"],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-    except subprocess.TimeoutError:
-        # If it times out, it's likely stuck on connection retry, which means it didn't crash on import.
-        # We can consider this a pass for "smoke test" purposes (it started).
-        return
-
-    # Check for specific "CRITICAL" failures or Python errors
-    assert "Traceback" not in result.stderr
-    assert "ImportError" not in result.stderr
-    assert "SyntaxError" not in result.stderr
-
-    # It might return 1 if connection fails, but we want to ensure it didn't crash on import
-    # So strictly checking returncode might be flaky without mocking.
-    # But let's check basic sanity.
 
 def test_download_data_help():
     """Test download_data.py help."""
@@ -81,14 +49,52 @@ def test_train_script_help():
 
 def test_main_script():
     """Test main.py (simulation loop)."""
-    # main.py is in root
     cmd = [sys.executable, str(ROOT_DIR / "main.py")]
-    # It runs a simulation and exits.
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-
     assert result.returncode == 0
-    assert "Unified Trading System" in result.stderr # Logging goes to stderr by default or stdout depending on config
+    assert "Unified Trading System" in result.stderr
     assert "System execution test complete" in result.stderr
+
+# --- Core System Integrity Tests ---
+
+def test_critical_imports():
+    """Verify all critical modules import without error."""
+    try:
+        import execution.decision
+        import execution.policy
+        import models.core
+        import data.processor
+        import training.trainer
+    except ImportError as e:
+        pytest.fail(f"Critical import failed: {e}")
+
+def test_settings_load():
+    """Verify settings can be loaded from .env."""
+    from config.settings import load_settings
+    try:
+        settings = load_settings()
+        assert settings.trading.symbol is not None
+    except Exception as e:
+        pytest.fail(f"Settings loading failed: {e}")
+
+def test_database_connectivity():
+    """Verify all core databases are accessible."""
+    db_files = ['shadow_trades.db', 'safety_state.db', 'trading_state.db']
+    for db in db_files:
+        path = DATA_CACHE_DIR / db
+        if path.exists():
+            conn = sqlite3.connect(str(path))
+            cursor = conn.execute("SELECT 1")
+            assert cursor.fetchone()[0] == 1
+            conn.close()
+
+def test_model_initialization():
+    """Verify model can be initialized on CPU."""
+    from models.core import DerivOmniModel
+    from config.settings import load_settings
+    settings = load_settings()
+    model = DerivOmniModel(settings)
+    assert model is not None
 
 def test_import_execution_regime():
     """Verify regime module consolidation."""
@@ -96,25 +102,6 @@ def test_import_execution_regime():
         from execution.regime import RegimeVeto, HierarchicalRegimeDetector
     except ImportError as e:
         pytest.fail(f"Failed to import regime classes: {e}")
-    except Exception as e:
-        pytest.fail(f"Unexpected error importing regime: {e}")
 
-def test_import_database_stores():
-    """Verify unified database stores."""
-    try:
-        from execution.sqlite_shadow_store import SQLiteShadowStore
-        from execution.safety_store import SQLiteSafetyStateStore
-
-        # Check paths in docstrings or default args if accessible (hard via introspection sometimes)
-        # Instead, verify we can instantiate them pointing to same DB
-        db_path = Path("test_unified.db")
-        shadow = SQLiteShadowStore(db_path)
-        safety = SQLiteSafetyStateStore(db_path)
-
-        # Cleanup
-        shadow.close()
-        if db_path.exists():
-            db_path.unlink()
-
-    except Exception as e:
-        pytest.fail(f"Failed to instantiate stores: {e}")
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__]))

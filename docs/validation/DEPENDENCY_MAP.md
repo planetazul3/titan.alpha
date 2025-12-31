@@ -62,10 +62,8 @@ graph TD
 - ❌ data.features -> data.processor -> data -> data.shadow_dataset -> data.features
 
 ## Orphaned Modules (No incoming references within documented core)
-- map_dependencies
 - test_log
 - pre_training_validation
-- conftest
 - python-deriv-api.setup
 - python-deriv-api.tests.test_utils
 - python-deriv-api.tests.test_cache
@@ -107,7 +105,13 @@ graph TD
 - python-deriv-api.deriv_api.utils
 - tools.verify_checkpoint
 - tools.unify_files
+- tools
 - tools.migrate_shadow_store
+- tools.validation.benchmark_performance
+- tools.validation.map_dependencies
+- tools.validation.validate_functions
+- tools.validation.validate_imports
+- tools.validation.verify_behavior
 - api
 - api.services
 - api.models
@@ -117,6 +121,8 @@ graph TD
 - training.auto_retrain
 - scripts
 - core.interfaces
+- core
+- core.domain
 - data.ingestion.deriv_adapter
 - execution
 - config

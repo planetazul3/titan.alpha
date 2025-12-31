@@ -1,118 +1,59 @@
-# Remediation Plan: x.titan System Recovery
+# x.titan Remediation Plan for Google Jules
 
-This plan outlines the step-by-step remediation strategy to address the critical failures, structural defects, and technical debt identified in the `docs/validation/` reports. The goal is to restore the system to a production-ready state, ensuring stability, reliability, and architectural conformance.
+This document outlines the step-by-step remediation strategy for the x.titan trading system following the December 2025 validation audit. This plan is designed for autonomous execution by Google Jules to restore system integrity and operational readiness.
 
-## Phase 1: Critical Fixes (Production Blockers)
+## Phase 1: Emergency Operational Restoration
+**Goal**: Resolve "show-stopper" bugs preventing system entry points from executing.
 
-**Objective**: Resolve issues that prevent the system from starting or performing basic operations. These are the highest priority items.
+1.  **Rectify Live Trading Orchestration**:
+    *   Locate the variable initialization for the model health monitoring component within the primary live trading execution script. 
+    *   Ensure that the monitoring instance is correctly instantiated before being passed into the main trading loop. 
+    *   Address any naming inconsistencies that lead to the current error where the monitor object is referenced but not defined in the local or global scope.
 
-### 1.1. Fix System Startup (`scripts/live.py`)
-- **Issue**: `NameError: name 'model_monitor' is not defined` and potential `system_monitor` scope issues.
-- **Action**:
-  - Locate the initialization block in `scripts/live.py`.
-  - Ensure `model_monitor` and `system_monitor` are correctly instantiated before they are referenced.
-  - Verify they are passed to the `TradingEngine` or relevant components as expected.
+2.  **Fix Dataset Path Management**:
+    *   Audit the data loading logic responsible for handling Parquet files. 
+    *   Modify the logic to detect whether a specified data path is a single file or a directory. 
+    *   Prevent the automated creation of shadow cache directories when the source is a standalone file, as this currently triggers file system errors.
+    *   Implement a more resilient caching strategy that places metadata for single-file datasets into a dedicated system-level cache directory rather than attempting to nest it within the file path itself.
 
-### 1.2. Resolve Namespace Collision (`models` vs `core/domain/models.py`)
-- **Issue**: The `models/` directory (containing neural networks) conflicts with `core/domain/models.py`, causing `mypy` failures and import ambiguity.
-- **Action**:
-  - Rename `core/domain/models.py` to `core/domain/entities.py`.
-  - Update all references in the codebase that import from `core.domain.models` to point to `core.domain.entities`.
-  - Run `mypy` to verify the collision is resolved.
+## Phase 2: Architectural Consistency and Cleanup
+**Goal**: Eliminate design debt and redundant legacy components.
 
-### 1.3. Fix Data Ingestion Failure (`scripts/download_data.py`)
-- **Issue**: "The truth value of a DataFrame is ambiguous" error prevents saving partitioned data.
-- **Action**:
-  - Locate the problematic boolean check in `scripts/download_data.py` (likely checking if a dataframe is empty or valid).
-  - Replace the ambiguous check (e.g., `if df:`) with an explicit check (e.g., `if not df.empty:`).
+1.  **Module De-duplication**:
+    *   Identify and remove legacy components that have been superseded by newer versions (e.g., old market regime detectors and early shadow storage implementations).
+    *   Update all internal import references in the brain and execution modules to point exclusively to the current architectural standards (like the hierarchical regime detector).
 
-### 1.4. Install Missing Dependencies
-- **Issue**: `freezegun`, `pylint`, `bandit` are missing but required for tests and validation.
-- **Action**:
-  - Add `freezegun` to `requirements.txt` (or `requirements-dev.txt` if it exists).
-  - Add development tools (`pylint`, `bandit`, `flake8`) to `requirements-dev.txt`.
-  - Install these dependencies in the environment.
+2.  **Validation Path Restoration**:
+    *   Investigate the missing module dependencies in the pre-training validation suite.
+    *   Re-map imports to ensure that the validation scripts can access the latest temporal modeling entities.
+    *   Ensure the validation suite is synchronized with the new project structure (domain-driven design).
 
-## Phase 2: Structural Improvements & Technical Debt
+## Phase 3: Quality, Reliability, and Safety
+**Goal**: Address latent code quality issues and improve test visibility.
 
-**Objective**: Address high-severity architectural violations that hamper maintainability and testing.
+1.  **Static Analysis Remediation**:
+    *   Prioritize fixing the indentation and shadowing errors in the shadow trade resolution logic, as these pose a risk of silent logical failures.
+    *   Consolidated redundant imports identified by linter results to improve compilation speed and code clarity.
 
-### 2.1. Break Circular Dependencies in `data` Package
-- **Issue**: Circular imports between `data.dataset`, `data.features`, and `data.processor`.
-- **Action**:
-  - Analyze the import chains.
-  - Refactor shared types or constants into a separate module (e.g., `data.types` or `data.common`) to break the cycle.
-  - Ensure `Dataset` depends on `Processor`/`Features` (or vice versa) in a linear fashion, or use dependency injection/local imports where strictly necessary.
+2.  **Closing the Testing Gap**:
+    *   Develop targeted unit tests for the online learning and Continual Learning (EWC) components, which currently have low coverage.
+    *   Verify the mathematical stability of the weight updating mechanism through simulation.
+    *   Extend the integration test suite to include automated "dry runs" of the dashboard and API services.
 
-### 2.2. Consolidate Regime Logic
-- **Issue**: Co-existence of `execution/regime.py` and `execution/regime_v2.py`.
-- **Action**:
-  - Determine which version is the "canonical" implementation (likely `regime_v2.py` based on usage).
-  - If `regime_v2.py` is the target, verify it fully implements the required interface.
-  - Replace usage of the old module with the new one.
-  - Delete the obsolete file.
+## Phase 4: Performance and Observability
+**Goal**: Optimize execution speed and monitoring depth.
 
-### 2.3. Unify Database Storage
-- **Issue**: Redundant databases (`shadow_trades.db`, `safety_state.db`) coexist with the new `trading_state.db`.
-- **Action**:
-  - Verify that `trading_state.db` contains all necessary schemas (shadow trades, safety metrics).
-  - Update any remaining code writing to the old databases to use `trading_state.db` (via `SQLiteShadowStore` or similar).
-  - Create a migration script (or instructions) to merge existing data if needed.
-  - Remove the old database files and references.
+1.  **Inference Latency Optimization**:
+    *   Apply graph compilation techniques to the core neural network models to reduce the average inference latency beneath the 100ms threshold.
+    *   Implement asynchronous checkpoint verification to prevent the ~1s startup delay from blocking the initial tick processing.
 
-## Phase 3: Testing & Validation Enhancements
+2.  **Monitoring Extensions**:
+    *   Expand the real-time metrics to include per-layer inference timing to better diagnose future performance regressions.
+    *   Ensure the risk management veto decisions are explicitly logged with the raw metrics that triggered them for post-mortem analysis.
 
-**Objective**: Restore trust in the system through comprehensive testing and entry point verification.
+---
 
-### 3.1. Implement Smoke Tests for Scripts
-- **Issue**: Scripts like `live.py` broke without detection.
-- **Action**:
-  - Create `tests/smoke_tests.py` (or similar).
-  - Add tests that invoke `scripts/live.py`, `scripts/train.py`, etc., with `--help` or a `--dry-run`/`--test` flag to ensure they initialize without crashing.
-  - Ensure these tests run in the CI/CD pipeline.
-
-### 3.2. Address `python-deriv-api` Vulnerability
-- **Issue**: Reliance on a local/forked `python-deriv-api`.
-- **Action**:
-  - Document the specific reasons for the fork (custom fixes?).
-  - If possible, package the local fork properly or ensure it's explicitly included in `PYTHONPATH` checks.
-  - Add a check in `setup.py` or startup scripts to verify the correct version/fork is loaded.
-
-### 3.3. Improve Test Coverage
-- **Issue**: Low coverage in `observability` and script entry points.
-- **Action**:
-  - Add unit tests for `observability` modules (`dashboard.py`, `model_health.py`).
-  - Extend integration tests to cover the data flow from `DerivDataset` to `DerivOmniModel` more rigorously.
-
-## Phase 4: Performance & Optimization
-
-**Objective**: Ensure the system runs efficiently and leverages available hardware.
-
-### 4.1. Optimize Device Selection
-- **Issue**: System defaults to CPU; P95 latency (488ms) is high for HFT.
-- **Action**:
-  - Review the device selection logic (`auto` detection).
-  - Ensure that if CUDA is available, it is prioritized.
-  - Investigate mixed-precision training/inference (`autocast`) to speed up CPU inference if GPU is unavailable.
-
-### 4.2. Finalize Logging Migration
-- **Issue**: `utils.logging_setup` is gone, but we must ensure no code attempts to import it.
-- **Action**:
-  - Grep the codebase for any remaining references to `utils.logging_setup`.
-  - Replace them with `config.logging_config`.
-
-## Phase 5: Cleanup & Documentation
-
-**Objective**: Polish the codebase and documentation to reflect the new architecture.
-
-### 5.1. Update Documentation
-- **Issue**: Docs might reference old paths or `models/` instead of `core/domain/entities.py`.
-- **Action**:
-  - Update `ARCHITECTURE.md` (or equivalent) to reflect the `core/` structure.
-  - Document the unification of the risk databases.
-
-### 5.2. Remove Dead Code
-- **Issue**: `HistoricalDataDownloader` is mentioned as removed, but we should double-check for any other orphaned files.
-- **Action**:
-  - Scan for unused files identified in `FILE_INVENTORY.md` or `STATIC_ANALYSIS.md`.
-  - Delete `tests/test_m13_disk_management.py` if it relies on `freezegun` and we decide not to support it, OR fix the test by adding the dependency (Phase 1). (Prefer fixing).
+## Best Practices Summary (Research-Based)
+*   **Dataset Management**: When using Parquet, leverage columnar reading for sub-feature extraction. Always decouple the data manifest from the physical file path to support varying storage formats (local vs. cloud).
+*   **Live Monitoring**: Use a specialized initialization pattern for system-wide observers. Observers should be registered in a global registry or a well-defined shared state to avoid scope-related initialization errors during high-pressure trading loops.
+*   **Refactoring Cleanup**: Use "Incremental Deletion" for legacy code. First, mark modules as deprecated with warnings; once the test suite and all integration points confirm zero usage, physically remove the files to minimize project surface area.

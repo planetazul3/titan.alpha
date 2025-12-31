@@ -1,42 +1,30 @@
 # DATA_FLOW_TRACE.md
 
-## High-Level Data Journey
+## Critical Path Mapping
 
 ```mermaid
 graph TD
-    A[Deriv API] -->|Tick/Candle Stream| B[DerivClient]
-    B -->|Normalized Events| C[MarketDataBuffer]
-    C -->|Windowed Arrays| D[FeatureBuilder]
-    D -->|Tensors| E[DerivOmniModel]
-    E -->|Probs + Recon Error| F[DecisionEngine]
-    F -->|Veto Check| G[ExecutionPolicy]
-    G -->|If Allowed| H[SafeTradeExecutor]
-    H -->|Position Sizing| I[DerivClient]
-    I -->|Order| A
-    F -->|Shadow Trade| J[SQLiteShadowStore]
-    I -->|Execution Info| K[RealTradeTracker]
-    K -->|P&L Updates| L[PositionSizer]
+    A[Deriv API Tick] --> B[data/ingestion/client.py: _on_tick]
+    B --> C[data/buffer.py: MarketDataBuffer.add_tick]
+    C --> D[scripts/live.py: Trading Loop]
+    D --> E[data/processor.py: FeatureBuilder.generate_features]
+    E --> F[models/core.py: DerivOmniModel.forward]
+    F --> G[execution/decision.py: DecisionEngine.process_model_output]
+    G --> H[execution/policy.py: ExecutionPolicy.check_vetoes]
+    H --> I{All Clear?}
+    I -- Yes --> J[execution/executor.py: SafeTradeExecutor.execute_trade]
+    I -- No --> K[execution/sqlite_shadow_store.py: SQLiteShadowStore.store_trade]
 ```
 
-## Detailed Component Interactions
+## Step-by-Step Validation
 
-| Phase | Component | Action | Data Type |
-|-------|-----------|--------|-----------|
-| **Ingestion** | `DerivClient` | Async stream subscription | WebSocket JSON |
-| **Buffering** | `MarketDataBuffer` | Accumulates history + live ticks | `np.ndarray` |
-| **Feature Eng**| `FeatureBuilder` | Normalization (Z-score/Log) | `torch.Tensor` |
-| **Intelligence**| `DerivOmniModel` | Multi-expert inference | `dict[str, Tensor]` |
-| **Risk** | `ExecutionPolicy` | Hierarchy veto (Circuit Breaker/Regime) | `VetoDecision` |
-| **Execution** | `SafeTradeExecutor`| Rate limiting & Stake validation | `Signal -> Contract` |
-| **Persistence**| `SQLiteShadowStore`| Unified storage of all signals | `SQL Record` |
+1. **Tick Ingestion**: `DerivClient` correctly handles WebSocket stream and passes data to buffer.
+2. **Feature Engineering**: `FeatureBuilder` transforms raw ticks and candles into 3-tuple tensors (ticks, candles, vol_metrics).
+3. **Inference**: `DerivOmniModel` fuses temporal (TFT), spatial (CNN), and volatility (VAE) features into contract probabilities.
+4. **Decision**: `DecisionEngine` enforces hierarchical vetoes. 
+    - **CRITICAL BREAK**: `scripts/live.py` fails to pass `model_monitor` to `run_live_trading`, breaking the chain at the decision stage during live monitoring setup.
+5. **Persistence**: `SQLiteShadowStore` captures simulation context. Schema is validated to match current data shapes.
 
-## Critical Observability Points
-
-1. **Inference Latency**: Tracked in `run_inference`.
-2. **Reconstruction Error**: Used as the primary signal for `RegimeVeto`.
-3. **Veto Statistics**: Recorded by `ExecutionPolicy` for diagnostic reports.
-4. **P&L Flux**: Tracked by `RealTradeTracker` via WebSocket contract updates.
-
-## Identified Bottlenecks
-- **Synchronous Inference**: Historically blocked the event loop. Refactored to use `run_in_executor` (thread pool) in `scripts/live.py`.
-- **Database Commits**: ACID compliance in SQLite can slow down tick processing if not batched or asynchronous.
+## Side Effects & Logging
+- **Observability**: Prometheus metrics are updated at each stage (if enabled).
+- **History**: Real trades are tracked in `real_trade_tracker.py` and persisted in `trading_state.db`.

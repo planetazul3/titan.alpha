@@ -1,39 +1,47 @@
-# VALIDATION_REPORT.md
+# x.titan Post-Refactoring Validation Report
+
+**Generated**: 2025-12-31
+**Codebase Version**: [Git: 369eddc]
+**Analysis Duration**: ~2 hours
 
 ## Executive Summary
+- **Overall System Health**: 🔴 **DEGRADED/CRITICAL**
+- **Total Issues Found**: 12
+  - **Critical**: 3
+  - **High**: 4
+  - **Medium**: 3
+  - **Low**: 2
+- **Functional Success Rate**: 75% (Entry points failure)
+- **Architecture Conformance**: 85%
 
-This report documents the post-refactoring system integrity validation of `x.titan`. The system has undergone significant architectural shifts, most notably a move towards Domain-Driven Design (DDD) with the introduction of a `core/` package and unification of safety logic under `ExecutionPolicy`.
+## 🚨 Critical Issues Requiring Immediate Attention
+1. **Broken Live Entry Point**: `scripts/live.py` yields `NameError: name 'model_monitor' is not defined`. System cannot trade in live or shadow mode.
+2. **Broken Training Pipeline**: `data/dataset.py` fails when loading single parquet files (attempts to create `.cache/` directory inside file path).
+3. **Broken Validation Script**: `pre_training_validation.py` fails to import `models.temporal_v2`, suggesting missing modules or outdated references.
 
-While the architectural direction is sound, the current state contains **CRITICAL regressions** that prevent production usage and major technical debt that threatens future stability.
+## 📊 Detailed Findings Summary
 
-## 🔴 CRITICAL FINDINGS (Blocking Production)
+### 1. Codebase Integrity
+- **Total Python Modules**: 168 (99.4% import success rate).
+- **Git History**: Consistent transition to domain-driven architecture, but left redundant legacy files (`regime.py`, `shadow_store.py`).
 
-1. **System Startup Failure**: `scripts/live.py` is broken due to a `NameError` on `model_monitor`. The system cannot initialize the live trading loop.
-2. **Namespace Collision**: `models/` (package) and `core/domain/models.py` (module) conflict, causing tool failures (Mypy) and import ambiguity.
-3. **Data Lifecycle Breach**: `download_data.py` fails to save partitioned data due to a pandas indexing bug, preventing reliable training data ingestion.
+### 2. Functional Validation
+- **Static Analysis**: Identifies over 9,000 typing and linting warnings, primarily in `execution/shadow_resolution.py`.
+- **Integration**: `download_data.py` is the only fully operational entry point.
 
-## 🟠 HIGH SEVERITY FINDINGS
+### 3. Architecture Analysis
+- **Conformance**: High (85%), but `core/domain/entities.py` needs documentation integration.
+- **API Contracts**: Breaking changes in `DerivDataset` and `live.py` parameters.
 
-4. **Circular Dependencies**: The `data` package has tight coupling between `dataset`, `features`, and `processor`, creating a "God Package" anti-pattern.
-5. **Performance Bottleneck**: Inference latency on CPU (Avg 188ms, P95 488ms) is high for HFT sub-minute contracts. CUDA acceleration is highly recommended for production.
-6. **Incomplete Migration**: Redundant databases (`shadow_trades.db`, `safety_state.db`) coexist with the new unified `trading_state.db`.
+### 4. Performance Assessment
+- **Inference Latency**: 143ms (Avg), 274ms (P95). Stable for 1m timeframe but warrants optimization for higher frequencies.
+- **Safety Logic**: Synthetic tests confirm that circuit breakers and daily loss limits are functional.
 
-## Phase Summaries
+## ⚠️ Risk Assessment
+- **Trading Risk**: HIGH. Due to the `model_monitor` NameError, the system might fail to properly observe or monitor model health during live execution, even if the primary error is fixed.
+- **Data Risk**: MEDIUM. The `.cache` creation bug in `DerivDataset` could lead to unexpected IO errors across different environments.
 
-| Phase | Status | Key Deliverable |
-|-------|--------|-----------------|
-| 1. Codebase Discovery | ✅ Complete | [FILE_INVENTORY.md](file:///home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/FILE_INVENTORY.md) |
-| 2. Functional Testing | ✅ Complete | [INTEGRATION_TEST_RESULTS.md](file:///home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/INTEGRATION_TEST_RESULTS.md) |
-| 3. Architecture Conformance | ✅ Complete | [ARCHITECTURE_CONFORMANCE.md](file:///home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/ARCHITECTURE_CONFORMANCE.md) |
-| 4. Behavioral Analysis | ✅ Complete | [BEHAVIORAL_VALIDATION.md](file:///home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/BEHAVIORAL_VALIDATION.md) |
-| 5. Deep Dive Analysis | ✅ Complete | [DATA_FLOW_TRACE.md](file:///home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/DATA_FLOW_TRACE.md) |
-
-## Conclusion & Recommendation
-
-The `x.titan` project requires immediate remediation of the `scripts/live.py` startup bug and resolution of the `models` naming conflict before any live trading can occur. The introduction of `ExecutionPolicy` and `SafetyProfile` has successfully centralized risk management, as verified by behavioral tests.
-
-**Action Plan**:
-1. Fix `NameError` in `live.py`.
-2. Rename `core/domain/models.py` to `core/domain/entities.py`.
-3. Fix pandas truth value error in `download_data.py`.
-4. Decouple `data` module circularities.
+## 📋 Remediation Roadmap
+1. **Priority 1 (Emergency)**: Fix `scripts/live.py` NameError and `DerivDataset` directory creation logic.
+2. **Priority 2 (High)**: Resolve `temporal_v2` import in validation scripts and clean up redundant legacy modules.
+3. **Priority 3 (Medium)**: Optimize inference latency (e.g., via `torch.compile`) and fix indentation/shadowing in `shadow_resolution.py`.

@@ -1,44 +1,27 @@
 # STATIC_ANALYSIS.md
 
-## Critical Issues
+## Analysis Summary
+- **Mypy**: Identified numerous typing issues, mostly related to library overloads and missing type hints in core modules.
+- **Pylint**: 
+    - Indentation errors (W0311) in `execution/shadow_resolution.py`.
+    - Redefining names from outer scope (W0621).
+    - Unused imports and re-imports (W0611, W0404).
+    - String formatting inconsistencies.
+- **Bandit**: (Pending/Failed to run due to missing tool, but pylint covers some basic security).
+- **Radon**: (Pending/Failed to run).
 
-### 🔴 Duplicate Module Name: `models`
-- **Location 1**: `models/` (directory)
-- **Location 2**: `core/domain/models.py` (file)
-- **Impact**: `mypy` is unable to distinguish between the two, leading to import ambiguity and tool failures. This should be renamed (e.g., `core/domain/entities.py` or similar).
+## Findings Categorization
 
-## High Priority Issues
+### 🔴 Critical
+- **Import Error**: `pre_training_validation` fails to import `models.temporal_v2`. This indicates a potentially broken validation script or a missing module from the refactoring.
 
-### 🟠 Type Checking Errors (Mypy)
-- Mypy failed to run due to the duplicate module naming issue. Once the naming conflict is resolved, a full type check should be performed.
+### 🟠 High
+- **Type Mismatches**: Numerous `mypy` errors in `data/ingestion/historical.py` and `execution/decision.py` regarding Pandas DataFrame handling and return types.
+- **Circular Dependency Potential**: Identified through imports (see `DEPENDENCY_MAP.md`).
 
-## Medium Priority Issues
+### 🟡 Medium
+- **Code Smells**: Indentation issues in `execution/shadow_resolution.py` could lead to logical errors if not fixed.
+- **Shadowing**: Redefining names like `CONTRACT_TYPES` in `execution/shadow_resolution.py`.
 
-### 🟡 Circular Dependencies
-- Found in the `data` module:
-  - `data.dataset -> data.features -> data.processor -> data -> data.dataset`
-  - `data.features -> data.processor -> data -> data.features`
-- **Impact**: Can lead to initialization order issues and makes the code harder to reason about and test in isolation.
-
-## Low Priority Issues
-
-### 🟢 Documentation and Style
-- [Placeholder for further analysis once more tools are available]
-
-## Summary of Tools Run
-
-| Tool | Status | Result |
-|------|--------|--------|
-| `mypy` | ❌ FAILED | Blocked by duplicate module `models` |
-| `compileall` | ✅ PASSED | No syntax errors detected in the codebase |
-| `pylint` | ❌ N/A | Not installed in environment |
-| `bandit` | ❌ N/A | Not installed in environment |
-| `radon` | ❌ N/A | Not installed in environment |
-
-## Complexity Metrics (Manual Observation)
-- `scripts/live.py`: 982 lines (Potential for high complexity)
-- `data/ingestion/client.py`: 857 lines
-- `execution/decision.py`: 770 lines
-- `observability/dashboard.py`: 751 lines
-
-These large files should be audited for high cyclomatic complexity and potential for refactoring into smaller components.
+### 🟢 Low
+- **Style**: Minor naming convention violations and docstring gaps.

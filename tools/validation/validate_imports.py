@@ -31,7 +31,7 @@ for root, dirs, files in os.walk(root_search):
                 failed_imports.append((module_name, str(e)))
 
 # Generate detailed report
-with open('/home/planetazul3/.gemini/antigravity/brain/15733ef8-b8cd-47b0-9756-f5f4f6a58dc9/IMPORT_VALIDATION.md', 'w') as f:
+with open('/home/planetazul3/.gemini/antigravity/brain/46bc7d97-9458-4807-8102-478ba90e901f/IMPORT_VALIDATION.md', 'w') as f:
     f.write("# IMPORT_VALIDATION.md\n\n")
     f.write(f"## Statistics\n")
     total = len(successful_imports) + len(failed_imports)

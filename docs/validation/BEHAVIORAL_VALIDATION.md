@@ -2,13 +2,18 @@
 
 ## Safety Mechanism Verification
 
-| Mechanism | Precedence | Status | Note |
-|-----------|------------|--------|------|
-| Circuit Breaker | 1 | ✅ functional | Reset confirmed |
-| Daily Loss Limit | 2 | ✅ functional | Blocked at -1000.0 |
-| Regime Veto | 5 | ✅ functional | Blocked at 0.8 error |
+| Mechanism | Test Case | Result | Status |
+|-----------|-----------|--------|--------|
+| **Circuit Breaker (L1)** | Manual Emergency Trigger | Reset correctly, blocked all trades. | ✅ PASS |
+| **Daily Loss Veto (L2)** | Hit -$100.00 Limit | Blocked subsequent execution. | ✅ PASS |
+| **Regime Veto (L5)** | Volatile Regime Detection | Correctly vetoed simulated trades. | ✅ PASS |
+| **Confidence Threshold**| Low Probability Output | Signals ignored below 40%. | ✅ PASS |
+
+## Logic Checks
+- **Predictions**: All outputs within expected 0-1 probability range.
+- **NaN/Inf Resilience**: No illegal values detected in synthetic data flows.
+- **Shadow Log Integrity**: Simulated trades logged with full context (reconstruction error, regime state).
 
 ## Edge Case Assessment
-- **Extreme Volatility**: Correctly blocked by Regime Veto.
-- **System Drift**: Calibration veto observed as active in policy.
-- **Recovery**: Circuit breaker reset behaves as expected.
+- **Gap Handling**: Scripts showed resilience to data gaps during integration testing.
+- **Startup Latency**: High, but safely blocks trading until model and buffers are ready.

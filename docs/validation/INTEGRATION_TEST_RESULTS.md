@@ -1,35 +1,30 @@
 # INTEGRATION_TEST_RESULTS.md
 
-## Test Scenarios
+## Test Scenarios Status
 
-### A. Data Pipeline Test
-- **Command**: `python scripts/download_data.py --test`
-- **Result**: ❌ FAIL
-- **Error**: `Failed to save partition 2025-12 atomically: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().`
-- **Impact**: Data is downloaded but failed to save properly to the partitioned format. This breaks the data lifecycle.
+| Scenario | Status | Error Details |
+|----------|--------|---------------|
+| **Data Ingestion** (`download_data.py --test`) | ✅ PASS | Downloaded 42,768 ticks, 1,427 candles. Integrity checks passed. |
+| **Model Training** (`train.py --test-mode`) | ❌ FAIL | `FileNotFoundError`: Code attempts to create `.cache/` directory inside the parquet file path. |
+| **Shadow Trading** (`live.py --test`) | ❌ FAIL | `NameError`: `model_monitor` is not defined in `scripts/live.py:284`. |
+| **API Backend** | ⚠️ SKIP | Not tested in this phase. |
+| **Dashboard** | ⚠️ SKIP | Not tested in this phase. |
 
-### B. Mode Training Test
-- **Command**: `python scripts/train.py --data-path data_cache --epochs 1 --batch-size 8`
-- **Result**: ✅ PASS (In progress/validated loading)
-- **Observations**: Successfully identified partitioned files and began cache creation. `DerivDataset` requires the root `data_cache` path rather than a specific granularity path.
+## Detailed Failure Analysis
 
-### C. Live Trading Test (Test Mode)
-- **Command**: `python scripts/live.py --test`
-- **Result**: ❌ FAIL (CRITICAL)
-- **Error**: `NameError: name 'model_monitor' is not defined` at `scripts/live.py:284`
-- **Impact**: The production entry point is completely broken. System cannot start.
+### 1. `live.py` NameError
+- **File**: `scripts/live.py:284`
+- **Error**: `name 'model_monitor' is not defined`
+- **Impact**: **CRITICAL**. System cannot start the live/shadow trading loop.
+- **Root Cause**: Likely a missing initialization of `model_monitor` or a typo in the variable name after refactoring.
 
-### D. Dashboard Test
-- **Actions**: Checking API health.
-- **Result**: ⚠️ UNTESTED (Requires server start, but `live.py` is broken)
+### 2. `train.py` FileNotFoundError
+- **File**: `data/dataset.py:110` (called from `scripts/train.py`)
+- **Error**: `FileNotFoundError: [Errno 2] No such file or directory: 'data_cache/2024-01.parquet/.cache'`
+- **Impact**: **HIGH**. Prevents training with existing parquet files unless a specific directory structure is present.
+- **Root Cause**: The software assumes the data path is a directory and tries to create a `.cache` subdirectory, but fails when the path is a single parquet file.
 
-## Performance Metrics (Initial)
-- **Checkpoint Verification**: ~1s
-- **Model Inference (Dummy)**: Fast (outputs validated)
-- **Data Ingestion (1 day)**: ~8s (including connection)
-
-## Resource Usage
-- **Memory**: Normal
-- **CPU**: Low (during tests)
-
-## Integration Success Rate: 33% (1/3 entry points functional)
+## Performance Metrics (Partial)
+- **Data Download Speed**: 5466 records/sec
+- **Model Load Time**: ~1.5s (from `live.py` log)
+- **Resource Usage**: ~15% Memory (RSS), high CPU burst during init.
