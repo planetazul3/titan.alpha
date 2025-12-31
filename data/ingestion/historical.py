@@ -17,14 +17,11 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, cast
-
-import numpy as np
+from typing import Any
 
 from data.ingestion.integrity import IntegrityChecker
 from data.ingestion.versioning import (
     DatasetMetadata,
-    compute_checksum,
     create_metadata,
     get_metadata_path,
     load_metadata,
@@ -102,7 +99,7 @@ class TokenBucket:
             if self.tokens < amount:
                 # Wait for just enough time to get one token or the remaining amount
                 await asyncio.sleep(max(0.01, (amount - self.tokens) / self.refill_rate))
-        
+
         self.tokens -= amount
 
     def _refill(self):
@@ -124,10 +121,11 @@ class IncrementalWriter:
     def write_chunk(self, data: list[dict]):
         if not data:
             return
-            
+
         df = pd.DataFrame(data)
         # Optimize dtypes
         if self.data_type == "ticks":
+            # Cast for mypy - we know these cols exist in dicts converted to df
             df["epoch"] = df["epoch"].astype("int64")
             df["quote"] = df["quote"].astype("float64")
         elif self.data_type == "candles":
@@ -137,12 +135,13 @@ class IncrementalWriter:
                     df[col] = df[col].astype("float64")
 
         table = pa.Table.from_pandas(df, preserve_index=False)
-        
+
         if self.writer is None:
             self.schema = table.schema
             self.writer = pq.ParquetWriter(self._temp_path, self.schema)
-            
-        self.writer.write_table(table)
+
+        if self.writer is not None:
+            self.writer.write_table(table)
 
     def close(self):
         if self.writer:
@@ -188,7 +187,7 @@ class PartitionedDownloader:
 
         self.symbol_dir = self.cache_dir / symbol
         self.symbol_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Rate limiter: 5 requests per second (Deriv allows ~10-20, so 5 is safe)
         self.rate_limiter = TokenBucket(tokens_per_second=5.0, burst_multiplier=2.0)
 
@@ -222,27 +221,27 @@ class PartitionedDownloader:
             None if no valid partitions exist.
         """
         from data.ingestion.versioning import verify_checksum
-        
+
         partition_dir = self._get_partition_dir(data_type, granularity)
 
         # Collect all valid partitions with their metadata
         valid_partitions: list[tuple[Path, DatasetMetadata]] = []
-        
+
         # Sort partitions by name (YYYY-MM) chronologically
         parquet_files = sorted(partition_dir.glob("*.parquet"))
-        
+
         for parquet_file in parquet_files:
             metadata = load_metadata(parquet_file)
             if not metadata or not metadata.end_epoch or not metadata.start_epoch:
                 logger.debug(f"Skipping {parquet_file.name}: missing metadata or epoch info")
                 continue
-                
+
             # Verify checksum if present in metadata
             if metadata.sha256:
                 if not verify_checksum(parquet_file, metadata.sha256):
                     logger.warning(f"Checksum validation failed for {parquet_file.name}, stopping resume chain")
                     break  # Stop at first invalid partition
-            
+
             valid_partitions.append((parquet_file, metadata))
 
         if not valid_partitions:
@@ -251,14 +250,14 @@ class PartitionedDownloader:
         # Check continuity between sequential partitions
         # Max allowed gap: 2x granularity for candles, 60 seconds for ticks
         max_gap = (granularity * 2) if granularity else 60
-        
+
         last_continuous_idx = 0
         for i in range(1, len(valid_partitions)):
             prev_file, prev_meta = valid_partitions[i - 1]
             curr_file, curr_meta = valid_partitions[i]
-            
+
             gap = curr_meta.start_epoch - prev_meta.end_epoch
-            
+
             if gap > max_gap:
                 logger.warning(
                     f"Gap detected between {prev_file.name} (end: {prev_meta.end_epoch}) "
@@ -268,7 +267,7 @@ class PartitionedDownloader:
                 resume_point = prev_meta.end_epoch + 1
                 logger.info(f"Resuming from gap point: epoch {resume_point}")
                 return resume_point
-            
+
             last_continuous_idx = i
 
         # All partitions are continuous - resume from the latest
@@ -326,26 +325,29 @@ class PartitionedDownloader:
             cleaned_data, report = checker.generate_report(
                 df, data_type=data_type, granularity=granularity
             )
-            
+
             # Use cleaned data (which might be the same DataFrame or a new one)
             df = cleaned_data
 
             # Optimize dtypes before saving
-            df["epoch"] = df["epoch"].astype("int64")
+            # Cast df to Any to bypass mypy's confusion about DataFrame/list Union in this scope
+            # cleaned_data returns list|Any(df), and we assigned it to df
+            df_typed: Any = df
+            df_typed["epoch"] = df_typed["epoch"].astype("int64")
             if data_type == "ticks":
-                df["quote"] = df["quote"].astype("float64")
+                df_typed["quote"] = df_typed["quote"].astype("float64")
             elif data_type == "candles":
                 for col in ["open", "high", "low", "close"]:
-                    if col in df.columns:
-                        df[col] = df[col].astype("float64")
+                    if col in df_typed.columns:
+                        df_typed[col] = df_typed[col].astype("float64")
 
             # Write to temporary file with compression
-            df.to_parquet(temp_filepath, index=False, engine="pyarrow", compression="zstd")
+            df_typed.to_parquet(temp_filepath, index=False, engine="pyarrow", compression="zstd")
             file_size = os.path.getsize(temp_filepath)
-            
+
             # Create metadata
             from data.ingestion.versioning import compute_checksum
-            
+
             metadata = create_metadata(
                 symbol=self.symbol,
                 data_type=data_type,
@@ -356,17 +358,17 @@ class PartitionedDownloader:
                 download_duration=download_duration,
             )
             metadata.file_size = file_size
-            
+
             # Compute checksum for integrity tracking
             metadata.sha256 = compute_checksum(temp_filepath)
-            
+
             # Save metadata first (if it fails, parquet is still temp)
             save_metadata(temp_filepath, metadata)
-            
+
             # Atomic swap
             os.rename(temp_filepath, filepath)
             os.rename(get_metadata_path(temp_filepath), get_metadata_path(filepath))
-            
+
             logger.info(f"Saved {len(cleaned_data)} records to {filepath} ({file_size / 1024 / 1024:.2f} MB)")
             return filepath, metadata
 
@@ -408,7 +410,7 @@ class PartitionedDownloader:
 
         for month_idx, (month_start, month_end) in enumerate(boundaries):
             month_key = month_start.strftime("%Y-%m")
-            
+
             # Per-month resume check
             filepath = self._get_partition_path("ticks", month_key)
             if resume and filepath.exists():
@@ -425,7 +427,7 @@ class PartitionedDownloader:
 
             partition_start = time.time()
             month_ticks = []
-            
+
             # Setup incremental writer if needed
             inc_file_path = self._get_partition_path("ticks", month_key)
             inc_writer = IncrementalWriter(inc_file_path, "ticks") if HAS_PYARROW else None
@@ -436,7 +438,7 @@ class PartitionedDownloader:
             while current_end > start_epoch:
                 # Rate limit requests
                 await self.rate_limiter.consume(1.0)
-                
+
                 retry_count = 0
                 max_retries = 5
 
@@ -469,7 +471,7 @@ class PartitionedDownloader:
                         retry_count += 1
                         wait_time = min(2**retry_count, 30)
                         logger.error(f"Error: {e} (attempt {retry_count}/{max_retries})")
-                        
+
                         # Fix: Force reconnection on error to ensure healthy socket
                         try:
                             logger.info("Attempting proactive reconnection...")
@@ -489,7 +491,7 @@ class PartitionedDownloader:
                 history = response.get("history", {})
                 prices = history.get("prices", [])
                 times = history.get("times", [])
-                
+
                 logger.debug(f"API returned {len(prices)} ticks for {self.symbol}. First: {times[0] if times else 'N/A'}, Last: {times[-1] if times else 'N/A'}")
 
                 if not prices:
@@ -507,13 +509,13 @@ class PartitionedDownloader:
                     if new_end >= current_end: # Sanity check to prevent infinite loops
                         break
                     current_end = new_end
-                    
+
                     if progress_callback:
                         # Progress is approximate for backward download
                         elapsed_seconds = int(month_end.timestamp()) - current_end
                         total_range = int(month_end.timestamp()) - start_epoch
                         month_progress = min(1.0, elapsed_seconds / total_range) if total_range > 0 else 1.0
-                        
+
                         overall = (month_idx + month_progress) / total_months
                         progress_callback(overall, 1.0, current_count=len(month_ticks))
 
@@ -532,12 +534,12 @@ class PartitionedDownloader:
             # Finalize partition
             inc_path = inc_writer.close() if inc_writer else None
             partition_duration = time.time() - partition_start
-            
+
             try:
                 filepath, _ = self._save_partition(
-                    month_ticks, 
-                    "ticks", 
-                    month_key, 
+                    month_ticks,
+                    "ticks",
+                    month_key,
                     download_duration=partition_duration,
                     incremental_file=inc_path,
                 )
@@ -594,7 +596,7 @@ class PartitionedDownloader:
 
             partition_start = time.time()
             month_candles = []
-            
+
             # Setup incremental writer if needed
             inc_file_path = self._get_partition_path("candles", month_key, granularity)
             inc_writer = IncrementalWriter(inc_file_path, "candles") if HAS_PYARROW else None
@@ -605,7 +607,7 @@ class PartitionedDownloader:
             while current_end > start_epoch:
                 # Rate limit requests
                 await self.rate_limiter.consume(1.0)
-                
+
                 retry_count = 0
                 max_retries = 5
 
@@ -656,7 +658,7 @@ class PartitionedDownloader:
                     continue
 
                 candles = response.get("candles", [])
-                
+
                 logger.debug(f"API returned {len(candles)} candles for {self.symbol}. First epoch: {candles[0]['epoch'] if candles else 'N/A'}")
 
                 if not candles:
@@ -674,12 +676,12 @@ class PartitionedDownloader:
                     if new_end >= current_end:
                         break
                     current_end = new_end
-                    
+
                     if progress_callback:
                         elapsed_seconds = int(month_end.timestamp()) - current_end
                         total_range = int(month_end.timestamp()) - start_epoch
                         month_progress = min(1.0, elapsed_seconds / total_range) if total_range > 0 else 1.0
-                        
+
                         overall = (month_idx + month_progress) / total_months
                         progress_callback(overall, 1.0, current_count=len(month_candles))
 
@@ -698,7 +700,7 @@ class PartitionedDownloader:
             # Finalize partition
             inc_path = inc_writer.close() if inc_writer else None
             partition_duration = time.time() - partition_start
-            
+
             try:
                 filepath, _ = self._save_partition(
                     month_candles,
@@ -806,7 +808,7 @@ async def download_months(
         tick_count[0] = current_count
         elapsed = time.time() - tick_start
         speed = current_count / elapsed if elapsed > 0 else 0
-        
+
         print(
             f"\r  Ticks: {tick_progress[0] * 100:.1f}% ({speed:.0f} t/s)  |  Candles: {candle_progress[0] * 100:.1f}%",
             end="",
@@ -817,7 +819,7 @@ async def download_months(
         candle_count[0] = current_count
         elapsed = time.time() - candle_start
         speed = current_count / elapsed if elapsed > 0 else 0
-        
+
         print(
             f"\r  Ticks: {tick_progress[0] * 100:.1f}%  |  Candles: {candle_progress[0] * 100:.1f}% ({speed:.1f} c/s)",
             end="",
