@@ -99,6 +99,12 @@ class DerivDataset(Dataset):
         self.feature_builder = FeatureBuilder(settings)
 
         # Load data
+        if not data_source.exists():
+            raise FileNotFoundError(f"Data source not found: {data_source}")
+            
+        if data_source.is_file():
+            logger.warning(f"Using single file data source: {data_source}. This is supported but directory structure is preferred for full features.")
+            
         self._load_data(data_source)
 
         # Calculate number of samples
@@ -106,8 +112,16 @@ class DerivDataset(Dataset):
 
     def _get_cache_path(self, data_source: Path) -> Path:
         """Get or create cache directory."""
-        cache_dir = data_source / ".cache"
-        cache_dir.mkdir(exist_ok=True)
+        # Handle both file and directory sources (RC-2 Fix)
+        if data_source.is_file():
+            # For single file, use a dedicated cache dir in data_cache
+            # This avoids trying to create a directory inside a file
+            base_name = data_source.stem
+            cache_dir = Path("data_cache") / base_name / ".cache"
+        else:
+            cache_dir = data_source / ".cache"
+        
+        cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
 
     def _compute_hash(self, files: list[Path]) -> str:
@@ -267,6 +281,10 @@ class DerivDataset(Dataset):
         """
         tick_files = []
         candle_files = []
+
+        # Handle single file input (RC-2 Fix)
+        if data_source.is_file():
+            return [data_source], [data_source]
 
         # Try partitioned format: {symbol}/ticks/*.parquet
         for symbol_dir in data_source.iterdir():

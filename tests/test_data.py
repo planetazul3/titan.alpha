@@ -308,3 +308,67 @@ class TestFeatureBuilder:
         dataset.threshold_touch = 0.11
         labels_no_trigger = dataset._generate_labels(1)
         assert labels_no_trigger["touch"] == 0.0
+
+
+class TestDerivDataset:
+    """Tests for DerivDataset."""
+
+    def test_dataset_single_parquet_file(self, tmp_path):
+        """Test DerivDataset works with a single parquet file source."""
+        from data.dataset import DerivDataset
+        from config.settings import Settings
+        import pandas as pd
+        import shutil
+
+        # Create dummy parquet
+        d = tmp_path / "subdir"
+        d.mkdir()
+        pfile = d / "data.parquet"
+        
+        # Minimal valid content (Need at least 7 rows with default lookahead=5, seq=2)
+        df = pd.DataFrame({
+            "epoch": range(1000, 1010),
+            "quote": [1.0] * 10,
+            "open": [1.0] * 10,
+            "high": [1.2] * 10,
+            "low": [0.9] * 10,
+            "close": [1.1] * 10,
+        })
+        df.to_parquet(pfile)
+        
+        # Use MagicMock for settings to avoid Pydantic frozen errors
+        settings = MagicMock()
+        settings.data_shapes = MagicMock()
+        settings.data_shapes.sequence_length_ticks = 2
+        settings.data_shapes.sequence_length_candles = 2
+        settings.data_shapes.warmup_steps = 0
+        settings.data_shapes.label_threshold_touch = 0.01
+        settings.data_shapes.label_threshold_range = 0.01
+
+        # Should not raise (RC-2 Verification)
+        dataset = DerivDataset(data_source=pfile, settings=settings)
+        assert len(dataset) > 0
+
+    def test_dataset_cache_isolation(self, tmp_path):
+        """Test cache is created in correct location for file vs dir."""
+        from data.dataset import DerivDataset
+        
+        # Case 1: Directory source
+        dir_source = tmp_path / "dir_source"
+        dir_source.mkdir()
+        
+        # Mock dataset to access _get_cache_path
+        dataset = DerivDataset.__new__(DerivDataset)
+        
+        cache_path_dir = dataset._get_cache_path(dir_source)
+        assert cache_path_dir == dir_source / ".cache"
+        
+        # Case 2: File source
+        file_source = tmp_path / "file.parquet"
+        file_source.touch()
+        
+        cache_path_file = dataset._get_cache_path(file_source)
+        # Should be in data_cache/file/.cache
+        assert cache_path_file.name == ".cache"
+        assert cache_path_file.parent.name == "file"
+        assert cache_path_file.parent.parent.name == "data_cache"
