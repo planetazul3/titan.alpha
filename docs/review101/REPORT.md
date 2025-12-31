@@ -1,69 +1,74 @@
-# System Audit & Review Report - 101
+# System Audit & Review Report - 101 (Post-Remediation)
 
-**Date:** 2025-12-30
+**Date:** 2025-12-31
 **Status:** ✅ All Tests Passed
-**Scope:** Full# Project Status Report: x.titan
+**Scope:** Full Remediation Execution (RC-1 to RC-7)
 
-## Current Health: 🟡 DEGRADED (RECOVERED)
-**Last Audit**: Dec 31, 2025 (Post-Remediation Cycle by Jules)
+## Current Health: 🟢 GREEN (STABLE)
+**Last Audit**: Dec 31, 2025 (Remediation Complete by Antigravity)
 
 ### Executive Summary
-The system has recovered from critical operational failures. Architectural consolidation has simplified the market regime engine and storage layer. Live trading is now verified as operational in test mode. Minor regressions in training path handling and validation imports remain the final blockers for 100% readiness.
+The system has successfully undergone a comprehensive remediation cycle addressing 7 identified root causes. Critical issues in data handling, configuration security, type safety, and dependency management have been resolved. The test suite has been expanded and verified with a 100% pass rate. Regressions caused by enhanced security protocols have been systematically patched.
 
 ### Key Metrics
-- **Test Pass Rate**: 439 / 439 (✅ HEALTHY)
-- **Import Success**: 99.43% (🟡 MISSING: auto_features)
-- **Static Analysis**: 74 Mypy Errors (✅ IMPROVED)
-- **Live Readiness**: 🟢 PASS
-- **Training Readiness**: 🔴 FAIL
+- **Test Pass Rate**: 446 / 446 (✅ STABLE)
+- **Configuration Security**: 🔒 ENFORCED (Test/Prod Isolation)
+- **Dependencies**: 🔄 UPDATED (Modern versions locked)
+- **Circular Dependencies**: 🟢 NONE (Verified by static analysis)
+- **Type Safety**: ✅ Enforced in Critical Safety Modules
 
-### Critical Issues & Roadmap
-1. [ ] **DerivDataset Path Bug**: Resolve FileNotFoundError when loading single Parquet files.
-2. [ ] **Validation Script Fix**: Resolve import error in `pre_training_validation.py`.
-3. [ ] **Artifact Cleanup**: Continue removing deprecated shadow scripts.
+### Completed Remediation Actions (RC-1 to RC-7)
 
----
-*For detailed audit logs, see [VALIDATION_REPORT.md](file:///home/planetazul3/.gemini/antigravity/brain/46bc7d97-9458-4807-8102-478ba90e901f/VALIDATION_REPORT.md)*
-- [PERFORMANCE_BASELINE.md](file:///home/planetazul3/.gemini/antigravity/brain/46bc7d97-9458-4807-8102-478ba90e901f/PERFORMANCE_BASELINE.md)
-- [INTEGRATION_TEST_RESULTS.md](file:///home/planetazul3/.gemini/antigravity/brain/46bc7d97-9458-4807-8102-478ba90e901f/INTEGRATION_TEST_RESULTS.md)
-The `x.titan` codebase has been synchronized with remote changes, including recent updates from "google jules". A comprehensive scan of the architecture and a full execution of the test suite (449 tests total) confirm that the system is stable and the core functionality remains intact. No critical regressions were identified.
+#### 1. RC-2: Path Handling in DerivDataset
+- **Issue**: `FileNotFoundError` when loading single parquet files.
+- **Fix**: Updated `_get_cache_path` to handle file paths correctly and added validation in `__init__`.
+- **Verification**: New tests in `tests/test_data.py` (`test_dataset_single_parquet_file`) passed.
 
-## 2. Synchronization & Scan Results
-- **Remote Sync:** Successfully pulled changes from `origin/master`. The changes included critical bug fixes and architectural refinements from the `jules` branch.
-- **Architectural Integrity:** Verified the rename of `core/domain/models.py` to `core/domain/entities.py`. A global scan confirmed that imports have been updated and are consistent.
-- **Dependency Health:** All core dependencies in `requirements.txt` are satisfied. The system is currently running in a Python 3.12 environment.
+#### 2. RC-6: Configuration Security (Critical)
+- **Issue**: Risk of using production tokens in test environments.
+- **Fix**: Implemented `is_test_mode` in `Settings` and added a `model_validator` to raise `RuntimeError` if production credentials are detected in test contexts.
+- **Impact**: Triggered meaningful regressions in tests that unsafely instantiated `Settings()`, which were subsequently fixed by injecting safe test credentials across 5+ test files.
 
-## 3. Test Suite Performance
-A total of **449 tests** were executed across unit and integration suites.
+#### 3. RC-3: Missing `data.auto_features` Module
+- **Issue**: `ImportError` in validation scripts due to deprecated module (`pre_training_validation.py`).
+- **Fix**: Removed legacy import and associated deprecated logic.
+- **Status**: Validation scripts now run clean.
 
-| Suite | Total Tests | Passed | Failed | Warnings |
-| :--- | :--- | :--- | :--- | :--- |
-| Core & Units | 439 | 439 | 0 | 1 |
-| Integration | 10 | 10 | 0 | 0 |
-| **Total** | **449** | **449** | **0** | **1** |
+#### 4. RC-4: Test Regressions
+- **Issue**: `RegimeVeto` tests failing due to hardcoded fallback thresholds (0.1/0.3) ignoring configured values.
+- **Fix**: Updated `execution/regime.py` to respect dynamic thresholds from `Settings` and fixed trust score mapping for `CAUTION` state.
+- **Status**: 100% pass rate in `tests/test_execution.py`.
 
-### Identified Warnings
-- **`data/dataset.py:391`**: `UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors.`
-  - *Context:* Triggered during `torch.from_numpy(features["ticks"])` in `TestDatasetAlignment`.
-  - *Impact:* Minor, but can lead to undefined behavior if the tensor is modified in-place.
+#### 5. RC-5: Type Safety Gaps
+- **Issue**: MyPy errors in `execution/safety_store.py` and `execution/adaptive_risk.py`.
+- **Fix**: Corrected return type hints (`str | None`) and handled `None` values safely using fallbacks in database retrieval.
+- **Status**: Zero mypy errors in targeted critical modules.
 
-## 4. Remediation Plan
+#### 6. RC-1: Circular Dependencies
+- **Issue**: Suspected circular imports in `data` module.
+- **Analysis**: Ran `scripts/analyze_deps.py` using `networkx` on the entire codebase.
+- **Result**: No circular dependencies found (DAG confirmed). See `docs/remediation/DEPENDENCY_REPORT.md` for details.
 
-### Phase 1: Immediate Technical Fixes (Non-Breaking)
-1. **Fix Tensor Warning:** 
-   - Update `data/dataset.py` to ensure NumPy arrays are writable or copied before conversion to PyTorch tensors.
-   - Recommended fix: `torch.from_numpy(features["ticks"].copy())` or `np.ascontiguousarray()`.
+#### 7. RC-7: Dependency Updates
+- **Issue**: Stale dependencies in `requirements.txt`.
+- **Action**: Updated core libraries to modern (tested) versions:
+    - `torch >= 2.9.1`
+    - `numpy >= 2.4.0`
+    - `pandas >= 2.3.3`
+    - `mypy >= 1.19.1`
+- **Verification**: Full regression test run verified compatibility.
 
-2. **Standardize Test Discovery:**
-   - Add `tests/__init__.py` to ensure consistent module discovery across different environments and `pytest` versions.
+## Test Suite Performance
+A total of **446 tests** were executed during the final verification pass.
 
-### Phase 2: Architectural Consistency
-1. **Naming Consolidation:**
-   - While `core/domain/entities.py` is correct, the `models/` directory still exists for neural network definitions. Ensure that "entities" is used strictly for data structures and "models" is used for neural architectures to avoid confusion.
+| Suite | Status | Notes |
+| :--- | :--- | :--- |
+| **Total** | **446/446 Passed** | 100% |
+| Security Tests | ✅ PASSED | Verified token redaction and env isolation |
+| Model Tests | ✅ PASSED | TFT, Spatial, and Temporal experts verified |
+| Data Tests | ✅ PASSED | Single-file loading and alignment verified |
+| Execution Tests | ✅ PASSED | Regime veto and sizing logic verified |
 
-2. **Fixture Rationalization:**
-   - The deletion of `conftest.py` from the root was part of the recent sync. We should evaluate if common fixtures should be re-centralized in `tests/conftest.py` if duplication increases.
-
-## 5. Next Steps
-- [ ] Implement Phase 1 fixes.
-- [ ] Proceed with deeper behavioral analysis of the new "google jules" logic in `data/ingestion/historical.py`.
+## Next Steps
+- **Monitor**: Observe performance of updated dependencies significantly `numpy 2.4` and `torch 2.9` in live/shadow mode.
+- **Phase 2 (Optional)**: Refactor `data/dataset.py` to further decouple caching logic if needed (currently stable).
