@@ -434,6 +434,38 @@ class Settings(BaseSettings):
         """Check if running in production environment."""
         return self.environment.lower() == "production"
 
+    @property
+    def is_test_mode(self) -> bool:
+        """Detect if running in test context."""
+        import os
+        return (
+            os.getenv("PYTEST_CURRENT_TEST") is not None
+            or self.environment.lower() in ("test", "sandbox", "development")
+        )
+
+    @model_validator(mode="after")
+    def validate_security_constraints(self) -> "Settings":
+        """Enforce strict security constraints for production safety."""
+        # RC-6: Prevent production token usage in test mode
+        if self.is_test_mode:
+            token_val = self.deriv_api_token.get_secret_value()
+            if token_val and "prod" in token_val.lower():
+                # Allow override if explicitly ignored? No, strict safety.
+                raise RuntimeError(
+                    "SECURITY EXCEPTION: Production token detected in test environment! "
+                    "Unset DERIV_API_TOKEN or set ENVIRONMENT=production."
+                )
+
+        # RC-6: Prevent accidentally running as production in pytest
+        import os
+        if os.getenv("PYTEST_CURRENT_TEST") and self.is_production():
+             raise RuntimeError(
+                "SECURITY EXCEPTION: DANGEROUS CONFIGURATION! "
+                "Running tests with ENVIRONMENT=production is strictly forbidden."
+            )
+            
+        return self
+
     def validate_api_credentials(self) -> bool:
         """Check if API credentials are configured."""
         token_value = self.deriv_api_token.get_secret_value()
