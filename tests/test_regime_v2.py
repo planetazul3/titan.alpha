@@ -1,5 +1,5 @@
 """
-Unit tests for regime_v2 module.
+Unit tests for regime module.
 
 Tests for hierarchical regime detection.
 """
@@ -7,7 +7,7 @@ Tests for hierarchical regime detection.
 import numpy as np
 import pytest
 
-from execution.regime_v2 import (
+from execution.regime import (
     HierarchicalRegimeAssessment,
     HierarchicalRegimeDetector,
     HurstExponentEstimator,

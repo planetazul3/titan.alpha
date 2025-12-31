@@ -22,12 +22,14 @@ import numpy as np
 
 from config.settings import Settings
 from execution.position_sizer import KellyPositionSizer, PositionSizeResult
-from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
-from execution.common.types import TrustState
-from execution.regime_v2 import (
+from execution.regime import (
+    RegimeAssessment,
+    RegimeAssessmentProtocol,
+    RegimeVeto,
     HierarchicalRegimeAssessment,
     HierarchicalRegimeDetector,
 )
+from execution.common.types import TrustState
 from execution.signals import TradeSignal
 
 
@@ -154,84 +156,10 @@ class RegimeAwarePositionSizer:
 
 class EnhancedRegimeVeto(RegimeVeto):
     """
-    Adapter that makes HierarchicalRegimeDetector compatible with RegimeVeto interface.
-    
-    This allows the DecisionEngine to use hierarchical regime detection
-    without code changes, by adapting the interface.
-    
-    The adapter caches recent price data for the hierarchical assessment.
+    Adapter kept for backward compatibility.
+    RegimeVeto now handles hierarchical detection natively.
     """
-    
-    def __init__(
-        self,
-        hierarchical_detector: HierarchicalRegimeDetector | None = None,
-        fallback_veto: RegimeVeto | None = None,
-    ):
-        """
-        Initialize enhanced regime veto.
-        
-        Args:
-            hierarchical_detector: HierarchicalRegimeDetector to use
-            fallback_veto: Traditional RegimeVeto for fallback
-        """
-        self.hierarchical = hierarchical_detector or HierarchicalRegimeDetector()
-        self.fallback = fallback_veto or RegimeVeto()
-        self._price_cache: np.ndarray | None = None
-        
-        # Expose thresholds for compatibility
-        self.threshold_caution = self.fallback.threshold_caution
-        self.threshold_veto = self.fallback.threshold_veto
-    
-    def update_prices(self, prices: np.ndarray) -> None:
-        """
-        Update the cached price history for hierarchical assessment.
-        
-        Should be called before assess() with recent close prices.
-        """
-        self._price_cache = prices
-    
-    def assess(self, reconstruction_error: float | Any) -> RegimeAssessmentProtocol:
-        # Check for Tensor
-        if hasattr(reconstruction_error, "item"):
-             reconstruction_error = reconstruction_error.item()
-         
-        """
-        Assess market regime using hierarchical detection.
-        
-        Falls back to simple reconstruction error if no price data available.
-        
-        Args:
-            reconstruction_error: Volatility expert reconstruction error
-        
-        Returns:
-            HierarchicalRegimeAssessment (compatible with RegimeAssessment interface)
-        """
-        if self._price_cache is not None and len(self._price_cache) >= 50:
-            hier_assessment = self.hierarchical.assess(
-                prices=self._price_cache,
-                reconstruction_error=reconstruction_error,
-            )
-        else:
-            # Fallback: use reconstruction error only
-            hier_assessment = self.hierarchical.assess_from_reconstruction_error(
-                reconstruction_error=reconstruction_error,
-                prices=self._price_cache,
-            )
-            
-        return hier_assessment
-
-    
-    def get_hierarchical_assessment(
-        self,
-        prices: np.ndarray,
-        reconstruction_error: float,
-    ) -> HierarchicalRegimeAssessment:
-        """
-        Get full hierarchical assessment with provided prices.
-        
-        Use this when you have price data available at call time.
-        """
-        return self.hierarchical.assess(prices, reconstruction_error)
+    pass
 
 
 def create_enhanced_executor(

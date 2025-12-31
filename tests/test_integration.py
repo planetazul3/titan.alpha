@@ -11,7 +11,7 @@ from execution.integration import (
     EnhancedRegimeVeto,
     RegimeAwarePositionSizer,
 )
-from execution.regime_v2 import (
+from execution.regime import (
     HierarchicalRegimeAssessment,
     HierarchicalRegimeDetector,
     MacroRegime,
@@ -134,8 +134,9 @@ class TestEnhancedRegimeVeto:
     def test_initialization(self):
         """Test initialization with defaults."""
         veto = EnhancedRegimeVeto()
-        assert veto.hierarchical is not None
-        assert veto.fallback is not None
+        # In unified model, these attributes are on the base class now
+        assert veto.hierarchical_detector is not None
+        assert veto.use_hierarchical is True
 
     def test_assess_with_price_cache(self):
         """Test assessment with cached prices."""
@@ -180,13 +181,14 @@ class TestEnhancedRegimeVeto:
         assert hasattr(veto, "threshold_veto")
 
     def test_get_hierarchical_assessment(self):
-        """Test direct hierarchical assessment with prices."""
+        """Test direct hierarchical assessment via hierarchical_detector."""
         veto = EnhancedRegimeVeto()
         
         np.random.seed(42)
         prices = 100 + np.cumsum(np.random.randn(100) * 0.5)
         
-        assessment = veto.get_hierarchical_assessment(
+        # Use hierarchical_detector directly as get_hierarchical_assessment was removed
+        assessment = veto.hierarchical_detector.assess(
             prices=prices,
             reconstruction_error=0.1,
         )

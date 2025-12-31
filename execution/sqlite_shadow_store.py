@@ -11,7 +11,7 @@ Key improvements over NDJSON:
 - Automatic schema migrations
 
 Usage:
-    >>> store = SQLiteShadowStore(Path("data_cache/shadow_trades.db"))
+    >>> store = SQLiteShadowStore(Path("data_cache/trading_state.db"))
     >>> store.append(ShadowTradeRecord(...))
     >>> store.update_outcome("trade-id", outcome=True, exit_price=1.05)
     >>> trades = store.query(start=yesterday, end=today, resolved_only=True)
