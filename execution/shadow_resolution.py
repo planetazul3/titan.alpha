@@ -132,7 +132,6 @@ class ShadowTradeResolver:
         Returns:
             Number of trades resolved in this pass.
         """
-        from config.constants import CONTRACT_TYPES
         
         if self.tracer:
             with self.tracer.start_as_current_span("shadow_resolver.resolve_trades") as span:
@@ -151,7 +150,6 @@ class ShadowTradeResolver:
         low_price: float | None = None,
     ) -> int:
         """Internal resolution logic moved from resolve_trades for tracing wrapper."""
-        from config.constants import CONTRACT_TYPES
         
         # Ensure current_time is aware
         if current_time.tzinfo is None:
@@ -358,14 +356,14 @@ class ShadowTradeResolver:
                 all_lows = []
 
                 if trade.resolution_context and len(trade.resolution_context) > 0:
-                     context = np.array(trade.resolution_context)
-                     all_highs.extend(context[:, 0].tolist())
-                     all_lows.extend(context[:, 1].tolist())
+                    context = np.array(trade.resolution_context)
+                    all_highs.extend(context[:, 0].tolist())
+                    all_lows.extend(context[:, 1].tolist())
 
                 # Always include the current resolution candle if provided (it's the final candle)
                 if high_price is not None and low_price is not None:
-                     all_highs.append(high_price)
-                     all_lows.append(low_price)
+                    all_highs.append(high_price)
+                    all_lows.append(low_price)
 
                 if all_highs:
                     high_prices = np.array(all_highs)
@@ -454,14 +452,14 @@ class ShadowTradeResolver:
                 all_lows = []
 
                 if trade.resolution_context and len(trade.resolution_context) > 0:
-                     context = np.array(trade.resolution_context)
-                     all_highs.extend(context[:, 0].tolist())
-                     all_lows.extend(context[:, 1].tolist())
+                    context = np.array(trade.resolution_context)
+                    all_highs.extend(context[:, 0].tolist())
+                    all_lows.extend(context[:, 1].tolist())
 
                 # Always include the current resolution candle if provided (it's the final candle)
                 if high_price is not None and low_price is not None:
-                     all_highs.append(high_price)
-                     all_lows.append(low_price)
+                    all_highs.append(high_price)
+                    all_lows.append(low_price)
 
                 if all_highs:
                     high_prices = np.array(all_highs)

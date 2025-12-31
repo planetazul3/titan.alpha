@@ -102,6 +102,11 @@ async def run_live_trading(args):
         f"Metrics collector initialized (prometheus={'enabled' if metrics.use_prometheus else 'disabled'})"
     )
 
+    # Initialize System and Model Monitors
+    system_monitor = SystemHealthMonitor()
+    model_monitor = ModelHealthMonitor(accuracy_window=100)
+    system_monitor.register_component("model", create_model_health_checker(model_monitor))
+
     # Determine checkpoint to load (same logic)
     checkpoint_name = args.checkpoint
     checkpoint_path = None
@@ -290,8 +295,10 @@ async def run_live_trading(args):
         console_log("Setting up trade executor with safety controls...", "WAIT")
         # Inject the chosen sizer into the raw executor
         # ID-001 Fix: Pass policy to executor for circuit breaker support
+        from execution.executor import DerivTradeExecutor
         raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer, policy=engine.policy)
 
+        from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
         safety_config = ExecutionSafetyConfig(
             max_trades_per_minute=settings.execution_safety.max_trades_per_minute,
             max_trades_per_minute_per_symbol=settings.execution_safety.max_trades_per_minute_per_symbol,
