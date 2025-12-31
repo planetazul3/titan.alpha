@@ -5,7 +5,6 @@ import numpy as np
 import logging
 from typing import Dict, Any, List
 from models.tft import TemporalFusionTransformer
-from data.auto_features import AutoFeatureGenerator, FeatureCandidate
 from execution.rl_integration import RLTradingIntegration
 from config.settings import load_settings
 
@@ -117,15 +116,10 @@ class PreTrainingValidator:
                 logger.error("Duplicate timestamps found!")
                 return False
                 
-            # 2. auto_features mRMR check
-            gen = AutoFeatureGenerator()
-            # Create redundant features manually to test generator filtering
-            f1 = FeatureCandidate("F1", prices, category="test", mi_score=0.5)
-            f2 = FeatureCandidate("F2", prices, category="test", mi_score=0.5) # Perfect copy
-            
-            # Mock scorer for speed if needed, but integration test uses real one
-            # relying on test_auto_features.py for deep logic. 
-            # Here checking basic stats.
+            # 2. auto_features mRMR check (Deprecated)
+            # Legacy feature selection via mRMR was removed in favor of canonical FeatureBuilder
+            # schema validation.
+            # gen = AutoFeatureGenerator() ... (Removed)
             
             if np.isnan(prices).any() or np.isinf(prices).any():
                 logger.error("NaN or Inf in source data")
