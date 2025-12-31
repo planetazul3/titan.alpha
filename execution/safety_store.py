@@ -42,7 +42,7 @@ class SQLiteSafetyStateStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             self._local.conn = conn
-        return self._local.conn
+        return self._local.conn  # type: ignore[no-any-return]
         
     def _init_db(self):
         """Create tables if they don't exist."""
@@ -68,13 +68,13 @@ class SQLiteSafetyStateStore:
             logger.error(f"Failed to initialize safety DB: {e}")
             raise
 
-    def get_value(self, key: str, default: Any = None) -> str | None:
+    def get_value(self, key: str, default: str | None = None) -> str | None:
         """Get simple key-value pair."""
         try:
             conn = self._get_connection()
             cursor = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
             row = cursor.fetchone()
-            return row[0] if row else default
+            return str(row[0]) if row else default
         except Exception as e:
             logger.error(f"DB Read Error (get_value): {e}")
             return default
@@ -148,9 +148,9 @@ class SQLiteSafetyStateStore:
     # H04 Helpers for Adaptive Risk
     def get_risk_metrics(self) -> dict:
         """Retrieve persisted risk metrics."""
-        drawdown = float(self.get_value("risk_current_drawdown", "0.0"))
-        losses = int(self.get_value("risk_consecutive_losses", "0"))
-        peak_equity = float(self.get_value("risk_peak_equity", "0.0"))
+        drawdown = float(self.get_value("risk_current_drawdown") or "0.0")
+        losses = int(self.get_value("risk_consecutive_losses") or "0")
+        peak_equity = float(self.get_value("risk_peak_equity") or "0.0")
         return {
             "current_drawdown": drawdown,
             "consecutive_losses": losses,

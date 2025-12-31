@@ -151,7 +151,7 @@ class PerformanceTracker:
         """Get total magnitude of losses in the current window."""
         if not self._returns:
             return 0.0
-        return abs(sum(r for r in self._returns if r < 0))
+        return float(abs(sum(r for r in self._returns if r < 0)))
 
     def get_profit_factor(self) -> float:
         """Get profit factor (gains / losses)."""
