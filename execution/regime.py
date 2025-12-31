@@ -390,19 +390,23 @@ class HierarchicalRegimeDetector:
         return float(np.clip(trust, 0.0, 1.0))
 
     def assess_from_reconstruction_error(
-        self, reconstruction_error: float, prices: np.ndarray | None = None
+        self, 
+        reconstruction_error: float, 
+        prices: np.ndarray | None = None,
+        threshold_veto: float = 0.3,
+        threshold_caution: float = 0.1
     ) -> HierarchicalRegimeAssessment:
         """Backward compatibility for reconstruction-only assessment."""
         if prices is not None and len(prices) >= 50:
             return self.assess(prices, reconstruction_error)
 
         # Fallback heuristics
-        if reconstruction_error >= 0.3:
+        if reconstruction_error >= threshold_veto:
             volatility = VolatilityRegime.HIGH
             trust = 0.2
-        elif reconstruction_error >= 0.1:
+        elif reconstruction_error >= threshold_caution:
             volatility = VolatilityRegime.MEDIUM
-            trust = 0.6
+            trust = 0.5 # 0.5 is within [0.3, 0.6) range for CAUTION
         else:
             volatility = VolatilityRegime.LOW
             trust = 0.9
@@ -444,6 +448,9 @@ class RegimeVeto:
         calibration_source: CalibrationSource = CalibrationSource.DEFAULT,
         use_hierarchical: bool = True
     ):
+        if threshold_caution >= threshold_veto:
+            raise ValueError("Caution threshold must be less than veto threshold")
+            
         self.threshold_caution = threshold_caution
         self.threshold_veto = threshold_veto
         self.calibration_source = calibration_source
@@ -494,11 +501,16 @@ class RegimeVeto:
             error = reconstruction_error.item()
         else:
             error = float(reconstruction_error)
+            
+        threshold_caution, threshold_veto = self._get_scaled_thresholds()
 
         # Try hierarchical assessment first
         if self.use_hierarchical:
             return self.hierarchical_detector.assess_from_reconstruction_error(
-                error, self._price_cache
+                error, 
+                self._price_cache,
+                threshold_veto=threshold_veto,
+                threshold_caution=threshold_caution
             )
 
         # Fallback to simple threshold logic

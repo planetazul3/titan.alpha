@@ -247,7 +247,7 @@ class TestRegimeVeto:
         """Should raise if caution >= veto threshold."""
         from execution.regime import RegimeVeto
 
-        with pytest.raises(ValueError, match="must be <"):
+        with pytest.raises(ValueError, match="Caution threshold must be less than veto threshold"):
             RegimeVeto(threshold_caution=0.5, threshold_veto=0.3)
 
     def test_regime_trusted_state(self):
