@@ -4,7 +4,7 @@ Core interfaces for the trading system.
 from typing import Protocol, List, Optional, Any
 from abc import abstractmethod
 
-from core.domain.models import Order, Trade, Position
+from core.domain.entities import Order, Trade, Position
 
 class IExecutor(Protocol):
     """Interface for trade execution."""
