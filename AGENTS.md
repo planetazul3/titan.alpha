@@ -64,3 +64,18 @@ Configuration is managed via Pydantic in `config/settings.py`. Key sections:
 - `ShadowTrade` - Duration per contract type, staleness detection
 - `Normalization` - Scaling factors for technical indicators
 - `System` - Log retention, database paths
+
+## 📜 Project Audit & Hardening Protocol
+When performing audits or hardening tasks, strictly follow the [Project Audit Prompt](file:///.agent/prompts/project_audit_prompt.md).
+
+### ⚡ Non-Negotiable Constraints (Audit Findings)
+- **RAM Management:** The system operates under a strict **3.7GiB RAM limit**. Use memory-mapping for large datasets and avoid `torch.cat` or large list/tensor concatenations.
+- **Numerical Safety (RC-8):** Always use `math.isfinite()` when updating risk metrics or recording P&L. `NaN` or `Inf` propagation is a critical failure.
+- **Temporal Integrity:** Training must maintain a minimum gap of **200+ candles** between training and validation sets to prevent data leakage.
+- **Fisher Information:** Always preserve OFFLINE knowledge during ONLINE updates by loading `fisher_state_dict`.
+
+### 🔄 Structured Hardening Workflow
+1.  **Inventory:** Discover all runnable targets and entry points.
+2.  **Triage:** Trace every failure to its root cause before attempting a fix.
+3.  **TDD Fix:** Write a failing test for every bug identified (e.g., `tests/test_risk_nan_hardening.py`).
+4.  **Verification:** Citations from official docs are required for non-trivial architecture changes.
