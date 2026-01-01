@@ -301,6 +301,10 @@ class Trainer:
             if self.patience_counter >= self.config.early_stop_patience:
                 logger.info(f"Early stopping at epoch {epoch + 1}")
                 break
+            
+            # Memory Cleanup
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
 
         elapsed = time.time() - start_time
         logger.info(f"Training complete in {elapsed / 60:.1f} minutes")
@@ -456,12 +460,17 @@ class Trainer:
     def _validate_epoch(self) -> tuple[float, dict[str, dict[str, float]]]:
         """Run validation epoch with multi-task metrics."""
         self.model.eval()
-        total_loss = 0.0
         for m in self.task_metrics.values():
             m.reset()
 
+        if len(self.val_loader) == 0:
+            return 0.0, {}
+
+        val_loss_sum = 0.0
+        n_valid_batches = 0
+
         for batch in tqdm(self.val_loader, desc="Validation", leave=False):
-            # Move to device with non-blocking transfer
+            # Move to device and process
             ticks = batch["ticks"].to(self.device, non_blocking=True)
             candles = batch["candles"].to(self.device, non_blocking=True)
             vol_metrics = batch["vol_metrics"].to(self.device, non_blocking=True)
@@ -471,10 +480,17 @@ class Trainer:
             with torch.autocast(
                 device_type=self.device.type, dtype=self.autocast_dtype, enabled=self.use_amp
             ):
-                outputs = self.model(ticks, candles, vol_metrics)
-                losses = self.criterion(outputs, targets, vol_metrics)
+                with torch.no_grad():
+                    outputs = self.model(ticks, candles, vol_metrics)
+                    losses = self.criterion(outputs, targets, vol_metrics)
 
-            total_loss += losses["total"].item()
+            loss_val = losses["total"].item()
+            if not torch.isfinite(torch.tensor(loss_val)):
+                logger.warning("Validation batch yielded non-finite loss! Skipping for total.")
+                continue
+
+            val_loss_sum += loss_val
+            n_valid_batches += 1
 
             # Track predictions for ALL metrics
             for name in self.task_names:
@@ -484,14 +500,12 @@ class Trainer:
                     prob = torch.sigmoid(logit.float())
                     self.task_metrics[name].update(prob, target)
 
-        val_loss = total_loss / len(self.val_loader)
+        val_loss = val_loss_sum / n_valid_batches if n_valid_batches > 0 else float("inf")
         
         # Compute metrics for each task
         all_metrics = {}
         for name, tracker in self.task_metrics.items():
-            task_stats = tracker.compute()
-            for metric_name, val in task_stats.items():
-                all_metrics[f"{name}/{metric_name}"] = val
+            all_metrics[name] = tracker.compute()
 
         return val_loss, all_metrics
 

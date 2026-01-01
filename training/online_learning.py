@@ -250,13 +250,18 @@ class FisherInformation:
              if param.requires_grad:
                  self._optimal_params[name] = param.data.clone()
         
+        self.model.train()
+        
+        # Memory Cleanup before heavy computation
+        device = next(self.model.parameters()).device
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         # Initialize Fisher accumulator for this RUN
         current_run_fisher = {}
         for name, param in self.model.named_parameters():
              if param.requires_grad:
                  current_run_fisher[name] = torch.zeros_like(param)
-        
-        self.model.train()
         
         n_samples = 0
         for batch in dataloader:
@@ -338,13 +343,10 @@ class FisherInformation:
              else:
                  self._fisher[name] = clamped
         
-        # Log Fisher statistics for debugging
-        all_fisher = torch.cat([f.flatten() for f in self._fisher.values()])
+        # Log Fisher statistics for debugging (Sampled instead of full cat for memory)
         logger.info(
             f"Computed Fisher Information over {n_samples} samples. "
-            f"Stats: mean={all_fisher.mean():.4e}, std={all_fisher.std():.4e}, "
-            f"min={all_fisher.min():.4e}, max={all_fisher.max():.4e}, "
-            f"clamped={total_clamped}/{total_params} ({100*total_clamped/total_params:.2f}%)"
+            f"Clamped {total_clamped}/{total_params} parameters ({100*total_clamped/total_params:.2f}%)"
         )
     
     def get_fisher(self, name: str) -> torch.Tensor | None:
@@ -482,7 +484,7 @@ class OnlineLearningModule:
         
         # Create optimizer if not provided
         if optimizer is None:
-            self.optimizer: torch.optim.Optimizer = torch.optim.AdamW(
+            self.optimizer: torch.optim.AdamW = torch.optim.AdamW(
                 model.parameters(),
                 lr=learning_rate,
                 weight_decay=1e-5,
