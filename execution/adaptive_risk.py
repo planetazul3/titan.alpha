@@ -97,6 +97,11 @@ class PerformanceTracker:
             pnl: Profit/loss from trade
             current_equity: Current account equity
         """
+        import math
+        if not math.isfinite(pnl):
+            logger.warning(f"Rejecting non-finite pnl: {pnl}")
+            return
+
         self._returns.append(pnl)
         
         if pnl < 0:
@@ -105,6 +110,10 @@ class PerformanceTracker:
             self._consecutive_losses = 0
 
         if current_equity is not None:
+            if not math.isfinite(current_equity):
+                logger.warning(f"Rejecting non-finite equity: {current_equity}")
+                return
+
             if current_equity > self._peak_equity:
                 self._peak_equity = current_equity
             
@@ -268,6 +277,11 @@ class AdaptiveRiskManager:
             pnl: Profit/loss from trade
             current_equity: Current account equity
         """
+        import math
+        if not math.isfinite(pnl):
+            logger.error(f"Received non-finite pnl in record_trade: {pnl}. Skipping state update.")
+            return
+
         self._daily_pnl += pnl
         self.performance.record(pnl, current_equity)
         self._trades_since_limit_hit += 1
