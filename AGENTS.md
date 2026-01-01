@@ -4,10 +4,10 @@ Configuration guide for the **Google Jules** agent in the **x.titan** project.
 
 ## 🧠 Project Context
 x.titan is a high-frequency algorithmic trading system based on Deep Learning (PyTorch).
-- **Core:** Python 3.10
+- **Core:** Python 3.12 (Upgraded Jan 2026)
 - **ML Engine:** PyTorch with Temporal Fusion Transformer (`models/`, `training/`)
 - **Execution:** Asyncio + Websockets (`execution/`, `api/`)
-- **Data:** TA-Lib for technical indicators (`data/`)
+- **Data:** Scipy/Numpy for technical indicators (`data/`) — TA-Lib is available but legacy.
 - **Domain:** Core domain models and interfaces (`core/`)
 
 ## 🏗️ Architecture Map
@@ -28,9 +28,10 @@ Use these commands to verify your work. Do not invent new commands.
 
 ### Testing
 The full suite is slow. Use markers to be efficient:
-- **Fast Tests (Unit):** `pytest -m "not slow and not integration"`
-- **Integration Tests:** `pytest -m integration`
-- **All Tests:** `pytest` (Run only before submitting the final task)
+- **Fast Tests (Unit):** `./venv/bin/pytest -m "not slow and not integration"`
+- **Integration Tests:** `./venv/bin/pytest -m integration`
+- **All Tests:** `./venv/bin/pytest` (Run only before submitting the final task)
+- **Hardening Validation:** `./venv/bin/pytest tests/test_risk_nan_hardening.py`
 
 ### Code Quality (Linting)
 The project is strict about typing and style.
@@ -43,9 +44,10 @@ The project is strict about typing and style.
 
 ## ⚠️ Safety Rules (Safety Veto)
 1. **Never** change `ENVIRONMENT` to "production" or `KILL_SWITCH_ENABLED` to false in default configuration files without explicit approval.
-2. If you modify `execution/safety.py` or `execution/policy.py`, you must mandatorily run `pytest tests/test_execution.py`.
-3. Do not upload real API Keys or tokens to the code. Use `os.getenv` and assume they will be in the environment.
-4. The `core/` directory contains domain invariants - changes here affect the entire system.
+2. If you modify `execution/safety.py`, `execution/policy.py`, or `execution/adaptive_risk.py`, you must mandatorily run `pytest tests/test_execution.py` and `tests/test_adaptive_risk.py`.
+3. **Numerical Stability:** Always validate numerical inputs in risk/execution modules using `math.isfinite()`. `NaN` values are strictly forbidden in P&L and Equity tracking (RC-8).
+4. Do not upload real API Keys or tokens to the code. Use `os.getenv` and assume they will be in the environment.
+5. The `core/` directory contains domain invariants - changes here affect the entire system.
 
 ## 📦 Dependencies
 - If you need a new library, add it to `requirements.txt`.
