@@ -14,7 +14,13 @@ The codebase has undergone a targeted remediation cycle to address critical issu
 - **Database Unification**: A migration script (`scripts/migrate_to_unified_db.py`) was introduced to merge `pending_trades.db` and other stores into `trading_state.db`.
 - **Module Renaming**: `core/domain/models.py` was renamed to `core/domain/entities.py` to resolve Mypy name conflicts and align with DDD principles.
 
+### 4. Security & Hardening (Jan 2026)
+- **Numerical Resilience**: Hardened `AdaptiveRiskManager` and `PerformanceTracker` against `NaN` propagation (RC-8).
+- **Execution Audit**: Completed the Autonomous Codebase Validation & Hardening Protocol (Time: 2025-12-31T19:14:00 to 2026-01-01T06:20:00).
+- **Tooling Verification**: Verified all core, data, and execution test suites in project `venv` with 100% pass rate.
+
 ### 3. Git History Highlights
+- `7e12b87`: security(risk): implement defensive NaN validation in AdaptiveRiskManager
 - `aa80cfe`: Final merge of live trading orchestration fixes.
 - `97e2b71`: Core remediation commit (regime consolidation, DB migration).
 - `febd63e`: Mypy fixes and model/entity renaming.
