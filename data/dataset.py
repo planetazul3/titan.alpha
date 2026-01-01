@@ -126,7 +126,8 @@ class DerivDataset(Dataset):
 
     def _compute_hash(self, files: list[Path]) -> str:
         """Compute hash of file states (names + mtimes + sizes) + config."""
-        hasher = hashlib.md5()
+        # MD5 used for cache key generation, not security (usedforsecurity=False)
+        hasher = hashlib.md5(usedforsecurity=False)
         
         # Audit Fix: Include configuration parameters in hash
         # If lookahead, seq_len, or thresholds change, cache must be rebuilt
@@ -406,12 +407,12 @@ class DerivDataset(Dataset):
         targets = self._generate_labels(candle_idx)
 
         return {
-            "ticks": torch.from_numpy(features["ticks"]),
-            "candles": torch.from_numpy(features["candles"]),
-            "vol_metrics": torch.from_numpy(features["vol_metrics"]),
+            "ticks": torch.from_numpy(features["ticks"].copy()),
+            "candles": torch.from_numpy(features["candles"].copy()),
+            "vol_metrics": torch.from_numpy(features["vol_metrics"].copy()),
             "targets": targets,
-            "ticks_mask": torch.from_numpy(tick_mask),
-            "candles_mask": torch.from_numpy(candle_mask),
+            "ticks_mask": torch.from_numpy(tick_mask.copy()),
+            "candles_mask": torch.from_numpy(candle_mask.copy()),
         }
 
     def _generate_labels(self, candle_idx: int) -> dict[str, torch.Tensor]:

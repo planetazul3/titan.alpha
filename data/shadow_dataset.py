@@ -151,11 +151,11 @@ class ShadowTradeDataset(Dataset):
                 # STAYS_BETWEEN target: 1 = Stays inside, 0 = Goes outside
                 targets["range"] = 1.0 if outcome else 0.0
         
-        # 4. Return Tensors
+        # 4. Return Tensors (use .copy() to ensure writable arrays for PyTorch)
         return {
-            "ticks": torch.from_numpy(features["ticks"]),
-            "candles": torch.from_numpy(features["candles"]),
-            "vol_metrics": torch.from_numpy(features["vol_metrics"]),
+            "ticks": torch.from_numpy(features["ticks"].copy()),
+            "candles": torch.from_numpy(features["candles"].copy()),
+            "vol_metrics": torch.from_numpy(features["vol_metrics"].copy()),
             # Dataset Protocol expects 'targets' to be a Tensor or Dict[str, Tensor]
             # Here we follow the Dict[str, Tensor] pattern
             "targets": cast(dict[str, torch.Tensor], {k: torch.tensor(v, dtype=torch.float32) for k, v in targets.items()})
