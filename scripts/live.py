@@ -56,7 +56,7 @@ try:
     from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
     TRACING_ENABLED = True
-    tracer = trace.get_tracer(__name__)
+    tracer: Any = trace.get_tracer(__name__)
 except ImportError:
     TRACING_ENABLED = False
     tracer = None

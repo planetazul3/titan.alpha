@@ -222,7 +222,8 @@ class FeatureBuilder:
             f"candle_feats={self.schema.candle_features}:"
             f"vol_feats={self.schema.volatility_features}"
         )
-        return hashlib.md5(config_str.encode()).hexdigest()
+        # MD5 used for config fingerprinting, not security
+        return hashlib.md5(config_str.encode(), usedforsecurity=False).hexdigest()
 
 
 # Singleton-like access for convenience (initialized on first use)

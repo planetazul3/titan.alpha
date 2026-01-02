@@ -71,3 +71,16 @@ class SQLiteIdempotencyStore:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("DELETE FROM executed_signals WHERE executed_at < ?", (cutoff,))
             logger.info(f"Cleaned up {cursor.rowcount} old idempotency records")
+
+    # Async wrappers for use in async context (executor.py)
+    async def get_contract_id_async(self, signal_id: str) -> Optional[str]:
+        """Async wrapper for get_contract_id."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_contract_id, signal_id)
+
+    async def record_execution_async(self, signal_id: str, contract_id: str, symbol: str = "unknown"):
+        """Async wrapper for record_execution."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.record_execution(signal_id, contract_id, symbol))

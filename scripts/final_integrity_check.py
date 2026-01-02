@@ -14,7 +14,7 @@ from data.ingestion.versioning import load_metadata, verify_checksum
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-def check_partitions(data_dir: Path, data_type: str, granularity: int = None):
+def check_partitions(data_dir: Path, data_type: str, granularity: int | None = None):
     """Verify integrity of all parquet partitions for a data type."""
     
     label = f"{data_type}" + (f"_{granularity}" if granularity else "")

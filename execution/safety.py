@@ -105,7 +105,7 @@ class SafeTradeExecutor:
         self._symbol_minute_trades: dict[str, list[float]] = {}
         
         if TRACING_ENABLED:
-            self.tracer = trace.get_tracer(__name__)
+            self.tracer: Any = trace.get_tracer(__name__)
         else:
             self.tracer = None
         

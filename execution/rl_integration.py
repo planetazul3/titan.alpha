@@ -121,7 +121,8 @@ class RLTradingIntegration:
         """
         actor = TradingActor(state_dim=state_dim, action_dim=1)
         
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        # Security: Use weights_only=True as checkpoint contains only state_dict
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         if "actor" in checkpoint:
             actor.load_state_dict(checkpoint["actor"])
         else:

@@ -182,13 +182,12 @@ def create_enhanced_executor(
     """
     from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
     
-    # Create safety config from settings
+    # Create safety config from settings (only use fields that exist in ExecutionSafetyConfig)
     config = ExecutionSafetyConfig(
         max_trades_per_minute=getattr(settings.execution_safety, 'max_trades_per_minute', 5),
         max_trades_per_minute_per_symbol=getattr(settings.execution_safety, 'max_trades_per_minute_per_symbol', 3),
         max_daily_loss=getattr(settings.execution_safety, 'max_daily_loss', 50.0),
         max_stake_per_trade=getattr(settings.execution_safety, 'max_stake_per_trade', 10.0),
-        max_consecutive_failures=getattr(settings.execution_safety, 'max_consecutive_failures', 10),
     )
     
     # Create stake resolver if position sizer provided
@@ -196,11 +195,14 @@ def create_enhanced_executor(
     if position_sizer:
         stake_resolver = position_sizer.create_stake_resolver()
     
+    # Provide default state file if not specified
+    actual_state_file = state_file if state_file is not None else Path("data_cache/safety_state.db")
+    
     return SafeTradeExecutor(
-        executor=raw_executor,
+        inner_executor=raw_executor,
         config=config,
+        state_file=actual_state_file,
         stake_resolver=stake_resolver,
-        state_file=state_file,
     )
 
 

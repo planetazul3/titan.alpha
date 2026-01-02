@@ -43,7 +43,7 @@ class ExecutionLogger:
             {"contract_type": contract_type, "direction": direction, "stake": stake}
         )
 
-    def log_trade_success(self, signal_id: str, contract_id: int, entry_price: float):
+    def log_trade_success(self, signal_id: str, contract_id: str, entry_price: float):
         self.log_event(
             "success", 
             signal_id, 
