@@ -119,7 +119,7 @@ class DerivTradeExecutor:
                 return TradeResult(success=True)
 
             # 6. Structured Log Attempt (REC-001)
-            execution_logger.log_trade_attempt(signal.signal_id, signal.contract_type, signal.direction, amount)
+            execution_logger.log_trade_attempt(signal.signal_id, signal.contract_type, signal.direction or "UNKNOWN", amount)
 
             # 7. Execute via Deriv API
             # Fetch barriers from metadata
@@ -143,7 +143,8 @@ class DerivTradeExecutor:
                 
                 # Record in idempotency store
                 if self.idempotency_store:
-                    await self.idempotency_store.record_execution_async(signal.signal_id, contract_id)
+                    symbol = signal.metadata.get("symbol", "unknown")
+                    await self.idempotency_store.record_execution_async(signal.signal_id, contract_id, symbol)
                 
                 self._executed_count += 1
                 self._clear_failure_window()  # Reset on success

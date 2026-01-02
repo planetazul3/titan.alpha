@@ -103,7 +103,7 @@ class ShadowTradeResolver:
         self.candle_interval_seconds = self._parse_timeframe_to_seconds(timeframe)
         
         if TRACING_ENABLED:
-            self.tracer = trace.get_tracer(__name__)
+            self.tracer: Any = trace.get_tracer(__name__)
         else:
             self.tracer = None
             

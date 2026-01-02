@@ -97,7 +97,7 @@ class DecisionEngine:
         )
         
         if TRACING_ENABLED:
-            self.tracer = trace.get_tracer(__name__)
+            self.tracer: Any = trace.get_tracer(__name__)
         else:
             self.tracer = None
         self._stats = {

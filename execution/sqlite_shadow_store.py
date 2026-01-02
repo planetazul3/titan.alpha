@@ -439,6 +439,8 @@ class SQLiteShadowStore:
         
         # Helper to ensure cursor is closed if iteration is interrupted
         try:
+            # nosec B608 - where_clause is built from code-defined conditions (resolved_only,
+            # unresolved_only, time range), not user input. Values use parameterized query.
             cursor = conn.execute(
                 f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params
             )
