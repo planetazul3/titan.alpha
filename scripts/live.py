@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config.settings import load_settings
+from data.ingestion.deriv_adapter import DerivEventAdapter
 from data.buffer import MarketDataBuffer
 from observability.calibration import CalibrationMonitor
 from execution.sqlite_shadow_store import SQLiteShadowStore  # Full context capture
@@ -377,6 +378,15 @@ async def run_live_trading(args):
         console_log("=" * 60, "INFO")
         console_log("STARTING LIVE STREAMING (BUFFERING)...", "DATA")
         logger.info("Creating normalized event bus...")
+        
+        # Initialize Shadow Trade Resolver
+        from execution.shadow_resolution import ShadowTradeResolver
+        resolver = ShadowTradeResolver(
+             shadow_store=shadow_store, 
+             client=client, 
+             timeframe=settings.trading.timeframe
+        )
+        
         event_bus = DerivEventAdapter(client)  # Implements MarketEventBus
         symbol = settings.trading.symbol
 
@@ -437,6 +447,9 @@ async def run_live_trading(args):
             
             nonlocal candle_count, inference_count
             first_candle = True
+            import time
+            last_inference_time = 0.0
+
             
             async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
                 try:
@@ -685,9 +698,105 @@ async def run_live_trading(args):
             asyncio.create_task(maintenance_task()),
         ]
 
+        # ══════════════════════════════════════════════════════════════════════
+        # SYNCHRONIZATION PHASE
+        # 1. Background tasks are already buffering input
+        # 2. Fetch historical data to fill buffer
+        # 3. Replay buffered data
+        # 4. Enable real-time processing
+        # ══════════════════════════════════════════════════════════════════════
+        console_log("Synchronizing with market history...", "WAIT")
+        try:
+            # Fetch history
+            hist_ticks = await client.get_historical_ticks(count=settings.data_shapes.sequence_length_ticks)
+            hist_candles = await client.get_historical_candles(
+                count=settings.data_shapes.sequence_length_candles, 
+                interval=60
+            )
+            
+            console_log(f"Fetched history: {len(hist_ticks)} ticks, {len(hist_candles)} candles", "INFO")
+            
+            # Populate buffer with history
+            for price in hist_ticks:
+                buffer.append_tick(price)
+            
+            for c in hist_candles:
+                # Convert dict to CandleEvent-like structure or pass dict if buffer handles it
+                # Buffer expects CandleEvent objects usually? 
+                # Let's check update_candle. It expects CandleEvent.
+                # Client returns dicts. We need to convert.
+                from data.events import CandleEvent
+                ce = CandleEvent(
+                    symbol=symbol,
+                    open=float(c["open"]),
+                    high=float(c["high"]),
+                    low=float(c["low"]),
+                    close=float(c["close"]),
+                    volume=0.0,
+                    timestamp=datetime.fromtimestamp(c["epoch"], tz=timezone.utc),
+                    metadata={"source": "history"}
+                )
+                buffer.update_candle(ce)
+                
+            console_log("History buffered. Replaying startup buffer...", "INFO")
+            
+            # Replay buffered live events
+            # Note: We are modifying buffer while background tasks are appending to *startup_buffer*
+            # We need to act atomically or just process what we have and then switch flag
+            
+            # Better approach:
+            # 1. Process current startup buffer
+            # 2. Set complete flag (background tasks will switch to direct buffer append)
+            # 3. BUT race condition: between processing and setting flag, new items might be added to startup buffer?
+            #    Yes. 
+            # safe way:
+            #   Iterate startup buffer.
+            #   Set flag.
+            #   Wait, if we set flag, background tasks write to 'buffer'.
+            #   But what if we missed some items in 'startup_buffer' that were added strictly before flag set but after we iterated?
+            #
+            #   Actually, the background task writes to startup_buffer IF not set.
+            #   So we should:
+            #   1. Lock mechanism? Or just accepting a small race is hard.
+            #   Python asyncio is single threaded. 
+            #   We can consume the list, clear it, check if empty, then set flag?
+            #   No, while we are here, background task is NOT running (cooperative multitasking).
+            #   So we can safely drain the list and set the flag without race condition!
+            #   Because we are in 'await' free block here (except if we await something).
+            
+            replay_ticks = list(startup_buffer_ticks) # Copy
+            replay_candles = list(startup_buffer_candles)
+            
+            for t_price in replay_ticks:
+                buffer.append_tick(t_price)
+                tick_count += 1
+                
+            for c_event in replay_candles:
+                buffer.update_candle(c_event)
+                candle_count += 1
+                
+            # Clear startup buffers to free memory
+            startup_buffer_ticks.clear()
+            startup_buffer_candles.clear()
+            
+            # ENABLE LIVE PROCESSING
+            startup_complete.set()
+            console_log(f"Synchronization complete. Replayed {len(replay_ticks)} ticks.", "SUCCESS")
+            logger.info("Startup synchronization complete. Live processing enabled.")
+
+        except Exception as e:
+            logger.critical(f"Synchronization failed: {e}")
+            console_log(f"Sync failed: {e}", "ERROR")
+            # Cancel tasks and exit
+            for t in tasks: t.cancel()
+            return 1
+
+
         if not args.test:
              # Add real trade tracker task if not in test mode
-             tasks.append(asyncio.create_task(real_trade_tracker.start()))
+             # RealTradeTracker does not have a start method, it works proactively
+             # tasks.append(asyncio.create_task(real_trade_tracker.start()))
+             pass
         
         # Monitor tasks
         # If any task fails, we should probably stop the system
