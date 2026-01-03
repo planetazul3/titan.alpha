@@ -242,6 +242,17 @@ class DerivClient:
 
                 # Start keep-alive loop
                 self._keep_alive_task = asyncio.create_task(self._keep_alive_loop())
+                
+                # H10: Garbage collection on connect (Clean slate)
+                try:
+                     # Forget any lingering streams from previous sessions if they exist on the server context
+                     # This is a best-effort cleanup
+                     await self.api.forget_all(["proposal", "proposal_open_contract", "ticks", "candles"])
+                     logger.debug("GC: Cleared lingering server streams on connect")
+                except Exception as e:
+                     # Non-critical, just log
+                     logger.debug(f"GC: clean-slate forget failed (expected if clean): {e}")
+                
                 return
 
             except APIError as e:
@@ -267,6 +278,16 @@ class DerivClient:
 
         if self.api:
             try:
+                # H10: GC on disconnect
+                logger.info("GC: Forgetting all streams before disconnect...")
+                try:
+                    await asyncio.wait_for(
+                        self.api.forget_all(["proposal", "proposal_open_contract", "ticks", "candles"]),
+                        timeout=5.0
+                    )
+                except Exception as e:
+                     logger.warning(f"GC: Error during disconnect cleanup: {e}")
+                
                 await self.api.clear()
                 logger.info("Disconnected from Deriv API")
             except Exception as e:
@@ -694,15 +715,26 @@ class DerivClient:
         if barrier:
             proposal_req["barrier"] = barrier
 
-        prop = await self.api.proposal(proposal_req)
-        prop_id = prop["proposal"]["id"]
+        prop_id = None
+        try:
+            prop = await self.api.proposal(proposal_req)
+            prop_id = prop["proposal"]["id"]
 
-        logger.info(f"Buying proposal {prop_id} with max price: {amount}")
-        # M02: Strict slippage protection. For basis='stake', price should typically equal amount.
-        # We set limit exactly to amount to reject any unexpected premium/fees.
-        buy = await self.api.buy({"buy": prop_id, "price": amount})
+            logger.info(f"Buying proposal {prop_id} with max price: {amount}")
+            # M02: Strict slippage protection. For basis='stake', price should typically equal amount.
+            # We set limit exactly to amount to reject any unexpected premium/fees.
+            buy = await self.api.buy({"buy": prop_id, "price": amount})
 
-        return cast(dict[str, Any], buy["buy"])
+            return cast(dict[str, Any], buy["buy"])
+        finally:
+            # H10: Garbage collection - forget the proposal stream to prevent leaks
+            if prop_id:
+                try:
+                    # Use forget(), not forget_all(), for specific ID
+                    await self.api.forget(prop_id)
+                    logger.debug(f"GC: Forgot proposal {prop_id}")
+                except Exception as e:
+                    logger.warning(f"GC: Failed to forget proposal {prop_id}: {e}")
 
     async def get_open_contracts(self) -> list[dict[str, Any]]:
         """
