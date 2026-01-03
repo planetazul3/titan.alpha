@@ -99,10 +99,11 @@ class SafeTradeExecutor:
         self.stake_resolver = stake_resolver
         self._policy = policy
         
-        # In-memory short-term rate limits (reset on restart is acceptable for per-minute)
-        # For daily limits, we check the DB.
-        self._minute_trades: list[float] = []
-        self._symbol_minute_trades: dict[str, list[float]] = {}
+        # Concurrency safety
+        self._state_lock = asyncio.Lock()
+        
+        # Cleanup task reference
+        self._cleanup_task = None
         
         if TRACING_ENABLED:
             self.tracer: Any = trace.get_tracer(__name__)
@@ -130,24 +131,38 @@ class SafeTradeExecutor:
         self._policy = policy
         
         # Register global rate limit veto
+        # IMPORTANT: Policy checks are sync, but store access is typically async or blocking.
+        # We use a sync wrapper around the blocking store call here because Policy expects sync veto checks currently.
+        # This is a bit of a latency hit, but necessary for correctness until Policy is fully async.
+        # However, Policy.check_vetoes calls are usually inside async methods in DecisionEngine.
+        # Let's check how check_vetoes is called. It seems it is called synchronously in process_model_output.
+        # So we MUST block here if we want to check DB.
+        # BUT: For performance, we might want to query this asynchronously before calling policy? 
+        # Refactoring Policy to be async is a larger task.
+        # For now, we will use the synchronous store method inside this lambda.
+        # Note: self.store.get_trades_in_window is thread-local safe but blocking SQLite IO.
+        
         policy.register_veto(
             level=VetoPrecedence.RATE_LIMIT,
-            check_fn=lambda: not self._check_global_rate_limit(),
-            reason=lambda: f"Global rate limit: {len(self._minute_trades)}/{self.config.max_trades_per_minute} per minute",
-            details_fn=lambda: {
-                "trades_this_minute": len(self._minute_trades),
+            check_fn=lambda: self.store.get_trades_in_window(None, 60.0) >= self.config.max_trades_per_minute,
+            reason=lambda: f"Global rate limit hit (max {self.config.max_trades_per_minute}/min)",
+             details_fn=lambda: {
                 "limit": self.config.max_trades_per_minute,
+                # Note: getting count again is redundant but safe
             }
         )
         
-        logger.info("SafeTradeExecutor registered rate-limit vetoes with ExecutionPolicy")
+        logger.info("SafeTradeExecutor registered persistent rate-limit vetoes with ExecutionPolicy")
     
-    def _check_global_rate_limit(self) -> bool:
-        """Check if global rate limit allows trading."""
-        now = datetime.now(timezone.utc).timestamp()
-        window = 60.0
-        self._minute_trades = [t for t in self._minute_trades if now - t < window]
-        return len(self._minute_trades) < self.config.max_trades_per_minute
+    async def _check_global_rate_limit(self) -> bool:
+        """
+        Check if global rate limit allows trading.
+        Note: This is now async because it hits the DB, but register_with_policy uses the sync version.
+        Inside execute(), we should use this async version with lock.
+        """
+        async with self._state_lock:
+             count = await self.store.get_trades_in_window_async(None, 60.0)
+             return count < self.config.max_trades_per_minute
 
     async def execute(self, signal: TradeSignal) -> TradeResult:
         """
@@ -179,7 +194,9 @@ class SafeTradeExecutor:
             return self._reject("Daily limits exceeded")
 
         # 3. Check Short-Term Rate Limits (symbol-specific, always local)
-        if not self._check_rate_limits(get_symbol_from_signal(signal)):
+        # Assuming get_symbol_from_signal is available globally or imported
+        symbol = get_symbol_from_signal(signal)
+        if not await self._check_rate_limits(symbol):
              return self._reject("Rate limit exceeded")
              
         # 4. Check Stake Amount (if resolver provided)
@@ -209,7 +226,7 @@ class SafeTradeExecutor:
         # 5. Execute with Retries
         if self.tracer:
             with self.tracer.start_as_current_span("safety_executor.execute") as span:
-                span.set_attribute("symbol", get_symbol_from_signal(signal))
+                span.set_attribute("symbol", symbol)
                 span.set_attribute("contract_type", str(signal.contract_type))
                 span.set_attribute("stake", signal.metadata.get("stake", 0.0))
                 
@@ -240,25 +257,26 @@ class SafeTradeExecutor:
             
         return True
 
-    def _check_rate_limits(self, symbol: str) -> bool:
-        """Check per-minute limits."""
-        now = datetime.now(timezone.utc).timestamp()
-        window = 60.0
-        
-        # cleanup
-        self._minute_trades = [t for t in self._minute_trades if now - t < window]
-        if symbol in self._symbol_minute_trades:
-             self._symbol_minute_trades[symbol] = [t for t in self._symbol_minute_trades[symbol] if now - t < window]
-        
-        # check global
-        if len(self._minute_trades) >= self.config.max_trades_per_minute:
-            return False
-            
-        # check symbol
-        if symbol and len(self._symbol_minute_trades.get(symbol, [])) >= self.config.max_trades_per_minute_per_symbol:
-            return False
-            
-        return True
+    async def _check_rate_limits(self, symbol: str) -> bool:
+        """
+        Check per-minute limits using persistent store.
+        """
+        # We use a Lock to prevent race conditions during check/update cycles
+        # though strictly speaking for just checking here it's read-only.
+        # But to ensure sequential consistency if we were doing check-then-act atomically.
+        async with self._state_lock:
+             # Check Global
+             global_count = await self.store.get_trades_in_window_async(None, 60.0)
+             if global_count >= self.config.max_trades_per_minute:
+                 return False
+                 
+             # Check Symbol
+             if symbol:
+                 symbol_count = await self.store.get_trades_in_window_async(symbol, 60.0)
+                 if symbol_count >= self.config.max_trades_per_minute_per_symbol:
+                     return False
+                     
+             return True
 
     async def _execute_with_retry(self, signal: TradeSignal) -> TradeResult:
         """Execute with exponential backoff on business logic errors only.
@@ -333,11 +351,9 @@ class SafeTradeExecutor:
         """Update persistent and memory state."""
         now = datetime.now(timezone.utc).timestamp()
         
-        # Memory (Rate Limits)
-        self._minute_trades.append(now)
-        if symbol not in self._symbol_minute_trades:
-            self._symbol_minute_trades[symbol] = []
-        self._symbol_minute_trades[symbol].append(now)
+        # Persistence (Trade Timestamp)
+        # Using the async wrapper we added to safety_store
+        await self.store.record_trade_timestamp_async(symbol, now)
         
         # Persistence (Daily Stats)
         # H09: Async update

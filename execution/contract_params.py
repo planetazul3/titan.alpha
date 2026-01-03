@@ -23,9 +23,9 @@ class ContractDurationResolver:
         Returns:
             Tuple of (duration_value, duration_unit)
         """
-        # We use the shadow_trade configuration as the source of truth
+        # We use the centralized contracts configuration as the source of truth
         # for both real and shadow trades to ensure perfect alignment.
-        config = self.settings.shadow_trade
+        config = self.settings.contracts
         
         if contract_type == CONTRACT_TYPES.RISE_FALL:
             return config.duration_rise_fall, "m"

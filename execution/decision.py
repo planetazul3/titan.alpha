@@ -502,7 +502,15 @@ class DecisionEngine:
             
         try:
             _, daily_pnl = await self.safety_store.get_daily_stats_async()
-            self._current_daily_pnl = daily_pnl
+            
+            # Centralized validation of loaded P&L
+            from utils.numerical_validation import ensure_finite
+            self._current_daily_pnl = ensure_finite(
+                daily_pnl, 
+                "DecisionEngine.sync_pnl", 
+                default=0.0
+            ) # Fallback to 0.0 P&L if corrupt
+            
             self._last_safety_sync = now
         except Exception as e:
             logger.error(f"Failed to sync safety state: {e}")

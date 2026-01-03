@@ -28,6 +28,7 @@ from typing import Any, cast
 
 from execution.shadow_store import SHADOW_STORE_SCHEMA_VERSION, ShadowTradeRecord
 from execution.migrations import MigrationRunner, get_shadow_store_migrations
+from execution.sqlite_mixin import SQLiteTransactionMixin
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 SQLITE_SCHEMA_VERSION = 4  # C01: Added resolution_context column
 
 
-class SQLiteShadowStore:
+class SQLiteShadowStore(SQLiteTransactionMixin):
     """
     SQLite-backed shadow trade store with atomic operations.
 
@@ -98,12 +99,7 @@ class SQLiteShadowStore:
         Args:
             db_path: Path to SQLite database file
         """
-        self._db_path = Path(db_path)
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Thread-local storage for connections
-        self._local = threading.local()
-        self._write_lock = threading.Lock()
+        super().__init__(db_path)
 
         # Initialize schema via migrations
         self._init_migrations()
@@ -118,29 +114,7 @@ class SQLiteShadowStore:
         """Return database path for API compatibility with ShadowTradeStore."""
         return self._db_path
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Get thread-local database connection."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=30.0)
-            # Enable WAL mode for better concurrency
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.row_factory = sqlite3.Row
-            self._local.conn = conn
-        return cast(sqlite3.Connection, self._local.conn)
 
-    @contextmanager
-    def _transaction(self):
-        """Context manager for atomic transactions."""
-        conn = self._get_connection()
-        with self._write_lock:
-            try:
-                yield conn
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
 
     def _init_migrations(self) -> None:
         """Initialize database schema via migrations."""
@@ -605,11 +579,7 @@ class SQLiteShadowStore:
             "storage_backend": "sqlite",
         }
 
-    def close(self) -> None:
-        """Close database connection."""
-        if hasattr(self._local, "conn") and self._local.conn:
-            self._local.conn.close()
-            self._local.conn = None
+
 
     @classmethod
     def from_ndjson(cls, ndjson_path: Path, db_path: Path) -> "SQLiteShadowStore":

@@ -270,22 +270,15 @@ class CalibrationConfig(BaseModel):
     )
 
 
-class ShadowTradeConfig(BaseModel):
-    """Shadow trade configuration.
+class ContractConfig(BaseModel):
+    """Contract duration configuration.
     
-    Controls shadow trade tracking and resolution behavior.
-    
-    Attributes:
-        duration_minutes: Default duration in minutes for shadow trade contracts
-        duration_rise_fall: Duration for RISE_FALL contracts (minutes)
-        duration_touch: Duration for TOUCH/NO_TOUCH contracts (minutes)
-        duration_range: Duration for STAYS_BETWEEN contracts (minutes)
-        min_probability_track: Minimum probability to track as shadow trade
+    Centralized source of truth for all contract durations (Real and Shadow).
     """
     
     # C02 Fix: Centralized duration configuration per contract type
     duration_minutes: int = Field(
-        default=1, description="Default shadow trade duration in minutes", ge=1, le=60
+        default=1, description="Default contract duration in minutes", ge=1, le=60
     )
     duration_rise_fall: int = Field(
         default=1, description="Duration for RISE_FALL contracts (minutes)", ge=1, le=60
@@ -296,6 +289,18 @@ class ShadowTradeConfig(BaseModel):
     duration_range: int = Field(
         default=5, description="Duration for STAYS_BETWEEN contracts (minutes)", ge=1, le=60
     )
+
+
+class ShadowTradeConfig(BaseModel):
+    """Shadow trade configuration.
+    
+    Controls shadow trade tracking behavior.
+    
+    Attributes:
+        min_probability_track: Minimum probability to track as shadow trade
+        staleness_threshold_minutes: Trades older than this are flagged as stale
+    """
+    
     min_probability_track: float = Field(
         default=0.45, description="Minimum probability to track shadow trade", ge=0.0, le=1.0
     )
@@ -409,6 +414,7 @@ class Settings(BaseSettings):
     data_shapes: DataShapes
     execution_safety: ExecutionSafety = Field(default_factory=ExecutionSafety)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
+    contracts: ContractConfig = Field(default_factory=ContractConfig)
     shadow_trade: ShadowTradeConfig = Field(default_factory=ShadowTradeConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)

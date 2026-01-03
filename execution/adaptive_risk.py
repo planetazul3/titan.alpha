@@ -97,10 +97,22 @@ class PerformanceTracker:
             pnl: Profit/loss from trade
             current_equity: Current account equity
         """
-        import math
-        if not math.isfinite(pnl):
-            logger.warning(f"Rejecting non-finite pnl: {pnl}")
-            return
+        # Centralized validation
+        from utils.numerical_validation import ensure_finite
+        
+        # Validate P&L (default safely to 0.0)
+        pnl = ensure_finite(pnl, "PerformanceTracker.pnl", default=0.0)
+        
+        # Validate Equity (default to existing peak to avoid drawdown spikes, or 0 if none)
+        if current_equity is not None:
+             # If bad equity comes in, use peak equity to 'flatten' the curve rather than crash it
+             # or use 0.0 if we have no history.
+             safe_equity_default = self._peak_equity if self._peak_equity > 0 else 0.0
+             current_equity = ensure_finite(
+                 current_equity, 
+                 "PerformanceTracker.current_equity", 
+                 default=safe_equity_default
+             )
 
         self._returns.append(pnl)
         
@@ -110,10 +122,6 @@ class PerformanceTracker:
             self._consecutive_losses = 0
 
         if current_equity is not None:
-            if not math.isfinite(current_equity):
-                logger.warning(f"Rejecting non-finite equity: {current_equity}")
-                return
-
             if current_equity > self._peak_equity:
                 self._peak_equity = current_equity
             
@@ -139,8 +147,11 @@ class PerformanceTracker:
         
         # Approximate annualization (assume ~10 trades/day, 252 days/year)
         sharpe = (mean_return - risk_free_rate) / std_return
-        return float(sharpe * np.sqrt(252 * 10))
-    
+        
+        from utils.numerical_validation import ensure_finite
+        result = float(sharpe * np.sqrt(252 * 10))
+        return ensure_finite(result, "SharpeRatio", default=0.0)
+
     def get_win_rate(self) -> float:
         """Get rolling win rate."""
         if not self._returns:
@@ -150,7 +161,8 @@ class PerformanceTracker:
     
     def get_drawdown(self) -> float:
         """Get current drawdown."""
-        return self._current_drawdown
+        from utils.numerical_validation import ensure_finite
+        return ensure_finite(self._current_drawdown, "Drawdown", default=0.0)
     
     def get_consecutive_losses(self) -> int:
         """Get current consecutive losses."""
@@ -172,7 +184,9 @@ class PerformanceTracker:
         
         if losses < 1e-8:
             return 100.0 if gains > 0 else 1.0  # Cap at 100x instead of inf
-        return float(gains / losses)
+            
+        from utils.numerical_validation import ensure_finite
+        return ensure_finite(float(gains / losses), "ProfitFactor", default=1.0)
 
 
 class AdaptiveRiskManager:
@@ -245,9 +259,14 @@ class AdaptiveRiskManager:
         """Load state from persistent store."""
         try:
             metrics = self.state_store.get_risk_metrics()
+            
+            # Use centralized validation for loaded metrics
+            from utils.numerical_validation import validate_numeric_dict
+            metrics = validate_numeric_dict(metrics)
+            
             self.performance._current_drawdown = metrics.get("current_drawdown", 0.0)
             self.performance._peak_equity = metrics.get("peak_equity", 0.0)
-            self.performance._consecutive_losses = metrics.get("consecutive_losses", 0)
+            self.performance._consecutive_losses = int(metrics.get("consecutive_losses", 0))
             logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}, losses={self.performance._consecutive_losses}")
         except Exception as e:
             logger.error(f"Failed to load risk state: {e}")
@@ -256,11 +275,18 @@ class AdaptiveRiskManager:
         """Save state to persistent store."""
         if not self.state_store:
             return
+        
+        # Ensure values are finite before saving
+        from utils.numerical_validation import ensure_finite
+        
         try:
+            drawdown = ensure_finite(self.performance.get_drawdown(), "drawdown", 0.0)
+            peak_equity = ensure_finite(self.performance._peak_equity, "peak_equity", 0.0)
+            
             self.state_store.update_risk_metrics(
-                drawdown=self.performance.get_drawdown(),
+                drawdown=drawdown,
                 losses=self.performance.get_consecutive_losses(),
-                peak_equity=self.performance._peak_equity
+                peak_equity=peak_equity
             )
         except Exception as e:
             logger.error(f"Failed to save risk state: {e}")
@@ -277,10 +303,9 @@ class AdaptiveRiskManager:
             pnl: Profit/loss from trade
             current_equity: Current account equity
         """
-        import math
-        if not math.isfinite(pnl):
-            logger.error(f"Received non-finite pnl in record_trade: {pnl}. Skipping state update.")
-            return
+        from utils.numerical_validation import ensure_finite
+        
+        pnl = ensure_finite(pnl, "AdaptiveRiskManager.pnl", default=0.0)
 
         self._daily_pnl += pnl
         self.performance.record(pnl, current_equity)

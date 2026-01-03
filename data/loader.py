@@ -113,6 +113,16 @@ def create_dataloaders(
     if pin_memory:
         logger.info("Enabling pin_memory for CUDA")
 
+    # Audit Fix (Issue 2): Validate Train/Val Split Consistency
+    from utils.data_validation import validate_split_consistency
+    try:
+        # Enforce strict forward validation (Train < Val)
+        validate_split_consistency(train_data, val_data, strict_forward=True)
+    except ValueError as e:
+        logger.error(f"Data Split Validation Failed: {e}")
+        # We raise error to prevent training on leaked data
+        raise
+
     # Create datasets
     logger.info(f"Creating training dataset from {train_data}")
     train_ds = DerivDataset(train_data, settings, mode="train")

@@ -1,4 +1,3 @@
-import sqlite3
 import logging
 import time
 import threading
@@ -6,9 +5,12 @@ from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timezone
 
+
+from execution.sqlite_mixin import SQLiteTransactionMixin
+
 logger = logging.getLogger(__name__)
 
-class SQLiteSafetyStateStore:
+class SQLiteSafetyStateStore(SQLiteTransactionMixin):
     """
     SQLite backend for persisting safety and risk state.
     
@@ -27,43 +29,38 @@ class SQLiteSafetyStateStore:
         Args:
             db_path: Path to SQLite database file
         """
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # R07: Thread-local storage for connection pooling
-        self._local = threading.local()
+        super().__init__(db_path)
         
         self._init_db()
-    
-    def _get_connection(self) -> sqlite3.Connection:
-        """Get thread-local database connection (R07: Connection Pooling)."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn = conn
-        return self._local.conn  # type: ignore[no-any-return]
         
     def _init_db(self):
         """Create tables if they don't exist."""
         try:
-            conn = self._get_connection()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS kv_store (
-                    key TEXT PRIMARY KEY,
-                    value TEXT,
-                    updated_at REAL
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS daily_stats (
-                    date TEXT PRIMARY KEY,
-                    trade_count INTEGER DEFAULT 0,
-                    daily_pnl REAL DEFAULT 0.0,
-                    updated_at REAL
-                )
-            """)
-            conn.commit()
+            with self._transaction() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS kv_store (
+                        key TEXT PRIMARY KEY,
+                        value TEXT,
+                        updated_at REAL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_stats (
+                        date TEXT PRIMARY KEY,
+                        trade_count INTEGER DEFAULT 0,
+                        daily_pnl REAL DEFAULT 0.0,
+                        updated_at REAL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS trade_timestamps (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT,
+                        timestamp REAL
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trade_ts ON trade_timestamps(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trade_sym_ts ON trade_timestamps(symbol, timestamp)")
         except Exception as e:
             logger.error(f"Failed to initialize safety DB: {e}")
             raise
@@ -82,12 +79,11 @@ class SQLiteSafetyStateStore:
     def set_value(self, key: str, value: str):
         """Set simple key-value pair."""
         try:
-            conn = self._get_connection()
-            conn.execute(
-                "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
-                (key, str(value), time.time())
-            )
-            conn.commit()
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+                    (key, str(value), time.time())
+                )
         except Exception as e:
             logger.error(f"DB Write Error (set_value): {e}")
 
@@ -117,61 +113,127 @@ class SQLiteSafetyStateStore:
         """Increment daily trade counter for today."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            conn = self._get_connection()
-            conn.execute("""
-                INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
-                VALUES (?, 1, 0.0, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                    trade_count = trade_count + 1,
-                    updated_at = excluded.updated_at
-            """, (today, time.time()))
-            conn.commit()
+            with self._transaction() as conn:
+                conn.execute("""
+                    INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
+                    VALUES (?, 1, 0.0, ?)
+                    ON CONFLICT(date) DO UPDATE SET
+                        trade_count = trade_count + 1,
+                        updated_at = excluded.updated_at
+                """, (today, time.time()))
         except Exception as e:
             logger.error(f"DB Write Error (increment_daily_trade_count): {e}")
 
     def update_daily_pnl(self, pnl: float):
         """Add pnl to daily total."""
+        from utils.numerical_validation import ensure_finite
+        pnl = ensure_finite(pnl, "update_daily_pnl", default=0.0)
+        
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            conn = self._get_connection()
-            conn.execute("""
-                INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
-                VALUES (?, 0, ?, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                    daily_pnl = daily_pnl + excluded.daily_pnl,
-                    updated_at = excluded.updated_at
-            """, (today, pnl, time.time()))
-            conn.commit()
+            with self._transaction() as conn:
+                conn.execute("""
+                    INSERT INTO daily_stats (date, trade_count, daily_pnl, updated_at)
+                    VALUES (?, 0, ?, ?)
+                    ON CONFLICT(date) DO UPDATE SET
+                        daily_pnl = daily_pnl + excluded.daily_pnl,
+                        updated_at = excluded.updated_at
+                """, (today, pnl, time.time()))
         except Exception as e:
             logger.error(f"DB Write Error (update_daily_pnl): {e}")
+
+    def record_trade_timestamp(self, symbol: str, timestamp: float):
+        """Record a trade timestamp for rate limiting."""
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO trade_timestamps (symbol, timestamp) VALUES (?, ?)",
+                    (symbol, timestamp)
+                )
+        except Exception as e:
+             logger.error(f"DB Write Error (record_trade_timestamp): {e}")
+
+    def get_trades_in_window(self, symbol: str | None, window_seconds: float) -> int:
+        """
+        Count trades in the last window_seconds.
+        If symbol is None, counts GLOBAL trades.
+        """
+        import time
+        cutoff = time.time() - window_seconds
+        try:
+            conn = self._get_connection()
+            if symbol:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM trade_timestamps WHERE symbol = ? AND timestamp > ?",
+                    (symbol, cutoff)
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM trade_timestamps WHERE timestamp > ?",
+                    (cutoff,)
+                )
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"DB Read Error (get_trades_in_window): {e}")
+            return 0
+            
+    def prune_old_timestamps(self, max_age_seconds: float = 3600):
+        """Delete old timestamps to prevent bloat."""
+        import time
+        cutoff = time.time() - max_age_seconds
+        try:
+            with self._transaction() as conn:
+                conn.execute("DELETE FROM trade_timestamps WHERE timestamp < ?", (cutoff,))
+        except Exception as e:
+            logger.error(f"DB Write Error (prune_old_timestamps): {e}")
             
     # H04 Helpers for Adaptive Risk
     def get_risk_metrics(self) -> dict:
         """Retrieve persisted risk metrics."""
-        drawdown = float(self.get_value("risk_current_drawdown") or "0.0")
-        losses = int(self.get_value("risk_consecutive_losses") or "0")
-        peak_equity = float(self.get_value("risk_peak_equity") or "0.0")
-        return {
-            "current_drawdown": drawdown,
-            "consecutive_losses": losses,
-            "peak_equity": peak_equity
-        }
+        from utils.numerical_validation import ensure_finite
+        
+        try:
+            drawdown_raw = float(self.get_value("risk_current_drawdown") or "0.0")
+            losses_raw = int(self.get_value("risk_consecutive_losses") or "0")
+            peak_equity_raw = float(self.get_value("risk_peak_equity") or "0.0")
+            
+            drawdown = ensure_finite(drawdown_raw, "loaded_drawdown", 0.0)
+            losses = losses_raw # Integer doesn't need is_finite check usually but good to be safe if it was float
+            peak_equity = ensure_finite(peak_equity_raw, "loaded_peak_equity", 0.0)
+            
+            return {
+                "current_drawdown": drawdown,
+                "consecutive_losses": losses,
+                "peak_equity": peak_equity
+            }
+        except ValueError:
+             logger.error("Corrupt risk metrics in DB, returning defaults")
+             return {
+                "current_drawdown": 0.0,
+                "consecutive_losses": 0,
+                "peak_equity": 0.0
+            }
 
     def update_risk_metrics(self, drawdown: float, losses: int, peak_equity: float):
         """Persist risk metrics."""
+        from utils.numerical_validation import ensure_finite
+        
+        drawdown = ensure_finite(drawdown, "persisting_drawdown", 0.0)
+        peak_equity = ensure_finite(peak_equity, "persisting_peak_equity", 0.0)
+        
         try:
-            conn = self._get_connection()
             ts = time.time()
             data = [
                 ("risk_current_drawdown", str(drawdown), ts),
                 ("risk_consecutive_losses", str(losses), ts),
                 ("risk_peak_equity", str(peak_equity), ts)
             ]
-            conn.executemany(
-                "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
-                data
-            )
-            conn.commit()
+            with self._transaction() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+                    data
+                )
         except Exception as e:
             logger.error(f"DB Write Error (update_risk_metrics): {e}")
 
@@ -205,3 +267,21 @@ class SQLiteSafetyStateStore:
         import asyncio
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self.update_risk_metrics(drawdown, losses, peak_equity))
+
+    async def record_trade_timestamp_async(self, symbol: str, timestamp: float):
+        """Async version of record_trade_timestamp."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.record_trade_timestamp(symbol, timestamp))
+
+    async def get_trades_in_window_async(self, symbol: str | None, window_seconds: float) -> int:
+        """Async version of get_trades_in_window."""
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.get_trades_in_window(symbol, window_seconds))
+
+    async def prune_old_timestamps_async(self, max_age_seconds: float = 3600):
+         """Async version of prune_old_timestamps."""
+         import asyncio
+         loop = asyncio.get_running_loop()
+         await loop.run_in_executor(None, lambda: self.prune_old_timestamps(max_age_seconds))

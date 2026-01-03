@@ -31,7 +31,7 @@ from execution.sqlite_shadow_store import SQLiteShadowStore
 @pytest.fixture
 def mock_settings():
     """Create real settings for testing."""
-    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes, ShadowTradeConfig
+    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes, ShadowTradeConfig, ContractConfig
     
     trading = Trading.model_construct(
         symbol="R_100",
@@ -54,12 +54,14 @@ def mock_settings():
         sequence_length_ticks=100,
         sequence_length_candles=50
     )
-    shadow_trade = ShadowTradeConfig.model_construct(
-        min_probability_track=0.40,
+    contracts = ContractConfig.model_construct(
+        duration_minutes=1,
         duration_rise_fall=1,
         duration_touch=5,
-        duration_range=5,
-        duration_minutes=1
+        duration_range=5
+    )
+    shadow_trade = ShadowTradeConfig.model_construct(
+        min_probability_track=0.40
     )
     
     return Settings.model_construct(
@@ -67,6 +69,7 @@ def mock_settings():
         thresholds=thresholds,
         hyperparams=hyperparams,
         data_shapes=data_shapes,
+        contracts=contracts,
         shadow_trade=shadow_trade,
         environment="development"
     )
