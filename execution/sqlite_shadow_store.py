@@ -183,11 +183,11 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
 
         logger.debug(f"Appended shadow trade: {record.trade_id}")
 
-    async def append_async(self, record: ShadowTradeRecord) -> None:
+    async def append_async(self, record: ShadowTradeRecord, timeout: float = 5.0) -> None:
         """Async append."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.append(record))
+        await self.run_with_timeout(loop, self.append, timeout, record)
 
     def update_outcome(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float) -> bool:
         """
@@ -260,17 +260,17 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
                 return False
 
     # H08: Async Wrappers
-    async def update_outcome_async(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float) -> bool:
+    async def update_outcome_async(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float, timeout: float = 5.0) -> bool:
         """Async update outcome."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.update_outcome(trade, outcome, exit_price))
+        return await self.run_with_timeout(loop, self.update_outcome, timeout, trade, outcome, exit_price)
 
-    async def mark_stale_async(self, trade_id: str, exit_price: float) -> bool:
+    async def mark_stale_async(self, trade_id: str, exit_price: float, timeout: float = 5.0) -> bool:
         """Async mark stale."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.mark_stale(trade_id, exit_price))
+        return await self.run_with_timeout(loop, self.mark_stale, timeout, trade_id, exit_price)
 
     def update_resolution_context(self, trade_id: str, high: float, low: float, close: float) -> bool:
         """
@@ -321,20 +321,20 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
             return False
 
     async def update_resolution_context_async(
-        self, trade_id: str, high: float, low: float, close: float
+        self, trade_id: str, high: float, low: float, close: float, timeout: float = 5.0
     ) -> bool:
         """Async update resolution context."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.update_resolution_context(trade_id, high, low, close)
+        return await self.run_with_timeout(
+            loop, self.update_resolution_context, timeout, trade_id, high, low, close
         )
     
-    async def query_async(self, **kwargs) -> list[ShadowTradeRecord]:
+    async def query_async(self, timeout: float = 5.0, **kwargs) -> list[ShadowTradeRecord]:
         """Async query."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.query(**kwargs))
+        return await self.run_with_timeout(loop, self.query, timeout, **kwargs)
 
     def prune(self, retention_days: int = 30) -> int:
         """

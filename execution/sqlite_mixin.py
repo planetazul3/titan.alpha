@@ -72,6 +72,29 @@ class SQLiteTransactionMixin:
                 conn.rollback()
                 raise
 
+    @staticmethod
+    async def run_with_timeout(loop, func, timeout: float, *args):
+        """
+        Run a blocking function in executor with a timeout.
+        
+        Args:
+            loop: The asyncio loop.
+            func: The blocking function to run.
+            timeout: Maximum time in seconds.
+            *args: Arguments for the function.
+            
+        Returns:
+            Result of the function.
+            
+        Raises:
+            asyncio.TimeoutError: If execution exceeds timeout.
+        """
+        import asyncio
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: func(*args)),
+            timeout=timeout
+        )
+
     def close(self) -> None:
         """Close thread-local connection if it exists."""
         if hasattr(self._local, "conn") and self._local.conn:

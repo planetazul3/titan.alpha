@@ -247,50 +247,50 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
             logger.error(f"DB Write Error (update_risk_metrics): {e}")
 
     # H09: Async Wrappers to prevent blocking event loop
-    async def get_daily_stats_async(self) -> tuple[int, float]:
+    async def get_daily_stats_async(self, timeout: float = 5.0) -> tuple[int, float]:
         """Async version of get_daily_stats."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.get_daily_stats)
+        return await self.run_with_timeout(loop, self.get_daily_stats, timeout)
 
-    async def increment_daily_trade_count_async(self):
+    async def increment_daily_trade_count_async(self, timeout: float = 5.0):
         """Async version of increment_daily_trade_count."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.increment_daily_trade_count)
+        await self.run_with_timeout(loop, self.increment_daily_trade_count, timeout)
 
-    async def update_daily_pnl_async(self, pnl: float):
+    async def update_daily_pnl_async(self, pnl: float, timeout: float = 5.0):
         """Async version of update_daily_pnl."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.update_daily_pnl(pnl))
+        await self.run_with_timeout(loop, self.update_daily_pnl, timeout, pnl)
 
-    async def get_risk_metrics_async(self) -> dict:
+    async def get_risk_metrics_async(self, timeout: float = 5.0) -> dict:
         """Async version of get_risk_metrics."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.get_risk_metrics)
+        return await self.run_with_timeout(loop, self.get_risk_metrics, timeout)
 
-    async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float, returns: list[float] | None = None):
+    async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float, returns: list[float] | None = None, timeout: float = 5.0):
         """Async version of update_risk_metrics."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.update_risk_metrics(drawdown, losses, peak_equity, returns))
+        await self.run_with_timeout(loop, self.update_risk_metrics, timeout, drawdown, losses, peak_equity, returns)
 
-    async def record_trade_timestamp_async(self, symbol: str, timestamp: float):
+    async def record_trade_timestamp_async(self, symbol: str, timestamp: float, timeout: float = 5.0):
         """Async version of record_trade_timestamp."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.record_trade_timestamp(symbol, timestamp))
+        await self.run_with_timeout(loop, self.record_trade_timestamp, timeout, symbol, timestamp)
 
-    async def get_trades_in_window_async(self, symbol: str | None, window_seconds: float) -> int:
+    async def get_trades_in_window_async(self, symbol: str | None, window_seconds: float, timeout: float = 5.0) -> int:
         """Async version of get_trades_in_window."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: self.get_trades_in_window(symbol, window_seconds))
+        return await self.run_with_timeout(loop, self.get_trades_in_window, timeout, symbol, window_seconds)
 
-    async def prune_old_timestamps_async(self, max_age_seconds: float = 3600):
+    async def prune_old_timestamps_async(self, max_age_seconds: float = 3600, timeout: float = 5.0):
          """Async version of prune_old_timestamps."""
          import asyncio
          loop = asyncio.get_running_loop()
-         await loop.run_in_executor(None, lambda: self.prune_old_timestamps(max_age_seconds))
+         await self.run_with_timeout(loop, self.prune_old_timestamps, timeout, max_age_seconds)
