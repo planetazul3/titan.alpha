@@ -2,6 +2,7 @@ import logging
 import time
 import threading
 from pathlib import Path
+import json
 from typing import Any, Optional
 from datetime import datetime, timezone
 
@@ -202,20 +203,25 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
             losses = losses_raw # Integer doesn't need is_finite check usually but good to be safe if it was float
             peak_equity = ensure_finite(peak_equity_raw, "loaded_peak_equity", 0.0)
             
+            returns_json = self.get_value("risk_returns_history")
+            returns = json.loads(returns_json) if returns_json else []
+            
             return {
                 "current_drawdown": drawdown,
                 "consecutive_losses": losses,
-                "peak_equity": peak_equity
+                "peak_equity": peak_equity,
+                "returns": returns
             }
         except ValueError:
              logger.error("Corrupt risk metrics in DB, returning defaults")
              return {
                 "current_drawdown": 0.0,
                 "consecutive_losses": 0,
-                "peak_equity": 0.0
+                "peak_equity": 0.0,
+                "returns": []
             }
 
-    def update_risk_metrics(self, drawdown: float, losses: int, peak_equity: float):
+    def update_risk_metrics(self, drawdown: float, losses: int, peak_equity: float, returns: list[float] | None = None):
         """Persist risk metrics."""
         from utils.numerical_validation import ensure_finite
         
@@ -229,6 +235,9 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
                 ("risk_consecutive_losses", str(losses), ts),
                 ("risk_peak_equity", str(peak_equity), ts)
             ]
+            if returns is not None:
+                data.append(("risk_returns_history", json.dumps(returns), ts))
+                
             with self._transaction() as conn:
                 conn.executemany(
                     "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
@@ -262,11 +271,11 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get_risk_metrics)
 
-    async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float):
+    async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float, returns: list[float] | None = None):
         """Async version of update_risk_metrics."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.update_risk_metrics(drawdown, losses, peak_equity))
+        await loop.run_in_executor(None, lambda: self.update_risk_metrics(drawdown, losses, peak_equity, returns))
 
     async def record_trade_timestamp_async(self, symbol: str, timestamp: float):
         """Async version of record_trade_timestamp."""

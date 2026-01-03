@@ -267,7 +267,13 @@ class AdaptiveRiskManager:
             self.performance._current_drawdown = metrics.get("current_drawdown", 0.0)
             self.performance._peak_equity = metrics.get("peak_equity", 0.0)
             self.performance._consecutive_losses = int(metrics.get("consecutive_losses", 0))
-            logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}, losses={self.performance._consecutive_losses}")
+            
+            # Restore returns history
+            returns_history = metrics.get("returns", [])
+            if returns_history:
+                self.performance._returns = deque(returns_history, maxlen=self.performance.window_size)
+                
+            logger.info(f"Restored risk state: drawdown={self.performance._current_drawdown:.3f}, losses={self.performance._consecutive_losses}, history_len={len(self.performance._returns)}")
         except Exception as e:
             logger.error(f"Failed to load risk state: {e}")
 
@@ -286,7 +292,8 @@ class AdaptiveRiskManager:
             self.state_store.update_risk_metrics(
                 drawdown=drawdown,
                 losses=self.performance.get_consecutive_losses(),
-                peak_equity=peak_equity
+                peak_equity=peak_equity,
+                returns=list(self.performance._returns)
             )
         except Exception as e:
             logger.error(f"Failed to save risk state: {e}")
