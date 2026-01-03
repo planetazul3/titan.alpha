@@ -56,8 +56,10 @@ class DecisionEngine:
         safety_store: SQLiteSafetyStateStore | None = None,
         policy: ExecutionPolicy | None = None,
         model_version: str = "unknown",
+        execution_mode: str = "REAL",
     ):
         self.settings = settings
+        self.execution_mode = execution_mode
         
         # IMPORTANT-002: Link regime thresholds to settings
         if regime_veto is None:
@@ -694,6 +696,7 @@ class DecisionEngine:
             metadata={
                 "signal_type": signal.signal_type,
                 "regime_vetoed": regime_vetoed,
+                "execution_mode": self.execution_mode,
                 **(metadata or {}),
                 **signal.metadata,  # Ensure all signal metadata is preserved
             },

@@ -168,6 +168,27 @@ async def run_live_trading(args):
         window_size=settings.calibration.window_size,
     )
     
+    # ══════════════════════════════════════════════════════════════════════════
+    # OPT5: Load Challenger Models (A/B Testing)
+    # ══════════════════════════════════════════════════════════════════════════
+    challengers = []
+    challenger_dir = Path("checkpoints/challengers")
+    if challenger_dir.exists():
+        console_log(f"Scanning for challengers in {challenger_dir}...", "INIT")
+        for ckpt_path in challenger_dir.glob("*.pt"):
+            try:
+                c_stack = create_challenger_stack(
+                    settings=settings,
+                    shadow_store=shadow_store,
+                    checkpoint_path=ckpt_path,
+                    device=stack["device"]
+                )
+                challengers.append(c_stack)
+                console_log(f"Loaded challenger: {c_stack['version']} ({ckpt_path.name})", "SUCCESS")
+            except Exception as e:
+                logger.error(f"Failed to load challenger {ckpt_path}: {e}")
+                console_log(f"Failed to load challenger {ckpt_path.name}", "ERROR")
+    
     # Force shadow-only mode if requested via CLI
     if hasattr(args, "shadow_only") and args.shadow_only:
         calibration_monitor.shadow_only_mode = True
@@ -590,6 +611,7 @@ async def run_live_trading(args):
                                 metrics,
                                 calibration_monitor=calibration_monitor,
                                 trade_tracker=real_trade_tracker,
+                                challengers=challengers,
                             )
                             inference_count += 1
                         except Exception as inf_e:
@@ -922,6 +944,7 @@ async def run_inference(
     return_recon_error: bool = False,
     calibration_monitor: CalibrationMonitor | None = None,
     trade_tracker: Any | None = None,  # RealTradeTracker for outcome tracking
+    challengers: list[dict[str, Any]] | None = None, # OPT5: List of challenger stacks
 ):
     """
     Run single inference cycle with regime veto integration.
@@ -1028,6 +1051,24 @@ async def run_inference(
         #   2. Retraining on production data
         
         decision_start = time.perf_counter()
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # OPT5: Challenger Inference (Concurrent A/B Testing)
+        # ══════════════════════════════════════════════════════════════════════════
+        if challengers:
+            for c_stack in challengers:
+                # Fire-and-forget concurrent tasks for challengers
+                # We don't wait for them to block real trading
+                asyncio.create_task(_run_challenger_inference(
+                    c_stack=c_stack,
+                    t_tensor=t_tensor,
+                    c_tensor=c_tensor,
+                    v_tensor=v_tensor,
+                    t_np=t_np,
+                    c_np=c_np,
+                    entry_price=entry_price,
+                    buffer=buffer
+                ))
         real_trades = await engine.process_with_context(
             probs=sample_probs,
             reconstruction_error=reconstruction_error,
@@ -1187,3 +1228,57 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     sys.exit(run_async_with_graceful_shutdown(run_live_trading(args)))
+
+
+async def _run_challenger_inference(
+    c_stack: dict[str, Any],
+    t_tensor: torch.Tensor,
+    c_tensor: torch.Tensor,
+    v_tensor: torch.Tensor,
+    t_np: np.ndarray,
+    c_np: np.ndarray,
+    entry_price: float,
+    buffer: Any
+) -> None:
+    """
+    Helper to run challenger inference concurrently.
+    
+    This replicates the core inference loop but for a challenger stack.
+    Exceptions are swallowed to strictly prevent impacting the Champion loop.
+    """
+    import asyncio
+    
+    model = c_stack["model"]
+    engine = c_stack["engine"]
+    version = c_stack["version"]
+    
+    try:
+        loop = asyncio.get_running_loop()
+        from functools import partial
+        
+        # 1. Prediction (offload to thread)
+        probs = await loop.run_in_executor(
+            None, 
+            partial(model.predict_probs, t_tensor, c_tensor, v_tensor)
+        )
+        sample_probs = {k: v.item() for k, v in probs.items()}
+        
+        # 2. Reconstruction Error (required for regime assessment)
+        reconstruction_error = await loop.run_in_executor(
+            None,
+            lambda: model.get_volatility_anomaly_score(v_tensor).item()
+        )
+        
+        # 3. Decision & Shadow Logging
+        # Process with full context to store shadow trades in shared DB
+        # The engine is configured in "SHADOW" mode, so it tracks that metadata
+        await engine.process_with_context(
+            probs=sample_probs,
+            reconstruction_error=reconstruction_error,
+            tick_window=t_np,
+            candle_window=c_np,
+            entry_price=entry_price,
+            market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()}
+        )
+    except Exception as e:
+        logger.error(f"[CHALLENGER {version}] Failed: {e}")

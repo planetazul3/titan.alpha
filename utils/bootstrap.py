@@ -195,3 +195,66 @@ def create_trading_stack(
         "regime_veto": regime_veto,
         "device": device
     }
+
+
+def create_challenger_stack(
+    settings: Settings,
+    shadow_store: SQLiteShadowStore,
+    checkpoint_path: Path,
+    device: str
+) -> Dict[str, Any]:
+    """
+    Create a lightweight stack for a challenger model.
+    
+    Challengers:
+    - Share the same ShadowStore as Champion (for direct comparison in same DB)
+    - Do NOT have a Client (they don't trade)
+    - Do NOT have a SafetyStore (they don't execute)
+    - Run in 'SHADOW' execution mode
+    """
+    logger.info(f"Initializing CHALLENGER stack from {checkpoint_path.name}")
+    
+    # 1. Model
+    model = DerivOmniModel(settings).to(device)
+    model.eval()
+    
+    model_version = "challenger-unknown"
+    if checkpoint_path.exists():
+        try:
+             # Basic load - validation happens via validate_model_compatibility if needed, 
+             # but we might be testing incompatible architectures?
+             # For now, enforce same rigor as champion.
+             ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+             
+             if "manifest" in ckpt:
+                 validate_model_compatibility(ckpt, settings)
+                 model_version = ckpt["manifest"].get("model_version", "unknown")
+                 
+             model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        except Exception as e:
+            logger.error(f"Failed to load challenger {checkpoint_path}: {e}")
+            raise
+
+    # 2. Decision Engine (SHADOW mode)
+    # Reuses settings regime thresholds
+    regime_veto = RegimeVeto(
+        threshold_caution=settings.hyperparams.regime_caution_threshold,
+        threshold_veto=settings.hyperparams.regime_veto_threshold,
+    )
+    
+    engine = DecisionEngine(
+        settings=settings,
+        regime_veto=regime_veto,
+        shadow_store=shadow_store, # SHARE THE STORE
+        safety_store=None, # NO SAFETY STORE
+        policy=None, # Default policy (will block "trades" but engine is shadow anyway)
+        model_version=model_version,
+        execution_mode="SHADOW"  # <--- CRITICAL
+    )
+    
+    return {
+        "model": model,
+        "engine": engine,
+        "version": model_version,
+        "path": checkpoint_path
+    }
