@@ -472,6 +472,22 @@ class Settings(BaseSettings):
             
         return self
 
+    @model_validator(mode="after")
+    def validate_thresholds_consistency(self) -> "Settings":
+        """
+        Validate consistency between signal thresholds and shadow trade config.
+        """
+        # Warn if shadow tracking threshold is higher than learning threshold
+        # This would mean we classify signals as SHADOW but don't persist them
+        if self.shadow_trade.min_probability_track > self.thresholds.learning_threshold_min:
+             logger.warning(
+                 f"Configuration Warning: shadow_trade.min_probability_track ({self.shadow_trade.min_probability_track}) "
+                 f"is greater than thresholds.learning_threshold_min ({self.thresholds.learning_threshold_min}). "
+                 "Some shadow trades may not be persisted."
+             )
+        
+        return self
+
     def validate_api_credentials(self) -> bool:
         """Check if API credentials are configured."""
         token_value = self.deriv_api_token.get_secret_value()
