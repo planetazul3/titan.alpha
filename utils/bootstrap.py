@@ -23,6 +23,55 @@ from tools.verify_checkpoint import verify_checkpoint
 logger = logging.getLogger(__name__)
 
 
+def validate_model_compatibility(checkpoint: Dict[str, Any], settings: Settings) -> None:
+    """
+    Validate that the checkpoint is compatible with current system settings.
+    
+    Checks:
+    1. Feature schema version
+    2. Data input shapes (sequence lengths)
+    
+    Args:
+        checkpoint: Loaded checkpoint dictionary
+        settings: Current system settings
+        
+    Raises:
+        RuntimeError: If compatibility check fails
+    """
+    manifest = checkpoint.get("manifest")
+    if not manifest:
+        # Legacy checkpoint or no manifest
+        return
+
+    from config.constants import FEATURE_SCHEMA_VERSION
+    
+    # 1. Schema Version Check
+    ckpt_schema = manifest.get("feature_schema_version")
+    if ckpt_schema and ckpt_schema != FEATURE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Incompatible feature schema! Model expects {ckpt_schema}, "
+            f"system using {FEATURE_SCHEMA_VERSION}."
+        )
+        
+    # 2. Data Shapes Check
+    if "data_shapes" in manifest:
+        ckpt_shapes = manifest["data_shapes"]
+        sys_shapes = settings.data_shapes
+        
+        # Validate key dimensions
+        if ckpt_shapes.get("sequence_length_ticks") != sys_shapes.sequence_length_ticks:
+            raise RuntimeError(
+                f"Tick sequence length mismatch! Model: {ckpt_shapes.get('sequence_length_ticks')}, "
+                f"System: {sys_shapes.sequence_length_ticks}"
+            )
+            
+        if ckpt_shapes.get("sequence_length_candles") != sys_shapes.sequence_length_candles:
+            raise RuntimeError(
+                f"Candle sequence length mismatch! Model: {ckpt_shapes.get('sequence_length_candles')}, "
+                f"System: {sys_shapes.sequence_length_candles}"
+            )
+
+
 def create_trading_stack(
     settings: Settings,
     checkpoint_path: Optional[Path] = None,
@@ -102,40 +151,13 @@ def create_trading_stack(
             model.load_state_dict(state_dict, strict=False)
             
             if "manifest" in checkpoint:
+                validate_model_compatibility(checkpoint, settings)
+                
                 manifest = checkpoint["manifest"]
                 model_version = manifest.get("model_version", "unknown")
                 logger.info(f"Loaded model version: {model_version}")
-                
-                # Issue 10: Validate Compatibility
-                from config.constants import FEATURE_SCHEMA_VERSION
-                
-                # 1. Schema Version Check
-                ckpt_schema = manifest.get("feature_schema_version")
-                if ckpt_schema and ckpt_schema != FEATURE_SCHEMA_VERSION:
-                    raise RuntimeError(
-                        f"Incompatible feature schema! Model expects {ckpt_schema}, "
-                        f"system using {FEATURE_SCHEMA_VERSION}."
-                    )
-                    
-                # 2. Data Shapes Check
-                if "data_shapes" in manifest:
-                    ckpt_shapes = manifest["data_shapes"]
-                    sys_shapes = settings.data_shapes
-                    
-                    # Validate key dimensions
-                    if ckpt_shapes.get("sequence_length_ticks") != sys_shapes.sequence_length_ticks:
-                        raise RuntimeError(
-                            f"Tick sequence length mismatch! Model: {ckpt_shapes.get('sequence_length_ticks')}, "
-                            f"System: {sys_shapes.sequence_length_ticks}"
-                        )
-                        
-                    if ckpt_shapes.get("sequence_length_candles") != sys_shapes.sequence_length_candles:
-                        raise RuntimeError(
-                            f"Candle sequence length mismatch! Model: {ckpt_shapes.get('sequence_length_candles')}, "
-                            f"System: {sys_shapes.sequence_length_candles}"
-                        )
             else:
-                 logger.warning("Checkpoint missing 'manifest' - skipping compatibility validation (Legacy Model)")
+                logger.warning("Checkpoint missing 'manifest' - skipping compatibility validation (Legacy Model)")
 
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint: {e}") from e

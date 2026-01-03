@@ -728,6 +728,10 @@ async def run_live_trading(args):
                             
                             # Update version info
                             if "manifest" in new_checkpoint:
+                                # OPT3: Validate compatibility before accepting
+                                from utils.bootstrap import validate_model_compatibility
+                                validate_model_compatibility(new_checkpoint, settings)
+
                                 new_manifest = new_checkpoint["manifest"]
                                 new_version = new_manifest.get("model_version", "unknown")
                                 logger.info(f"[HOT-RELOAD] Loaded version: {new_version}")
