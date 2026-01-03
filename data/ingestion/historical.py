@@ -27,6 +27,7 @@ from data.ingestion.versioning import (
     load_metadata,
     save_metadata,
 )
+from data.validation.schemas import TickSchema, CandleSchema
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +329,22 @@ class PartitionedDownloader:
 
             # Use cleaned data (which might be the same DataFrame or a new one)
             df = cleaned_data
+            
+            # Ensure schema compliance for missing optional columns
+            if data_type == "candles" and "volume" not in df.columns:
+                # Deriv API sometimes omits volume for certain instruments/granularities
+                df["volume"] = 0.0
+
+            # --- STRICT SCHEMA VALIDATION ---
+            try:
+                if data_type == "ticks":
+                    TickSchema.validate(df, lazy=True)
+                elif data_type == "candles":
+                    CandleSchema.validate(df, lazy=True)
+            except Exception as schema_err:
+                logger.error(f"Schema validation failed for {month_key} ({data_type}): {schema_err}")
+                # We raise to prevent corrupt data from touching disk
+                raise
 
             # Optimize dtypes before saving
             # Cast df to Any to bypass mypy's confusion about DataFrame/list Union in this scope

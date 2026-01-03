@@ -21,6 +21,7 @@ import torch
 import random
 import numpy as np
 from torch.utils.data import DataLoader, random_split
+from datetime import datetime, timedelta, timezone
 
 from config.settings import load_settings
 from models.core import DerivOmniModel
@@ -48,15 +49,38 @@ def main():
     parser.add_argument("--lr", type=float, default=None, help="Learning rate (overrides settings)")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Checkpoint directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--months", type=float, default=None, help="Train on last N months")
+    parser.add_argument("--start-date", type=str, default=None, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=str, default=None, help="End date (YYYY-MM-DD)")
+    parser.add_argument("--cross-validation", action="store_true", help="Run Walk-Forward Cross-Validation")
     args = parser.parse_args()
 
     set_seed(args.seed)
 
     settings = load_settings()
     
+    # Parse dates
+    start_date = None
+    end_date = None
+    
+    if args.start_date:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+        if args.end_date:
+            end_date = datetime.strptime(args.end_date, "%Y-%m-%d")
+    elif args.months:
+        # Calculate start date relative to NOW (or data max? usually NOW)
+        now = datetime.now()
+        start_date = now - timedelta(days=args.months * 30)
+        logger.info(f"Filtering data from last {args.months} months (since {start_date.date()})")
+        
     # Load dataset
     logger.info(f"Loading data from {args.data_path}")
-    dataset = DerivDataset(args.data_path, settings)
+    dataset = DerivDataset(
+        args.data_path, 
+        settings, 
+        start_date=start_date,
+        end_date=end_date
+    )
     
     # Temporal Split (Fix Data Leakage)
     # We must ensure no overlap between train and val sequences
@@ -141,9 +165,78 @@ def main():
     
     # Run training
     # This will now compute and save Fisher Information at the end
-    metrics = trainer.train()
-    
-    logger.info(f"Training completed. Final Val Loss: {metrics['final_val_loss']:.4f}")
+    if not args.cross_validation:
+        metrics = trainer.train()
+        logger.info(f"Training completed. Final Val Loss: {metrics['final_val_loss']:.4f}")
+    else:
+        logger.info("Starting Walk-Forward Cross-Validation...")
+        # Cross-validation mode
+        # We need to recreate loaders and model for each fold
+        
+        cv_metrics = []
+        n_splits = 5
+        
+        # Generator for splits
+        splits = dataset.walk_forward_split(n_splits=n_splits)
+        
+        for i, (train_idx, val_idx) in enumerate(splits):
+            logger.info(f"\n{'='*40}\nCV Fold {i+1}/{n_splits}\n{'='*40}")
+            logger.info(f"Train size: {len(train_idx)}, Val size: {len(val_idx)}")
+            
+            # Subsets
+            t_set = torch.utils.data.Subset(dataset, train_idx)
+            v_set = torch.utils.data.Subset(dataset, val_idx)
+            
+            # Loaders
+            t_loader = DataLoader(
+                t_set, 
+                batch_size=batch_size, 
+                shuffle=True, 
+                drop_last=True,
+                num_workers=num_workers,
+                pin_memory=True,
+                persistent_workers=True
+            )
+            v_loader = DataLoader(
+                v_set, 
+                batch_size=batch_size, 
+                shuffle=False, 
+                num_workers=num_workers,
+                pin_memory=True,
+                persistent_workers=True
+            )
+            
+            # Fresh model and config for each fold
+            # IMPORTANT: Reset model weights needed? Yes, implicitly by creating new instance
+            # or we can clone the initial state. For safety, new instance.
+            fold_model = DerivOmniModel(settings)
+            
+            fold_config = TrainerConfig(
+                epochs=epochs,
+                learning_rate=lr,
+                checkpoint_dir=args.checkpoint_dir / f"fold_{i+1}",
+                ewc_sample_size=settings.hyperparams.ewc_sample_size
+            )
+            
+            fold_trainer = Trainer(
+                model=fold_model,
+                train_loader=t_loader,
+                val_loader=v_loader,
+                config=fold_config,
+                settings=settings
+            )
+            
+            # Train fold
+            m = fold_trainer.train()
+            cv_metrics.append(m["best_val_loss"])
+            
+            # Cleanup
+            del fold_model, fold_trainer, t_loader, v_loader
+            torch.cuda.empty_cache()
+            
+        avg_loss = sum(cv_metrics) / len(cv_metrics)
+        logger.info(f"Cross-Validation Complete. Average Best Val Loss: {avg_loss:.4f}")
+        logger.info(f"Fold Losses: {cv_metrics}")
 
 if __name__ == "__main__":
     main()

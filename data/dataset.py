@@ -13,7 +13,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Any, Literal
-
+from datetime import datetime
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -73,6 +73,8 @@ class DerivDataset(Dataset):
         settings: Settings,
         mode: Literal["train", "eval"] = "train",
         lookahead_candles: int = 5,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ):
         """
         Args:
@@ -80,12 +82,16 @@ class DerivDataset(Dataset):
             settings: Configuration settings
             mode: 'train' for training, 'eval' for evaluation
             lookahead_candles: Number of candles ahead for label generation
+            start_date: Filter data starting from this date (inclusive)
+            end_date: Filter data up to this date (exclusive)
         """
         super().__init__()
 
         self.settings = settings
         self.mode = mode
         self.lookahead = lookahead_candles
+        self.start_date = start_date
+        self.end_date = end_date
 
         self.tick_len = settings.data_shapes.sequence_length_ticks
         self.candle_len = settings.data_shapes.sequence_length_candles
@@ -259,11 +265,47 @@ class DerivDataset(Dataset):
                 
             data = df[required_candle_cols].values.astype(np.float32)
             
-            # Add volume (zeros) and reorder to [O,H,L,C,V,T]
-            # Current: [O,H,L,C,E] (5 cols)
-            # Need: [O,H,L,C,V,E] (6 cols)
-            zeros = np.zeros((len(data), 1), dtype=np.float32)
-            return np.hstack([data[:, :4], zeros, data[:, 4:5]])
+            # --- COMPUTE TICK VOLUME ---
+            # Deriv candles often lack volume. We compute "Tick Volume" (count of ticks)
+            # as the industry standard proxy for activity in decentralized markets.
+            candle_epochs = data[:, 4].astype(np.int64)
+            
+            # We need tick epochs to count them. 
+            # Loader architecture loads ticks first, so self.tick_epochs should be available via the cache or passed in?
+            # Issue: self.tick_epochs isn't set yet when load_candles is called inside _load_or_create_mmap.
+            # Solution: We load tick epochs temporarily here.
+            
+            # Optimization: Load tick epochs from source files directly for volume calc
+            # (Fetching them from self.tick_epochs would require ordering dependencies)
+            tick_epoch_arrays = [pd.read_parquet(f, columns=["epoch"])["epoch"].values for f in tick_files]
+            if tick_epoch_arrays:
+                all_tick_epochs = np.concatenate(tick_epoch_arrays)
+                all_tick_epochs.sort()
+                
+                # Count ticks per candle interval [candle_time, candle_time + granularity)
+                # Assuming 60s granularity for now (safe assumption for candles_60)
+                # TODO: Dynamic granularity if we support 5m/1h candles later
+                granularity = 60 
+                
+                # np.searchsorted is fast for sorted arrays
+                # Count = idx_end - idx_start
+                # intervals: [start, end)
+                starts = candle_epochs
+                ends = candle_epochs + granularity
+                
+                start_idxs = np.searchsorted(all_tick_epochs, starts)
+                end_idxs = np.searchsorted(all_tick_epochs, ends)
+                
+                volumes = (end_idxs - start_idxs).astype(np.float32)
+            else:
+                logger.warning("No ticks found for volume calculation. Volume will be 0.")
+                volumes = np.zeros(len(data), dtype=np.float32)
+            
+            # Reorder to [O,H,L,C,V,E]
+            volumes = volumes.reshape(-1, 1)
+            # data is [O,H,L,C,E]
+            # Result: [O,H,L,C] + [V] + [E]
+            return np.hstack([data[:, :4], volumes, data[:, 4:5]])
 
         self.candles = self._load_or_create_mmap(
             "candles", candle_files, cache_dir, load_candles, np.float32
@@ -323,8 +365,34 @@ class DerivDataset(Dataset):
                 f"have {len(self.candles)}"
             )
 
-        self.valid_indices = list(range(min_candle_idx, max_candle_idx))
-        logger.info(f"Dataset has {len(self.valid_indices)} valid samples")
+        self.valid_indices = []
+        
+        # Convert dates to timestamps if provided
+        start_ts = self.start_date.timestamp() if self.start_date else 0
+        end_ts = self.end_date.timestamp() if self.end_date else float('inf')
+        
+        # Iterate and filter
+        # Optimization: We can do this with numpy boolean masking if we built an index array
+        # self.candles column 5 is epoch
+        candle_epochs = self.candles[:, 5]
+        
+        # Candidate range based on shape requirements
+        candidate_indices = np.arange(min_candle_idx, max_candle_idx)
+        
+        if len(candidate_indices) > 0:
+            # Get timestamps for candidate indices (aligned to END of sequence, or start? 
+            # We usually care about the timestamp of the PREDICTION point, which is 'candle_idx')
+            candidate_epochs = candle_epochs[candidate_indices]
+            
+            # Create mask
+            mask = (candidate_epochs >= start_ts) & (candidate_epochs < end_ts)
+            
+            self.valid_indices = candidate_indices[mask].tolist()
+            
+        logger.info(
+            f"Dataset has {len(self.valid_indices)} valid samples "
+            f"(filtered from {start_ts} to {end_ts})"
+        )
 
     def __len__(self) -> int:
         return len(self.valid_indices)
@@ -460,3 +528,52 @@ class DerivDataset(Dataset):
             "touch": torch.tensor(touch, dtype=torch.float32),
             "range": torch.tensor(stays_in_range, dtype=torch.float32),
         }
+
+    def walk_forward_split(
+        self, n_splits: int = 5, train_ratio: float = 0.8, gap: int | None = None
+    ):
+        """
+        Generate indices for Walk-Forward Validation (Rolling Origin).
+        
+        This respects temporal order and ensures no leakage between train/val.
+        
+        Args:
+            n_splits: Number of folds
+            train_ratio: Ratio of train size in each fold (e.g., 0.8)
+            gap: Barrier between train and val (default: seq_len + lookahead)
+            
+        Yields:
+            (train_indices, val_indices) for each fold
+        """
+        total_samples = len(self.valid_indices)
+        if total_samples < n_splits * 100:
+            logger.warning(f"Dataset small ({total_samples}), walk-forward might be unstable")
+            
+        # Default safety gap if not provided
+        if gap is None:
+            gap = self.candle_len + self.lookahead + self.warmup_steps
+            
+        # We start with a base training size and expand
+        # Using "Expanding Window" strategy which is safer for retention
+        # Split data into n_splits + 1 chunks.
+        # Fold 1: Train=Chunk0, Val=Chunk1
+        # Fold 2: Train=Chunk0+1, Val=Chunk2
+        
+        chunk_size = total_samples // (n_splits + 1)
+        
+        for i in range(n_splits):
+            # Train ends at (i+1) * chunk
+            train_end = (i + 1) * chunk_size
+            
+            # Val starts after gap
+            val_start = train_end + gap
+            val_end = val_start + chunk_size
+            
+            if val_end > total_samples:
+                break
+                
+            train_indices = list(range(0, train_end))
+            val_indices = list(range(val_start, val_end))
+            
+            yield train_indices, val_indices
+

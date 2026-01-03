@@ -210,17 +210,25 @@ class FeatureBuilder:
 
     def get_schema_hash(self) -> str:
         """
-        Compute hash of feature configuration.
+        Compute fingerprint of feature configuration.
         
-        This hash identifies the exact feature engineering config.
-        Models should verify this matches the hash they were trained with.
+        This hash identifies the exact feature engineering config (schema version, 
+        sequence lengths, normalization factors).
+        Models MUST verify this matches the hash they were trained with.
         """
+        # Include normalization factors in hash as they affect feature values
+        norm = self.settings.normalization
+        
         config_str = (
             f"v={FEATURE_SCHEMA_VERSION}:"
             f"tick_len={self.schema.tick_length}:"
             f"candle_len={self.schema.candle_length}:"
             f"candle_feats={self.schema.candle_features}:"
-            f"vol_feats={self.schema.volatility_features}"
+            f"vol_feats={self.schema.volatility_features}:"
+            f"norm_vol={norm.norm_factor_volatility}:"
+            f"norm_atr={norm.norm_factor_atr}:"
+            f"norm_rsi={norm.norm_factor_rsi_std}:"
+            f"norm_bb={norm.norm_factor_bb_width}"
         )
         # MD5 used for config fingerprinting, not security
         return hashlib.md5(config_str.encode(), usedforsecurity=False).hexdigest()

@@ -538,8 +538,13 @@ class Trainer:
                 "feature_schema_version": FEATURE_SCHEMA_VERSION,
                 "data_shapes": self.settings.data_shapes.model_dump(),
                 "model_version": getattr(self.settings.system, "model_version", "1.0.0"),
+                "model_version": getattr(self.settings.system, "model_version", "1.0.0"),
                 "timestamp": time.time(),
             }
+            
+            # Save strict feature hash
+            from data.features import get_feature_builder
+            state["feature_config_hash"] = get_feature_builder(self.settings).get_schema_hash()
         
         # Atomic write
         torch.save(state, temp_path)
@@ -566,4 +571,22 @@ class Trainer:
         self.current_epoch = checkpoint["epoch"]
         self.global_step = checkpoint.get("global_step", 0)
         self.best_val_loss = checkpoint["best_val_loss"]
+        
+        # --- STRICT METADATA ENFORCEMENT ---
+        # Verify feature configuration matches exactly
+        if "feature_config_hash" in checkpoint:
+            from data.features import get_feature_builder
+            current_hash = get_feature_builder(self.settings).get_schema_hash()
+            ckpt_hash = checkpoint["feature_config_hash"]
+            
+            if current_hash != ckpt_hash:
+                raise RuntimeError(
+                    f"Feature schema mismatch! Model trained with hash {ckpt_hash}, "
+                    f"but current runtime has {current_hash}. "
+                    f"Check sequence lengths and normalization settings."
+                )
+            logger.info(f"Feature config verified (hash: {ckpt_hash})")
+        else:
+            logger.warning("Checkpoint missing feature_config_hash - skipping strict verification")
+
         logger.info(f"Loaded checkpoint from {path} (epoch {self.current_epoch})")
