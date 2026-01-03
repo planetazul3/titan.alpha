@@ -363,10 +363,13 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         if deleted_count > 0:
             try:
                 with self._get_connection() as conn:
+                    # VACUUM reclaims unused pages in the main DB file
                     conn.execute("VACUUM")
-                logger.info(f"Pruned {deleted_count} shadow trades older than {retention_days} days")
+                    # TRUNCATE checkpoint reclaims space in the WAL file
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                logger.info(f"Pruned {deleted_count} shadow trades older than {retention_days} days (VACUUM+Checkpoint complete)")
             except Exception as e:
-                logger.warning(f"Failed to VACUUM after prune: {e}")
+                logger.warning(f"Failed to VACUUM/Checkpoint after prune: {e}")
                 
         return deleted_count
 

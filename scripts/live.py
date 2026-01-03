@@ -634,7 +634,14 @@ async def run_live_trading(args):
                     # 1. Log cleanup
                     try:
                         from config.logging_config import cleanup_logs
-                        deleted_logs = cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
+                        
+                        # Run in executor to avoid blocking loop with file IO
+                        loop = asyncio.get_running_loop()
+                        deleted_logs = await loop.run_in_executor(
+                            None, 
+                            lambda: cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
+                        )
+                        
                         if deleted_logs > 0:
                             logger.info(f"[MAINTENANCE] Deleted {deleted_logs} old log files")
                     except Exception as e:
@@ -643,7 +650,11 @@ async def run_live_trading(args):
                     # 2. DB Pruning
                     try:
                         if shadow_store:
-                            pruned_count = shadow_store.prune(retention_days=settings.system.db_retention_days)
+                            # Run VACUUM/Prune in executor as it locks DB
+                            pruned_count = await loop.run_in_executor(
+                                None,
+                                lambda: shadow_store.prune(retention_days=settings.system.db_retention_days)
+                            )
                             if pruned_count > 0:
                                 logger.info(f"[MAINTENANCE] Pruned {pruned_count} old shadow records")
                     except Exception as e:
