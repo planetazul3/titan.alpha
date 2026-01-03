@@ -35,7 +35,7 @@ class BacktestClient:
         self.balance = initial_balance
         self.slip_prob = slip_prob
         self.slip_avg = slip_avg
-        self.positions = []
+        self.positions: list[dict[str, Any]] = []
         self.current_price = 100.0
         self.current_time = datetime.now(timezone.utc)
         self.is_connected = True

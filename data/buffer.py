@@ -186,7 +186,17 @@ class MarketDataBuffer:
 
             if abs(incoming_ts - last_candle_ts) < 1.0:
                 # Same candle period - UPDATE in place
-                self._candles[-1] = new_candle
+                # Merge High/Low/Volume with existing candle
+                current_candle = self._candles[-1]
+                merged_candle = [
+                    current_candle[0],  # Open stays same
+                    max(current_candle[1], new_candle[1]),  # High
+                    min(current_candle[2], new_candle[2]),  # Low
+                    new_candle[3],  # Close updates
+                    current_candle[4] + new_candle[4],  # Volume accumulates
+                    current_candle[5],  # Timestamp stays same
+                ]
+                self._candles[-1] = merged_candle
                 logger.debug(
                     f"Candle updated: ts={incoming_ts:.0f}, close={candle_event.close:.5f}"
                 )

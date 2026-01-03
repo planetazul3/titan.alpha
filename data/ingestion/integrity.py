@@ -243,7 +243,8 @@ class IntegrityChecker:
 
             # duplicated returns boolean Series
             is_dup = data.duplicated(subset=["epoch"], keep="first")
-            return data.index[is_dup].tolist()
+            from typing import cast
+            return cast(list[int], data.index[is_dup].tolist())
 
         seen_epochs = set()
         duplicate_indices = []

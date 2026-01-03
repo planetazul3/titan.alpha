@@ -94,7 +94,7 @@ def migrate_shadow_trades(conn):
         conn.execute(f"""
             INSERT OR IGNORE INTO main.shadow_trades ({cols_str})
             SELECT {cols_str} FROM legacy_shadow.shadow_trades
-        """)
+        """) # nosec
 
         count = conn.execute("SELECT changes()").fetchone()[0]
         logger.info(f"Migrated {count} shadow trades.")

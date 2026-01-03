@@ -10,6 +10,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ def verify_checksum(file_path: Path, expected: str, algorithm: str = "sha256") -
 def create_metadata(
     symbol: str,
     data_type: str,
-    records: list,
+    records: list | Any,
     granularity: int | None = None,
     gaps_detected: int = 0,
     duplicates_removed: int = 0,
@@ -207,7 +208,7 @@ def create_metadata(
             epochs = []
         else:
             # It's a non-empty DataFrame - access the epoch column directly
-            epochs = records["epoch"].tolist()
+            epochs = records["epoch"].tolist() # type: ignore[call-overload]
     elif not records:
         # Empty list
         epochs = []

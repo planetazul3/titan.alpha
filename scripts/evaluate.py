@@ -83,7 +83,7 @@ def main(args):
     logger.info(f"Inspecting checkpoint: {checkpoint_path.name}")
     try:
         # Load to CPU first to inspect structure
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         
         # Detect architecture type
         state_dict = checkpoint.get("model_state_dict", checkpoint)

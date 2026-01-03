@@ -190,6 +190,7 @@ class TradingMetrics:
         """Initialize internal metrics."""
         # Counters
         self.trades_total = InternalCounter("trades_total", ["outcome", "contract_type"])
+        self.errors_total = InternalCounter("errors_total", ["type"])
         self.regime_assessments = InternalCounter("regime_assessments", ["state"])
 
         # Histograms
@@ -235,6 +236,24 @@ class TradingMetrics:
         )
 
         self.prom_balance = Gauge("xtitan_account_balance_usd", "Current account balance in USD")
+
+        self.prom_errors = Counter(
+            "xtitan_errors_total", "Total application errors", ["type"]
+        )
+
+    def record_error(self, error_type: str) -> None:
+        """
+        Record an application error.
+
+        Args:
+            error_type: Error category (e.g., 'inference_failure', 'connection_error')
+        """
+        self.errors_total.inc(type=error_type)
+
+        if self.use_prometheus:
+            self.prom_errors.labels(type=error_type).inc()
+
+
 
     def record_trade_attempt(self, outcome: str, contract_type: str = "unknown") -> None:
         """

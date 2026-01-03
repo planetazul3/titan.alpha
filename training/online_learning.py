@@ -30,7 +30,7 @@ Example:
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 
 import torch
 import torch.nn as nn
@@ -87,13 +87,13 @@ class ReplayBuffer:
         self.capacity = capacity
 
         # Internal buckets for stratified sampling
-        self._low_vol = deque()
-        self._med_vol = deque()
-        self._high_vol = deque()
+        self._low_vol: deque[Experience] = deque()
+        self._med_vol: deque[Experience] = deque()
+        self._high_vol: deque[Experience] = deque()
 
         # Track insertion order for global FIFO eviction
         # Stores bucket index: 0=low, 1=med, 2=high
-        self._insertion_order = deque(maxlen=capacity)
+        self._insertion_order: deque[int] = deque(maxlen=capacity)
     
     def add(self, experience: Experience) -> None:
         """Add experience to buffer."""
@@ -334,7 +334,7 @@ class FisherInformation:
         for name in current_run_fisher:
              original = current_run_fisher[name]
              clamped = torch.clamp(original, min=fisher_min, max=fisher_max)
-             total_clamped += (original != clamped).sum().item()
+             total_clamped += int((original != clamped).sum().item())
              total_params += original.numel()
              
              # Apply Moving Average/Overwrite
@@ -484,13 +484,13 @@ class OnlineLearningModule:
         
         # Create optimizer if not provided
         if optimizer is None:
-            self.optimizer: torch.optim.AdamW = torch.optim.AdamW(
+            self.optimizer: torch.optim.Optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=learning_rate,
                 weight_decay=1e-5,
             )
         else:
-            self.optimizer = optimizer
+            self.optimizer = cast(torch.optim.Optimizer, optimizer)
         
         # Components
         self.fisher = FisherInformation(model)

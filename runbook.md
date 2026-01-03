@@ -4,21 +4,30 @@
 This runbook covers normal operations, emergency procedures, and troubleshooting for the DerivOmniModel live trading system.
 
 ## 1. Start-Up Procedure
+
+### Environment Selection
+The system behavior is controlled by `DERIV_ENV` in `.env`.
+
+| Environment | Command | Purpose |
+| :--- | :--- | :--- |
+| **Development** | `DERIV_ENV=development python scripts/live.py --test` | Local testing & debugging |
+| **Staging** | `DERIV_ENV=staging python scripts/live.py --shadow` | Real-time simulation (Shadow Mode) |
+| **Production** | `DERIV_ENV=production python scripts/live.py --checkpoint best_model` | Live trading (Money at risk) |
+
+### Step-by-Step Launch
 1.  **Activate Environment**:
     ```bash
     source venv/bin/activate
     ```
 2.  **Verify State**:
-    Ensure `data_cache/` contains `safety_state.db` (if previously run) and `shadow_trades.db`.
-3.  **Launch Live Trading**:
-    ```bash
-    python scripts/live.py --checkpoint best_model
-    ```
-    *Use `screen` or `tmux` for persistent sessions.*
+    Check `data_cache/` for appropriate databases based on environment.
+3.  **Launch**:
+    Execute the command corresponding to your target environment from the table above.
+    *Always use `screen` or `tmux` for persistent sessions in Staging/Production.*
 4.  **Verification**:
     - Look for "CONNECTED!" message.
     - Confirm "Pre-loaded X candles".
-    - Check "Reconstruction error < 1.0" in startup logs.
+    - Check "Reconstruction error < 1.0" for calibration.
 
 ## 2. Monitoring Routine
 - **Logs**: Tail `logs/xtitan.log`.

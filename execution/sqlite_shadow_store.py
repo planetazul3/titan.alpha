@@ -146,9 +146,10 @@ class SQLiteShadowStore:
         """Initialize database schema via migrations."""
         runner = MigrationRunner(str(self._db_path))
         
+        from typing import Callable
         # Register shadow store migrations
         for version, steps in get_shadow_store_migrations().items():
-            runner.add_migration(version, steps)
+            runner.add_migration(version, cast(list[str | Callable[..., Any]], steps))
             
         # Run migrations
         runner.run()
@@ -382,7 +383,7 @@ class SQLiteShadowStore:
                 "DELETE FROM shadow_trades WHERE timestamp < ?", 
                 (cutoff_iso,)
             )
-            deleted_count = cursor.rowcount
+            deleted_count = int(cursor.rowcount)
             
         # Reclaim space
         if deleted_count > 0:
@@ -442,7 +443,7 @@ class SQLiteShadowStore:
             # nosec B608 - where_clause is built from code-defined conditions (resolved_only,
             # unresolved_only, time range), not user input. Values use parameterized query.
             cursor = conn.execute(
-                f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params
+                f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params # nosec
             )
             for row in cursor:
                 yield self._row_to_record(row)

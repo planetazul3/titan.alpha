@@ -70,7 +70,7 @@ class ShadowTradeResolver:
 
     def __init__(
         self,
-        shadow_store: ShadowTradeStore,
+        shadow_store: ShadowTradeStore | Any,  # Any allows for SQLiteShadowStore with async methods
         duration_minutes: int = 1,
         client: Any = None,
         default_touch_barrier_pct: float = 0.005,
@@ -188,7 +188,7 @@ class ShadowTradeResolver:
                 if trade.contract_type in (CONTRACT_TYPES.TOUCH_NO_TOUCH, CONTRACT_TYPES.STAYS_BETWEEN,
                                            "TOUCH_NO_TOUCH", "STAYS_BETWEEN"):
                     if hasattr(self.store, 'update_resolution_context_async'):
-                        await self.store.update_resolution_context_async(
+                        await self.store.update_resolution_context_async(  # type: ignore[union-attr]
                             trade.trade_id, high_price, low_price, current_price
                         )
                     elif hasattr(self.store, 'update_resolution_context'):
@@ -275,7 +275,7 @@ class ShadowTradeResolver:
         
         if outcome is not None:
             # H08: Async DB update
-            await self.store.update_outcome_async(
+            await self.store.update_outcome_async( # type: ignore[union-attr]
                 trade=trade,
                 outcome=outcome,
                 exit_price=exit_price
@@ -309,7 +309,7 @@ class ShadowTradeResolver:
         # Structured log
         shadow_trade_logger.log_stale(trade.trade_id, reason="expired_unresolved")
         # H08: Async DB update
-        await self.store.mark_stale_async(
+        await self.store.mark_stale_async( # type: ignore[union-attr]
             trade_id=trade.trade_id,
             exit_price=current_price # Use current price as fallback exit for db rec
         )

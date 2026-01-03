@@ -52,7 +52,7 @@ def _sanitize_output(arr: np.ndarray, name: str = "output") -> np.ndarray:
         logger.warning(
             f"Sanitizing {name}: {nan_count} NaN, {inf_count} Inf values replaced with 0"
         )
-        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(arr.dtype)
+        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(arr.dtype) # type: ignore[no-any-return]
     return arr
 
 

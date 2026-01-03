@@ -328,7 +328,7 @@ async def run_live_trading(args):
                 logger.warning(f"Safety check balance fetch failed: {e}. Using None (defaults).")
                 current_balance = None
                 
-            return sizer.suggest_stake_for_signal(signal, account_balance=current_balance)
+            return float(sizer.suggest_stake_for_signal(signal, account_balance=current_balance))
 
         executor = SafeTradeExecutor(
             inner_executor=raw_executor, 
@@ -442,6 +442,61 @@ async def run_live_trading(args):
                 except Exception as e:
                     logger.error(f"Error processing tick: {e}", exc_info=True)
 
+        # H12: Preload historical candles (Before starting consumers)
+        console_log("fetching historical candles...", "WAIT")
+        try:
+            # Calculate how many seconds back we need
+            required_history = settings.data_shapes.sequence_length_candles + settings.data_shapes.warmup_steps
+            
+            # Fetch history
+            history_candles = await client.get_history(
+                symbol, 
+                style="candles", 
+                interval=settings.trading.timeframe, 
+                count=required_history
+            )
+            
+            if history_candles:
+                 # format for buffer: [open, high, low, close, volume, timestamp]
+                 preload_data = []
+                 for c in history_candles:
+                     ts = c.get('epoch')
+                     preload_data.append([
+                         float(c['open']),
+                         float(c['high']),
+                         float(c['low']),
+                         float(c['close']),
+                         0.0, 
+                         float(ts)
+                     ])
+                 
+                 buffer.preload_candles(preload_data)
+                 console_log(f"Preloaded {len(preload_data)} historical candles", "SUCCESS")
+                 
+                 # IMPORTANT: Also preload ticks if possible or just rely on candles?
+                 # Buffer.is_ready() checks ticks too.
+                 # We can fetch ticks history or just wait for ticks to fill up?
+                 # If we don't preload ticks, is_ready() will be False until 300 ticks arrive (~5 mins).
+                 # Let's fetch some ticks too.
+                 
+                 console_log("Fetching historical ticks...", "WAIT")
+                 history_ticks = await client.get_history(
+                     symbol,
+                     style="ticks",
+                     count=settings.data_shapes.sequence_length_ticks + 50
+                 )
+                 if history_ticks:
+                     for t in history_ticks:
+                         buffer.append_tick(float(t['quote']))
+                     console_log(f"Preloaded {len(history_ticks)} historical ticks", "SUCCESS")
+                     
+            else:
+                 console_log("No historical candles returned", "WARN")
+
+        except Exception as e:
+            logger.error(f"Failed to preload history: {e}")
+            console_log(f"History preload failed: {e}", "WARN")
+
         async def process_candles():
             """Process candle events from normalized MarketEventBus."""
             
@@ -452,6 +507,7 @@ async def run_live_trading(args):
 
             
             async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
+                start_time = datetime.now()
                 try:
                     # H11: Buffer during startup
                     if not startup_complete.is_set():
@@ -482,7 +538,8 @@ async def run_live_trading(args):
                     now_utc = datetime.now(timezone.utc)
                     latency = (now_utc - candle_event.timestamp).total_seconds()
                     
-                    stale_threshold = settings.trading.stale_candle_threshold
+                    stale_threshold = settings.heartbeat.stale_data_threshold_seconds
+                    
                     if latency > stale_threshold:
                         logger.warning(
                             f"[LATENCY] Skipping stale candle (closed {latency:.1f}s ago). "
@@ -490,6 +547,16 @@ async def run_live_trading(args):
                         )
                         console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
                         continue
+                    
+                    # Log processing time for observability
+                    process_time = (datetime.now() - start_time).total_seconds()
+                    
+                    if is_new_candle and buffer.is_ready():
+                         candle_msg = f"Running inference #{inference_count + 1}..."
+                    else:
+                         candle_msg = f"Skipping (ready={buffer.is_ready()}, new={is_new_candle})"
+
+                    console_log(f"Candle closed @ {candle_event.close:.2f} - {candle_msg} (latency: {latency:.1f}s)", "BRAIN")
 
                     # Run inference only when: candle closed + buffer ready
                     # CRITICAL RULE 1: Inference Cooldown (> 30s)

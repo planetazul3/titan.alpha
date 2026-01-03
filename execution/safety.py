@@ -398,7 +398,7 @@ class SafeTradeExecutor:
             - api_only: Contracts on API but not in store
             - store_only: Contracts in store but not on API
         """
-        result = {
+        result: dict[str, Any] = {
             "api_open_count": 0,
             "store_pending_count": 0,
             "matched": [],
@@ -479,4 +479,4 @@ class SafeTradeExecutor:
 def get_symbol_from_signal(signal: TradeSignal) -> str:
     """Extract symbol from signal metadata if available."""
     # Logic depends on signal structure.
-    return signal.metadata.get("symbol", "unknown")
+    return str(signal.metadata.get("symbol", "unknown"))

@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -124,10 +124,11 @@ class Trainer:
         if hasattr(torch, "compile") and device and device.type == "cuda":
             logger.info("Compiling model with torch.compile for performance...")
             try:
-                self.model = torch.compile(self.model)
+                # Type cast to satisfy mypy assignment check
+                self.model = cast(nn.Module, torch.compile(self.model)) 
             except Exception as e:
                 logger.warning(f"Model compilation failed, falling back to eager mode: {e}")
-
+                
         # Device setup
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -158,7 +159,8 @@ class Trainer:
                 self.optimizer, T_max=config.epochs - warmup_steps, eta_min=1e-6
             )
             # Combine them
-            self.scheduler = SequentialLR(
+            # Cast to Any to bypass strict type check for now since SequentialLR behaves as LRScheduler
+            self.scheduler: Any = SequentialLR(
                 self.optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_steps]
             )
         else:

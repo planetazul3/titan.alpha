@@ -211,4 +211,4 @@ class MockTradeExecutor:
         return TradeResult(success=True, contract_id=f"MOCK_{signal.signal_id}")
         
     def get_signals(self) -> list[TradeSignal]:
-        return self._signals
+        return self._signals # type: ignore[no-any-return]

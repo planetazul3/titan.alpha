@@ -53,7 +53,7 @@ class Trading(BaseModel):
     )
     barrier_offset: float = Field(default=0.50, description="Barrier offset for Touch/No Touch and Range (High)")
     barrier2_offset: float = Field(default=-0.50, description="Barrier2 offset for Range (Low)")
-    stale_candle_threshold: float = Field(default=5.0, description="Max latency (s) before skipping candle", gt=0.0)
+    stale_candle_threshold: float = Field(default=10.0, description="Max latency (s) before skipping candle", gt=0.0)
 
     @field_validator("barrier_offset", "barrier2_offset")
     @classmethod
@@ -421,10 +421,10 @@ class Settings(BaseSettings):
         default="auto", description="Compute device preference"
     )
 
-    deriv_api_token: SecretStr = Field(default="", description="Deriv API token for authentication")
+    deriv_api_token: SecretStr = Field(default=SecretStr(""), description="Deriv API token for authentication")
     deriv_app_id: int = Field(default=1089, description="Deriv application ID")
     
-    dashboard_api_key: SecretStr = Field(default="titan-admin", description="API key for dashboard access")
+    dashboard_api_key: SecretStr = Field(default=SecretStr("titan-admin"), description="API key for dashboard access")
 
     def get_device(self) -> torch.device:
         """Resolve and return the compute device based on preference."""

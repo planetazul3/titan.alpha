@@ -563,7 +563,6 @@ class DerivClient:
                         "adjust_start_time": 1,
                         "count": 1,
                         "end": "latest",
-                        "start": 1,
                         "style": "candles",
                         "granularity": interval,
                     }
@@ -599,6 +598,8 @@ class DerivClient:
                     queue.put_nowait(None)
 
                 subscription = source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
+                
+
 
                 try:
                     while True:
@@ -838,7 +839,7 @@ class DerivClient:
             
         except Exception as e:
             logger.error(f"[CONTRACT] Failed to subscribe to {contract_id}: {e}")
-            return
+            return True
         
         # Wait for settlement with timeout (2 minutes for 1-min contracts + buffer)
         try:
@@ -855,4 +856,55 @@ class DerivClient:
                     disposable.dispose()
                     logger.debug(f"[CONTRACT] Disposed subscription for {contract_id}")
                 except Exception as e:
-                    logger.warning(f"[CONTRACT] Error disposing subscription: {e}")
+                    logger.warning(f"[CONTRACT] Warning during disposal: {e}")
+
+    async def get_history(self, symbol: str, style: str, count: int, interval: int | str = 60) -> list[dict[str, Any]]:
+        """
+        Fetch historical data (ticks or candles).
+        
+        Args:
+            symbol: Symbol to fetch for
+            style: 'ticks' or 'candles'
+            count: Number of data points
+            interval: Granularity for candles (seconds or '1m' etc)
+            
+        Returns:
+            List of history items (dicts)
+        """
+        await self._circuit_breaker.wait_if_open()
+        if not self.api:
+            raise RuntimeError("Client not connected")
+            
+        if isinstance(interval, str):
+            if interval == "1m": interval = 60
+            elif interval == "1h": interval = 3600
+            
+        req = {
+            "ticks_history": symbol,
+            "adjust_start_time": 1,
+            "count": count,
+            "end": "latest",
+            "style": style,
+        }
+        if style == "candles":
+            req["granularity"] = interval
+            
+        try:
+            resp = await self.api.ticks_history(req)
+            
+            if style == "ticks":
+                if "history" in resp:
+                    history = resp["history"]
+                    times = history.get("times", [])
+                    prices = history.get("prices", [])
+                    return [{'quote': p, 'epoch': t} for p, t in zip(prices, times)]
+            elif style == "candles":
+                if "candles" in resp:
+                    return resp["candles"]
+                    
+            return []
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch history: {e}")
+            self._circuit_breaker.record_failure()
+            return []

@@ -109,6 +109,10 @@ class DerivEventAdapter(MarketEventBus):
             async for candle_dict in self.client.stream_candles(interval=interval):
                 # Translate Deriv candle dict to CandleEvent
                 # Deriv candle format: {'open': ..., 'high': ..., 'low': ..., 'close': ..., 'epoch': ...}
+                epoch = candle_dict["epoch"]
+                # Force alignment to interval grid (e.g. 60s) to handle API granularity variations
+                aligned_epoch = epoch - (epoch % interval)
+                
                 yield CandleEvent(
                     symbol=symbol,
                     open=float(candle_dict["open"]),
@@ -116,8 +120,8 @@ class DerivEventAdapter(MarketEventBus):
                     low=float(candle_dict["low"]),
                     close=float(candle_dict["close"]),
                     volume=0.0,  # Deriv doesn't provide volume for synthetic indices
-                    timestamp=datetime.fromtimestamp(candle_dict["epoch"], tz=timezone.utc),
-                    metadata={"source": "deriv", "epoch": candle_dict["epoch"]},
+                    timestamp=datetime.fromtimestamp(aligned_epoch, tz=timezone.utc),
+                    metadata={"source": "deriv", "epoch": aligned_epoch, "raw_epoch": epoch},
                 )
         except Exception as e:
             logger.error(f"Deriv candle stream error: {e}")

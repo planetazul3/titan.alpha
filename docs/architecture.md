@@ -101,3 +101,35 @@ Stored in `data_cache/` using SQLite:
 ├── data_cache/             # Databases & Parquet
 └── tools/                  # Support Utilities
 ```
+
+---
+
+## 📑 Data Contracts & Interfaces
+
+### Signal Schema
+Expert models must output a standardized tensor of shape `(batch, n_tasks, n_classes)`.
+- **Primary Task**: Binary classification (Rise/Fall).
+- **Secondary Tasks**: Multi-class regime detection, volatility bucket.
+
+### Decision Interface
+The `DecisionEngine` expects probabilities and returns an `ExecutionAction`:
+```python
+@dataclass
+class ExecutionAction:
+    contract_type: str  # e.g., 'CALL', 'PUT'
+    stake: float
+    confidence: float
+    vetos: List[str]    # Empty if approved
+```
+
+---
+
+## 🛡️ Reliability Mechanisms
+
+### Circuit Breakers
+- **Velocity**: Stops if loss rate > 5% in 15 minutes.
+- **Drawdown**: Hard stop at 20% of daily budget.
+- **Latency**: Rejection of signals older than 500ms.
+
+### Idempotency
+All trades are assigned a deterministic `client_reference` based on `(timestamp, expert_hash, regime_id)`. This prevents double-execution during network retries.

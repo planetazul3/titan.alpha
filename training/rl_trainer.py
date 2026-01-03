@@ -344,7 +344,7 @@ class RLTrainer:
         """Load training checkpoint."""
         # SECURITY: weights_only=False is needed to load optimizer states and custom objects.
         # Only load checkpoints from trusted sources (e.g., your own training runs).
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, weights_only=True)
         
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic.load_state_dict(checkpoint["critic"])

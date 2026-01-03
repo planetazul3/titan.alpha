@@ -174,7 +174,7 @@ class DerivDataset(Dataset):
         
         if cache_file.exists():
             logger.info(f"Loading cached {name} from {cache_file}")
-            return np.load(cache_file, mmap_mode="r")
+            return np.load(cache_file, mmap_mode="r") # type: ignore[no-any-return]
             
         logger.info(f"Cache miss for {name}. Loading from source and creating cache...")
         data = loader_func(files)
@@ -192,7 +192,7 @@ class DerivDataset(Dataset):
         logger.info(f"Created cache {cache_file} ({data.nbytes / 1e6:.1f} MB)")
         
         # Reload as mmap
-        return np.load(cache_file, mmap_mode="r")
+        return np.load(cache_file, mmap_mode="r") # type: ignore[no-any-return]
 
     def _load_data(self, data_source: Path):
         """

@@ -50,9 +50,14 @@ def create_trading_stack(
         - 'regime_veto': RegimeVeto
     """
     # 1. Device Setup
-    if not device:
-        device = settings.get_device()
-    logger.info(f"Initializing stack on device: {device}")
+    if device is None:
+        device_obj = settings.get_device()
+        device_str: str = str(device_obj)
+        device = device_str
+    else:
+        device_str = str(device)
+    
+    logger.info(f"Initializing stack on device: {device_str}")
 
     # 2. Model Initialization
     logger.info("Initializing neural network model...")

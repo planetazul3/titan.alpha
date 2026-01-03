@@ -14,6 +14,7 @@ from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence  # P
 from execution.regime import RegimeAssessment, RegimeAssessmentProtocol, RegimeVeto
 from execution.safety_store import SQLiteSafetyStateStore
 from execution.shadow_store import ShadowTradeRecord, ShadowTradeStore
+from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.signals import ShadowTrade, TradeSignal
 from observability.shadow_logging import shadow_trade_logger
 
@@ -51,7 +52,7 @@ class DecisionEngine:
         self,
         settings: Settings,
         regime_veto: RegimeVeto | None = None,
-        shadow_store: ShadowTradeStore | None = None,
+        shadow_store: ShadowTradeStore | SQLiteShadowStore | None = None,
         safety_store: SQLiteSafetyStateStore | None = None,
         policy: ExecutionPolicy | None = None,
         model_version: str = "unknown",

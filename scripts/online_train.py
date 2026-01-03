@@ -39,7 +39,7 @@ def main():
 
         # Pre-inspect checkpoint to determine architecture (BiLSTM vs TFT)
         logger.info(f"Inspecting checkpoint: {args.checkpoint.name}")
-        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
         
         # Detect architecture type
         state_dict = checkpoint.get("model_state_dict", checkpoint)

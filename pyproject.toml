@@ -1,3 +1,11 @@
+[project]
+name = "x.titan"
+version = "1.0.0"
+description = "Advanced Multi-Expert Trading System"
+authors = [
+    { name = "planetazul3" }
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

@@ -152,7 +152,11 @@ class DerivOmniModel(nn.Module):
         Forward pass with Sigmoid applied for inference.
         """
         logits = self(ticks, candles, vol_metrics, masks=masks)
-        probs = {k.replace("_logit", "_prob"): torch.sigmoid(v) for k, v in logits.items()}
+        probs = {
+            k.replace("_logit", "_prob"): torch.sigmoid(v) 
+            for k, v in logits.items() 
+            if k.endswith("_logit")
+        }
         return probs
 
     def count_parameters(self) -> int:
