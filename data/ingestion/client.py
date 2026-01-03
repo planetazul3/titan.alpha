@@ -696,6 +696,10 @@ class DerivClient:
         if not self.api:
             raise RuntimeError("Client not connected")
         
+        # OPT1: Check circuit breaker
+        if not self._circuit_breaker.should_allow_request():
+            raise RuntimeError("Circuit breaker open - trading suspended")
+        
         c_type = contract_type.upper()
         
         logger.info(f"Requesting proposal: {c_type} {self.symbol} ${amount}...")
@@ -725,7 +729,15 @@ class DerivClient:
             # We set limit exactly to amount to reject any unexpected premium/fees.
             buy = await self.api.buy({"buy": prop_id, "price": amount})
 
+            # OPT1: Record success
+            self._circuit_breaker.record_success()
+
             return cast(dict[str, Any], buy["buy"])
+        except Exception as e:
+            # OPT1: Record failure for API errors
+            logger.error(f"Buy failed: {e}")
+            self._circuit_breaker.record_failure()
+            raise e
         finally:
             # H10: Garbage collection - forget the proposal stream to prevent leaks
             if prop_id:
@@ -757,11 +769,21 @@ class DerivClient:
         if not self.api:
             raise RuntimeError("Client not connected")
         
-        res = await self.api.proposal_open_contract({
-            "proposal_open_contract": 1, 
-            "scope": "open"
-        })
-        return cast(list[dict[str, Any]], res)
+        # OPT1: Check circuit breaker
+        if not self._circuit_breaker.should_allow_request():
+            raise RuntimeError("Circuit breaker open")
+        
+        try:
+            res = await self.api.proposal_open_contract({
+                "proposal_open_contract": 1, 
+                "scope": "open"
+            })
+            self._circuit_breaker.record_success()
+            return cast(list[dict[str, Any]], res)
+        except Exception as e:
+            logger.error(f"Failed to fetch open contracts: {e}")
+            self._circuit_breaker.record_failure()
+            raise e
 
     async def subscribe_contract(
         self, contract_id: str, on_update: Callable[[dict[str, Any]], None] | None = None, on_settled: Callable[[float, bool], None] | None = None
@@ -853,6 +875,11 @@ class DerivClient:
                 settled.set()
         
         try:
+            # OPT1: Check circuit breaker
+            if not self._circuit_breaker.should_allow_request():
+                logger.warning(f"[CONTRACT] Circuit breaker open, skipping subscription for {contract_id}")
+                return False
+
             # Use api.subscribe() to get an RxPY Observable
             # Same pattern as stream_ticks and stream_candles
             source = await self.api.subscribe({
@@ -860,6 +887,9 @@ class DerivClient:
                 "contract_id": int(contract_id),
                 "subscribe": 1,
             })
+            
+            # Record success on successful subscription
+            self._circuit_breaker.record_success()
             
             # Subscribe to the Observable with callbacks
             # CRITICAL: Capture disposable to prevent memory leak in long-running app
@@ -871,7 +901,17 @@ class DerivClient:
             
         except Exception as e:
             logger.error(f"[CONTRACT] Failed to subscribe to {contract_id}: {e}")
-            return True
+            self._circuit_breaker.record_failure()
+            return True # Return True to avoid infinite retry loops in caller if checking strict boolean? 
+            # Original code returned True on error (line 874). 
+            # If we return False, caller might retry immediately. 
+            # If we return True, caller thinks it's handled. 
+            # Safety wrapper handles retries. Let's return False to indicate failure?
+            # Looking at original code: "return True" at line 874.
+            # "The method blocks until the contract settles or times out."
+            # If subscription fails, we can't wait for settlement.
+            # If we returned True, caller proceeds.
+            return False
         
         # Wait for settlement with timeout (2 minutes for 1-min contracts + buffer)
         try:
