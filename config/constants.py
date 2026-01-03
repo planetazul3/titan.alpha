@@ -165,3 +165,10 @@ Epsilon for z-score normalization denominator.
 Set to 1e-8 to handle log returns (typically 1e-4 to 1e-3 magnitude).
 Previous value of 1e-6 could dominate the denominator in low-volatility periods.
 """
+
+# Versioning
+FEATURE_SCHEMA_VERSION: Final[str] = "1.0.0"
+"""
+Current version of the feature engineering schema.
+Models must use a compatible schema version to be loaded.
+"""

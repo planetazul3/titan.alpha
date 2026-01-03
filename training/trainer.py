@@ -118,6 +118,7 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
+        self.settings = settings  # Store settings for manifest saving
         
         # Optimize model with torch.compile if available and not skipped (PyTorch 2.0+)
         # We check for the attribute first to be safe
@@ -526,8 +527,19 @@ class Trainer:
             "scaler_state_dict": self.scaler.state_dict(),  # Save AMP scaler state
             "fisher_state_dict": self.fisher_info.state_dict() if self.fisher_info else None,
             "best_val_loss": self.best_val_loss,
+            "best_val_loss": self.best_val_loss,
             "config": self.config,
         }
+        
+        # Issue 10: Add manifest for validation
+        if self.settings:
+            from config.constants import FEATURE_SCHEMA_VERSION
+            state["manifest"] = {
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "data_shapes": self.settings.data_shapes.model_dump(),
+                "model_version": getattr(self.settings.system, "model_version", "1.0.0"),
+                "timestamp": time.time(),
+            }
         
         # Atomic write
         torch.save(state, temp_path)
