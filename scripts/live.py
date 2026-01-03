@@ -1011,6 +1011,8 @@ async def run_inference(
         # This stores tick/candle windows in ShadowTradeStore for:
         #   1. Accurate outcome resolution
         #   2. Retraining on production data
+        
+        decision_start = time.perf_counter()
         real_trades = await engine.process_with_context(
             probs=sample_probs,
             reconstruction_error=reconstruction_error,
@@ -1019,6 +1021,12 @@ async def run_inference(
             entry_price=entry_price,
             market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()},
         )
+        decision_latency = time.perf_counter() - decision_start
+        metrics.record_decision_latency(decision_latency)
+        
+        # Log slow decisions
+        if decision_latency > 0.1:
+            logger.warning(f"[LATENCY] Decision engine slow: {decision_latency*1000:.1f}ms")
 
         # Record regime assessment (check engine statistics for last decision)
         stats = engine.get_statistics()
