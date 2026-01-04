@@ -7,8 +7,9 @@ import asyncio
 
 from execution.safety_store import SQLiteSafetyStateStore
 from execution.adaptive_risk import AdaptiveRiskManager
-from execution.safety import SafeTradeExecutor, ExecutionSafetyConfig
-from execution.executor import TradeResult, TradeSignal
+from execution.executor import TradeResult
+from execution.common.types import ExecutionRequest
+from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
 from config.constants import CONTRACT_TYPES, SIGNAL_TYPES
 from datetime import datetime
 
@@ -80,13 +81,13 @@ async def test_safe_executor_daily_limit(clean_db):
     # 1. Simulate previous losses stored in DB
     executor.store.update_daily_pnl(-60.0) # Exceeds limit of 50
     
-    signal = TradeSignal(
-        signal_type=SIGNAL_TYPES.REAL_TRADE,
-        contract_type=CONTRACT_TYPES.RISE_FALL,
-        direction="CALL",
-        probability=0.8,
-        timestamp=datetime.now(),
-        metadata={"symbol": "R_100"}
+    signal = ExecutionRequest(
+        signal_id="SIG_DAILY_LIMIT",
+        symbol="R_100",
+        contract_type="RISE_FALL",
+        stake=5.0, # Not used for limit check logic but required
+        duration=1,
+        duration_unit="m"
     )
     
     # 2. Attempt trade - should be rejected
@@ -109,13 +110,13 @@ async def test_safe_executor_rate_limit(clean_db):
         state_file=clean_db
     )
     
-    signal = TradeSignal(
-        signal_type=SIGNAL_TYPES.REAL_TRADE,
-        contract_type=CONTRACT_TYPES.RISE_FALL,
-        direction="CALL",
-        probability=0.8,
-        timestamp=datetime.now(),
-        metadata={"symbol": "R_100"}
+    signal = ExecutionRequest(
+        signal_id="SIG_RATE_LIMIT",
+        symbol="R_100",
+        contract_type="RISE_FALL",
+        stake=5.0,
+        duration=1,
+        duration_unit="m"
     )
     
     # Execute 2 trades (allowed)

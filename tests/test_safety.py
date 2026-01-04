@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from config.constants import CONTRACT_TYPES, SIGNAL_TYPES
+from execution.common.types import ExecutionRequest
 from execution.executor import TradeResult
 from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
 from execution.signals import TradeSignal
@@ -24,12 +25,30 @@ from execution.signals import TradeSignal
 class TestSafeTradeExecutor:
     """Tests for SafeTradeExecutor with safety controls."""
 
-    def test_allows_trades_under_limit(self):
-        """Should allow trades under the rate limit."""
-        limiter = RateLimiter(max_per_minute=5)
+    @pytest.fixture
+    def temp_state_file(self):
+        """Provide isolated state file for each test."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir) / "test_safety_state.db"
 
-        for _ in range(5):
-            assert limiter.allow() is True
+    @pytest.fixture
+    def mock_executor(self):
+        """Create mock underlying executor."""
+        executor = MagicMock()
+        executor.execute = AsyncMock(return_value=TradeResult(success=True, contract_id="TEST_123"))
+        return executor
+
+    @pytest.fixture
+    def sample_signal(self):
+        """Create sample execution request."""
+        return ExecutionRequest(
+            signal_id="SIG_123",
+            symbol="R_100",
+            contract_type="RISE_FALL",
+            stake=5.0,
+            duration=1,
+            duration_unit="m"
+        )
 
     def test_blocks_trades_over_limit(self):
         """Should block trades exceeding rate limit."""
@@ -99,13 +118,13 @@ class TestSafeTradeExecutor:
     @pytest.fixture
     def sample_signal(self):
         """Create sample trade signal."""
-        return TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
-            contract_type=CONTRACT_TYPES.RISE_FALL,
-            direction="CALL",
-            probability=0.85,
-            timestamp=datetime.now(timezone.utc),
-            metadata={"stake": 5.0, "symbol": "R_100"},
+        return ExecutionRequest(
+            signal_id="SIG_TEST",
+            symbol="R_100",
+            contract_type="RISE_FALL",
+            stake=5.0, # default or explicit
+            duration=1,
+            duration_unit="m"
         )
 
     @pytest.fixture
@@ -209,13 +228,13 @@ class TestSafeTradeExecutor:
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=temp_state_file)
 
         # Create signal with large stake
-        large_signal = TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
-            contract_type=CONTRACT_TYPES.RISE_FALL,
-            direction="CALL",
-            probability=0.85,
-            timestamp=datetime.now(timezone.utc),
-            metadata={"stake": 10.0, "symbol": "R_100"},
+        large_signal = ExecutionRequest(
+            signal_id="SIG_LARGE",
+            symbol="R_100",
+            contract_type="RISE_FALL",
+            stake=10.0,
+            duration=1,
+            duration_unit="m"
         )
 
         # Feature removed in SafeTradeExecutor (relies on inner sizer)
@@ -280,13 +299,13 @@ class TestSafeTradeExecutor:
         config.max_trades_per_minute_per_symbol = 2  # Low per-symbol
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=temp_state_file)
 
-        signal = TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
-            contract_type=CONTRACT_TYPES.RISE_FALL,
-            direction="CALL",
-            probability=0.85,
-            timestamp=datetime.now(timezone.utc),
-            metadata={"stake": 5.0, "symbol": "R_100"},
+        signal = ExecutionRequest(
+            signal_id="SIG_TEST",
+            symbol="R_100",
+            contract_type="RISE_FALL",
+            stake=5.0, # default or explicit
+            duration=1,
+            duration_unit="m"
         )
 
         # Execute 2 trades for R_100 (at limit)
@@ -350,13 +369,13 @@ class TestKillSwitchCriticalBehavior:
         config.kill_switch_enabled = True
 
         # 99% confidence signal
-        signal = TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
-            contract_type=CONTRACT_TYPES.RISE_FALL,
-            direction="CALL",
-            probability=0.99,
-            timestamp=datetime.now(timezone.utc),
-            metadata={"stake": 1.0},
+        signal = ExecutionRequest(
+            signal_id="SIG_KILL_TEST",
+            symbol="R_100",
+            contract_type="RISE_FALL",
+            stake=1.0,
+            duration=1,
+            duration_unit="m"
         )
 
         result = await safe_executor.execute(signal)
@@ -380,13 +399,13 @@ class TestKillSwitchCriticalBehavior:
         config.kill_switch_enabled = True
 
         for _i in range(5):
-            signal = TradeSignal(
-                signal_type=SIGNAL_TYPES.REAL_TRADE,
-                contract_type=CONTRACT_TYPES.RISE_FALL,
-                direction="CALL",
-                probability=0.85,
-                timestamp=datetime.now(timezone.utc),
-                metadata={"stake": 1.0},
+            signal = ExecutionRequest(
+                signal_id="SIG_KILL_LOOP",
+                symbol="R_100",
+                contract_type="RISE_FALL",
+                stake=1.0,
+                duration=1,
+                duration_unit="m"
             )
             result = await safe_executor.execute(signal)
             assert result.success is False

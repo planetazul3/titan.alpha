@@ -2,7 +2,8 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timezone
 from execution.executor import DerivTradeExecutor, TradeResult
-from execution.decision import DecisionEngine, TradeSignal
+from execution.common.types import ExecutionRequest
+from execution.decision import DecisionEngine
 from execution.policy import ExecutionPolicy, SafetyProfile
 from config.settings import Settings, Trading, Thresholds, ExecutionSafety, ModelHyperparams, DataShapes
 from config.constants import SIGNAL_TYPES, CONTRACT_TYPES
@@ -54,13 +55,13 @@ async def test_idempotency_failure_blocks_execution():
     settings = create_real_settings()
     executor = DerivTradeExecutor(client, settings, idempotency_store=store)
     
-    signal = TradeSignal(
-        signal_type=SIGNAL_TYPES.REAL_TRADE,
-        contract_type=CONTRACT_TYPES.RISE_FALL,
-        direction="CALL",
-        probability=0.9,
-        timestamp=datetime.now(timezone.utc),
-        metadata={}
+    signal = ExecutionRequest(
+        signal_id="SIG_IDEM_TEST",
+        symbol="R_100",
+        contract_type="RISE_FALL",
+        stake=10.0,
+        duration=1,
+        duration_unit="m"
     )
     
     result = await executor.execute(signal)
@@ -88,13 +89,13 @@ async def test_circuit_breaker_triggers_on_repeated_failures():
     
     executor = DerivTradeExecutor(client, settings, policy=policy, idempotency_store=store)
     
-    signal = TradeSignal(
-        signal_type=SIGNAL_TYPES.REAL_TRADE,
-        contract_type=CONTRACT_TYPES.RISE_FALL,
-        direction="CALL",
-        probability=0.9,
-        timestamp=datetime.now(timezone.utc),
-        metadata={}
+    signal = ExecutionRequest(
+        signal_id="SIG_CB_TEST",
+        symbol="R_100",
+        contract_type="RISE_FALL",
+        stake=10.0,
+        duration=1,
+        duration_unit="m"
     )
     
     # Failures 1-4: Circuit breaker should NOT be active

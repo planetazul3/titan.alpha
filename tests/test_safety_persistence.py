@@ -7,7 +7,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
 
-from execution.safety import SafeTradeExecutor, ExecutionSafetyConfig, TradeSignal
+from execution.common.types import ExecutionRequest
+from execution.safety import SafeTradeExecutor, ExecutionSafetyConfig
 from execution.safety_store import SQLiteSafetyStateStore
 from config.constants import CONTRACT_TYPES, SIGNAL_TYPES
 
@@ -29,13 +30,13 @@ class TestSafetyPersistence(unittest.TestCase):
         shutil.rmtree(self.temp_dir)
 
     def _create_signal(self, symbol="R_100"):
-        return TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
-            contract_type=CONTRACT_TYPES.RISE_FALL,
-            probability=0.8,
-            timestamp=datetime.now(timezone.utc),
-            direction=1,
-            metadata={"symbol": symbol}
+        return ExecutionRequest(
+            signal_id="SIG_PERSIST",
+            symbol=symbol,
+            contract_type="RISE_FALL",
+            stake=5.0,
+            duration=1,
+            duration_unit="m"
         )
 
     def test_persistence_across_restarts(self):

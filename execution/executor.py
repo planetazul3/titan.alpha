@@ -137,7 +137,7 @@ class DerivTradeExecutor:
             error_msg = str(e)
             
             logger.error(f"API Error during execution ({error_code}): {error_msg}")
-            execution_logger.log_trade_failure(signal.signal_id, error_msg, details={"code": error_code})
+            execution_logger.log_trade_failure(request.signal_id, error_msg, details={"code": error_code})
             
             self._failed_count += 1
             
@@ -150,14 +150,14 @@ class DerivTradeExecutor:
 
         except ConnectionError as e:
             logger.error(f"Connection lost during execution: {e}")
-            execution_logger.log_trade_failure(signal.signal_id, "ConnectionError")
+            execution_logger.log_trade_failure(request.signal_id, "ConnectionError")
             self._failed_count += 1
             self._record_failure("ConnectionError")
             return TradeResult(success=False, error="ConnectionError")
 
         except Exception as e:
             logger.exception(f"Unexpected error during execution: {e}")
-            execution_logger.log_trade_failure(signal.signal_id, str(e))
+            execution_logger.log_trade_failure(request.signal_id, str(e))
             self._failed_count += 1
             self._record_failure(str(e))  # Multi-failure tracking for all exceptions
             return TradeResult(success=False, error=str(e))
