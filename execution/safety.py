@@ -144,7 +144,10 @@ class SafeTradeExecutor:
         
         policy.register_veto(
             level=VetoPrecedence.RATE_LIMIT,
+            # Sync fallback (blocking)
             check_fn=lambda: self.store.get_trades_in_window(None, 60.0) >= self.config.max_trades_per_minute,
+            # Async implementation (non-blocking)
+            async_check_fn=self._check_global_rate_limit_veto,
             reason=lambda: f"Global rate limit hit (max {self.config.max_trades_per_minute}/min)",
              details_fn=lambda: {
                 "limit": self.config.max_trades_per_minute,
@@ -154,6 +157,12 @@ class SafeTradeExecutor:
         
         logger.info("SafeTradeExecutor registered persistent rate-limit vetoes with ExecutionPolicy")
     
+    async def _check_global_rate_limit_veto(self) -> bool:
+        """Rate limit check for veto policy (returns True if vetoed)."""
+        async with self._state_lock:
+             count = await self.store.get_trades_in_window_async(None, 60.0)
+             return count >= self.config.max_trades_per_minute
+
     async def _check_global_rate_limit(self) -> bool:
         """
         Check if global rate limit allows trading.

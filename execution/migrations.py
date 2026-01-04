@@ -105,5 +105,8 @@ def get_shadow_store_migrations() -> Dict[int, List[str]]:
              # To align with current DBs that might already be at v4:
              # We'll keep version 4 as a placeholder if already at v4.
              "SELECT 1" 
+        ],
+        5: [
+             "ALTER TABLE shadow_trades ADD COLUMN version_number INTEGER DEFAULT 0"
         ]
     }

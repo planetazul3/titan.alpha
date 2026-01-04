@@ -154,7 +154,8 @@ class DecisionEngine:
 
         try:
             # Check execution policy (Strict Enforcement)
-            policy_veto = self.policy.check_vetoes(reconstruction_error=reconstruction_error)
+            # CRITICAL-001: Use async check to avoid blocking loop on DB calls
+            policy_veto = await self.policy.async_check_vetoes(reconstruction_error=reconstruction_error)
             if policy_veto:
                 if span:
                     span.set_attribute("veto.type", "policy")

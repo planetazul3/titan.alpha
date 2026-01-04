@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING, Awaitable
 
 if TYPE_CHECKING:
     from config.settings import Settings
@@ -109,9 +109,9 @@ class ExecutionPolicy:
             circuit_breaker_reset_minutes: Minutes before circuit breaker auto-resets.
                                            Use settings.execution_safety.circuit_breaker_reset_minutes.
         """
-        # Veto registry: precedence level -> list of (check_fn, reason_provider, details_fn, use_context)
+        # Veto registry: precedence level -> list of (check_fn, async_check_fn, reason_provider, details_fn, use_context)
         # reason_provider can be a str or a Callable[[], str]
-        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[..., bool], str | Callable[[], str], Optional[Callable[[], dict]], bool]]] = {
+        self._vetoes: dict[VetoPrecedence, list[tuple[Callable[..., bool], Optional[Callable[..., Awaitable[bool]]], str | Callable[[], str], Optional[Callable[[], dict]], bool]]] = {
             level: [] for level in VetoPrecedence
         }
         
@@ -168,6 +168,7 @@ class ExecutionPolicy:
         reason: str | Callable[[], str],
         details_fn: Optional[Callable[[], dict]] = None,
         use_context: bool = False,
+        async_check_fn: Optional[Callable[..., Awaitable[bool]]] = None,
     ) -> None:
         """
         Register a veto condition.
@@ -176,11 +177,14 @@ class ExecutionPolicy:
             level: Precedence level for this veto
             check_fn: Callable that returns True if veto should trigger.
                       Can accept kwargs if use_context=True.
+                      Used for synchronous check_vetoes().
             reason: Human-readable explanation or callable returning one
             details_fn: Optional callable that returns context dict for logging
             use_context: If True, check_fn will be called with kwargs passed to check_vetoes
+            async_check_fn: Optional async callable for async_check_vetoes().
+                            If not provided, check_fn will be used (blocking).
         """
-        self._vetoes[level].append((check_fn, reason, details_fn, use_context))
+        self._vetoes[level].append((check_fn, async_check_fn, reason, details_fn, use_context))
         display_reason = reason() if callable(reason) else reason
         logger.debug(f"Registered veto: L{level} - {display_reason}")
     
@@ -205,7 +209,7 @@ class ExecutionPolicy:
             if level == VetoPrecedence.CIRCUIT_BREAKER and self._circuit_breaker_active:
                 self._maybe_auto_reset_circuit_breaker()
 
-            for check_fn, reason_provider, details_fn, use_context in self._vetoes[level]:
+            for check_fn, _, reason_provider, details_fn, use_context in self._vetoes[level]:
                 try:
                     is_vetoed = False
                     if use_context:
@@ -234,6 +238,105 @@ class ExecutionPolicy:
         
         # No vetoes triggered
         return None
+
+    async def async_check_vetoes(self, **kwargs) -> Optional[VetoDecision]:
+        """
+        Check all vetoes in precedence order asynchronously.
+        
+        This method is optimized for async execution:
+        1. It runs synchronous checks (like kill switch) directly.
+        2. It runs async checks (like DB rate limits) concurrently within the same level.
+        3. It respects precedence order (L0 -> L5).
+        
+        Returns:
+            VetoDecision if any veto triggers, None otherwise
+        """
+        self._total_checks += 1
+        
+        for level in sorted(VetoPrecedence):
+            # REC-003: Check for Circuit Breaker auto-reset
+            if level == VetoPrecedence.CIRCUIT_BREAKER and self._circuit_breaker_active:
+                self._maybe_auto_reset_circuit_breaker()
+
+            # Group checks for this level
+            checks_to_run = []
+            
+            for check_fn, async_check_fn, reason_provider, details_fn, use_context in self._vetoes[level]:
+                # If we have an async check, prefer it
+                if async_check_fn:
+                    checks_to_run.append({
+                        "type": "async",
+                        "fn": async_check_fn,
+                        "check_fn": check_fn, # Fallback/Reference
+                        "reason": reason_provider,
+                        "details": details_fn,
+                        "ctx": use_context
+                    })
+                else:
+                    checks_to_run.append({
+                        "type": "sync",
+                        "fn": check_fn,
+                        "reason": reason_provider,
+                        "details": details_fn,
+                        "ctx": use_context
+                    })
+            
+            if not checks_to_run:
+                continue
+                
+            # Execute checks for this level
+            # Mixed sync and async is tricky to do fully concurrent without blocking loop
+            # Strategy: Run sync checks first (fastest), then await async checks
+            
+            # 1. Run Sync Checks
+            for check in [c for c in checks_to_run if c["type"] == "sync"]:
+                try:
+                    is_vetoed = False
+                    if check["ctx"]:
+                        is_vetoed = check["fn"](**kwargs)
+                    else:
+                        is_vetoed = check["fn"]()
+                        
+                    if is_vetoed:
+                        return self._create_veto_decision(level, check["reason"], check["details"])
+                except Exception as e:
+                    logger.error(f"Veto check failed (L{level}): {e}", exc_info=True)
+                    continue
+
+            # 2. Run Async Checks
+            async_checks = [c for c in checks_to_run if c["type"] == "async"]
+            if async_checks:
+                import asyncio
+                
+                async def run_check(check_item):
+                    try:
+                        if check_item["ctx"]:
+                            result = await check_item["fn"](**kwargs)
+                        else:
+                            result = await check_item["fn"]()
+                        return result, check_item
+                    except Exception as e:
+                        logger.error(f"Async veto check failed (L{level}): {e}", exc_info=True)
+                        return False, check_item
+
+                results = await asyncio.gather(*(run_check(c) for c in async_checks))
+                
+                for is_vetoed, check in results:
+                    if is_vetoed:
+                        return self._create_veto_decision(level, check["reason"], check["details"])
+
+        return None
+        
+    def _create_veto_decision(self, level, reason_provider, details_fn) -> VetoDecision:
+        """Helper to create veto decision object."""
+        self._veto_counts[level] += 1
+        
+        details = details_fn() if details_fn else None
+        reason = reason_provider() if callable(reason_provider) else reason_provider
+        
+        veto = VetoDecision(level=level, reason=reason, details=details)
+        logger.info(f"Trade vetoed: {veto}")
+        return veto
     
     def get_veto_statistics(self) -> dict:
         """

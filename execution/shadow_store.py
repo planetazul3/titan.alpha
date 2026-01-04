@@ -105,6 +105,9 @@ class ShadowTradeRecord:
     # Extra metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Concurrency Control (CRITICAL-002)
+    version_number: int = 0
+
     # Schema version (auto-set)
     _schema_version: str = field(default=SHADOW_STORE_SCHEMA_VERSION)
     _created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -209,6 +212,7 @@ class ShadowTradeRecord:
             duration_minutes=self.duration_minutes,
             resolution_context=self.resolution_context,
             metadata=self.metadata,
+            version_number=self.version_number,
             _schema_version=self._schema_version,
             _created_at=self._created_at,
         )
@@ -246,6 +250,7 @@ class ShadowTradeRecord:
             duration_minutes=self.duration_minutes,
             resolution_context=new_context,
             metadata=self.metadata,
+            version_number=self.version_number,
             _schema_version=self._schema_version,
             _created_at=self._created_at,
         )

@@ -283,6 +283,81 @@ class OutcomeResolver:
         return self.config.rise_fall_window_seconds
 
 
+def resolve_trade_transactionally(
+    store: "SQLiteShadowStore", 
+    trade_id: str, 
+    resolver: OutcomeResolver, 
+    tick_data: np.ndarray, 
+    tick_timestamps: np.ndarray,
+    max_retries: int = 3
+) -> bool:
+    """
+    Resolve a trade with Optimistic Concurrency Control (OCC) retry loop.
+    
+    1. Fetch latest trade state
+    2. detailed resolution logic
+    3. Try atomic update (update_outcome)
+    4. If OptimisticLockError, retry
+    
+    Args:
+        store: SQLiteShadowStore instance
+        trade_id: ID of trade to resolve
+        resolver: OutcomeResolver instance
+        tick_data: Tick prices
+        tick_timestamps: Tick timestamps
+        max_retries: Number of retries on version conflict
+        
+    Returns:
+        True if successfully resolved/updated, False otherwise
+    """
+    from execution.sqlite_shadow_store import OptimisticLockError, SQLiteShadowStore
+    import time
+    
+    # Ensure strict typing for the store to access get_by_id and update_outcome
+    if not isinstance(store, SQLiteShadowStore):
+        logger.warning(f"Store {type(store)} does not support transactional resolution")
+        return False
+
+    for attempt in range(max_retries):
+        try:
+            # 1. Fetch latest state
+            trade = store.get_by_id(trade_id)
+            if not trade:
+                logger.warning(f"Trade {trade_id} not found in store")
+                return False
+                
+            # 2. Check if already resolved
+            if trade.is_resolved():
+                logger.debug(f"Trade {trade_id} already resolved (outcome={trade.outcome})")
+                return True
+                
+            # 3. Resolve
+            outcome, exit_price = resolver._resolve_single(trade, tick_data, tick_timestamps)
+            
+            # 4. Try atomic update
+            # This will raise OptimisticLockError if version changed since step 1
+            store.update_outcome(trade, outcome, exit_price)
+            return True
+            
+        except OptimisticLockError:
+            logger.info(f"OCC conflict for trade {trade_id} (attempt {attempt+1}/{max_retries}) - Retrying...")
+            time.sleep(0.05 * (attempt + 1)) # Backoff
+            continue
+            
+        except ValueError as e:
+            # Data not available yet?
+            logger.debug(f"Skipping {trade_id}: {e}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error resolving {trade_id}: {e}")
+            return False
+            
+    logger.error(f"Failed to resolve {trade_id} after {max_retries} attempts due to concurrency")
+    return False
+
+
+
 def batch_resolve(store_path: str, tick_data_path: str, output_path: str | None = None) -> int:
     """
     CLI utility to batch resolve shadow trades.
@@ -318,3 +393,53 @@ def batch_resolve(store_path: str, tick_data_path: str, output_path: str | None 
         store.append_resolved(resolved_only)
 
     return len(resolved_only)
+
+
+def batch_resolve_sqlite(store_path: str, tick_data_path: str) -> int:
+    """
+    Batch resolve trades using SQLite store and OCC.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    
+    from execution.sqlite_shadow_store import SQLiteShadowStore
+    
+    if not Path(store_path).exists():
+        logger.error(f"Store not found: {store_path}")
+        return 0
+        
+    store = SQLiteShadowStore(Path(store_path))
+    unresolved = store.query(unresolved_only=True)
+    
+    if not unresolved:
+        logger.info("No unresolved trades to process")
+        return 0
+        
+    logger.info(f"Processing {len(unresolved)} unresolved trades...")
+    
+    # Load market data ONCE
+    # Note: For massive datasets, we might need chunking, but for batch jobs this is likely fine
+    try:
+        tick_df = pd.read_parquet(tick_data_path)
+        if "quote" not in tick_df.columns or "epoch" not in tick_df.columns:
+            raise ValueError("DataFrame missing quote/epoch columns")
+        
+        tick_data = tick_df["quote"].values.astype(np.float64)
+        tick_timestamps = tick_df["epoch"].values.astype(np.float64)
+    except Exception as e:
+        logger.error(f"Failed to load tick data: {e}")
+        return 0
+
+    resolver = OutcomeResolver()
+    resolved_count = 0
+    
+    # Process serially or in parallel?
+    # Parallel is safe due to per-row OCC!
+    # But SQLite writes are serialized by the driver/WAL.
+    # Let's simple serial loop for safety first.
+    
+    for trade in unresolved:
+        if resolve_trade_transactionally(store, trade.trade_id, resolver, tick_data, tick_timestamps):
+            resolved_count += 1
+            
+    return resolved_count

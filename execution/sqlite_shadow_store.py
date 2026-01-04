@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 SQLITE_SCHEMA_VERSION = 4  # C01: Added resolution_context column
 
 
+class OptimisticLockError(Exception):
+    """Raised when an update fails due to version mismatch (concurrency conflict)."""
+    pass
+
 class SQLiteShadowStore(SQLiteTransactionMixin):
     """
     SQLite-backed shadow trade store with atomic operations.
@@ -152,8 +156,9 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
                     tick_window, candle_window,
                     outcome, exit_price, resolved_at,
                     metadata, schema_version, created_at,
-                    barrier_level, barrier2_level, duration_minutes, resolution_context
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    barrier_level, barrier2_level, duration_minutes, resolution_context,
+                    version_number
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.trade_id,
@@ -178,6 +183,7 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
                     record.barrier2_level,
                     record.duration_minutes,
                     json.dumps(record.resolution_context),
+                    record.version_number,
                 ),
             )
 
@@ -210,16 +216,23 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
             cursor = conn.execute(
                 """
                 UPDATE shadow_trades
-                SET outcome = ?, exit_price = ?, resolved_at = ?
-                WHERE trade_id = ?
+                SET outcome = ?, exit_price = ?, resolved_at = ?, version_number = version_number + 1
+                WHERE trade_id = ? AND version_number = ?
                 """,
-                (1 if outcome else 0, exit_price, resolved_at, trade_id),
+                (1 if outcome else 0, exit_price, resolved_at, trade_id, trade.version_number),
             )
 
             if cursor.rowcount > 0:
-                logger.debug(f"Updated outcome for {trade_id}: outcome={outcome}")
+                logger.debug(f"Updated outcome for {trade_id}: outcome={outcome} (v{trade.version_number}->v{trade.version_number+1})")
                 return True
             else:
+                # Check if trade exists at all to distinguish "not found" vs "conflict"
+                cursor = conn.execute("SELECT version_number FROM shadow_trades WHERE trade_id = ?", (trade_id,))
+                row = cursor.fetchone()
+                if row:
+                    logger.warning(f"Optimistic lock failure for {trade_id}. DB version: {row[0]}, Tried: {trade.version_number}")
+                    raise OptimisticLockError(f"Trade {trade_id} modified concurrently (v{trade.version_number} vs v{row[0]})")
+                
                 logger.warning(f"Trade not found for outcome update: {trade_id}")
                 return False
 
@@ -485,6 +498,7 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
             barrier2_level=row["barrier2_level"] if "barrier2_level" in row.keys() else None,
             duration_minutes=row["duration_minutes"] if "duration_minutes" in row.keys() else 1,
             resolution_context=json.loads(row["resolution_context"]) if "resolution_context" in row.keys() and row["resolution_context"] else [],
+            version_number=row["version_number"] if "version_number" in row.keys() else 0,
         )
 
     def get_by_id(self, trade_id: str) -> ShadowTradeRecord | None:
