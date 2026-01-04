@@ -17,6 +17,9 @@ python-dotenv>=1.0.0
 # Networking (for live trading)
 websockets>=14.0
 reactivex>=4.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+httpx>=0.24.0
 
 # Visualization & Logging
 tensorboard>=2.13.0
