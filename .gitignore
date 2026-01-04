@@ -11,9 +11,9 @@ checkpoints/
 .mypy_cache/
 .pytest_cache/
 .hypothesis/
-test_data/*.db
-test_data/*.db-shm
-test_data/*.db-wal
+*.db-shm
+*.db-wal
+*.db
 
 # Runtime artifacts
 pause_manifest.json
