@@ -1,0 +1,5 @@
+{
+    "name": "Python 3 & TA-Lib",
+    "image": "mcr.microsoft.com/devcontainers/python:3",
+    "postCreateCommand": "bash .devcontainer/install.sh"
+}
