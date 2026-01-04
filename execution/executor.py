@@ -12,7 +12,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable, Optional
+from typing import Protocol, runtime_checkable, Optional, Union
 
 from execution.common.types import ExecutionRequest
 from execution.contract_params import ContractDurationResolver
@@ -77,10 +77,21 @@ class DerivTradeExecutor:
         
         logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
-    async def execute(self, request: ExecutionRequest, check_only: bool = False) -> TradeResult:
+    async def execute(self, request: ExecutionRequest | TradeSignal, check_only: bool = False) -> TradeResult:
         """
         Execute validated request on Deriv platform.
+        Handles both ExecutionRequest (direct) and TradeSignal (via adapter).
         """
+        # CRITICAL-FIX (C-001): Auto-adapt TradeSignal to ExecutionRequest
+        if isinstance(request, TradeSignal):
+            from execution.executor_adapter import SignalAdapter
+            adapter = SignalAdapter(self.settings, self.position_sizer)
+            try:
+                request = adapter.to_execution_request(request)
+            except Exception as e:
+                logger.error(f"Failed to adapt signal {request.signal_id}: {e}")
+                return TradeResult(success=False, error=f"Signal Adaptation Error: {e}")
+
         try:
             # 5. Idempotency Check (CRITICAL-002)
             if self.idempotency_store:

@@ -26,7 +26,8 @@ import numpy as np
 from typing import cast
 
 from config.settings import Settings
-from data import indicators, normalizers
+import data.indicators as indicators
+import data.normalizers as normalizers
 
 logger = logging.getLogger(__name__)
 

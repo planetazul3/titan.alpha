@@ -24,9 +24,7 @@ Low-level utilities (use FeatureBuilder instead):
 # DEPRECATED: Low-level preprocessors - use FeatureBuilder instead
 import warnings as _warnings
 
-from data.dataset import DerivDataset
 from data.common.schema import FEATURE_SCHEMA_VERSION
-from data.features import FeatureBuilder, get_feature_builder
 from data.indicators import (
     adx,
     atr,
@@ -41,13 +39,17 @@ from data.indicators import (
 )
 from data.ingestion.client import DerivClient
 from data.ingestion.historical import download_months
-from data.loader import create_dataloaders
 from data.normalizers import (
     log_returns,
     min_max_normalize,
     robust_scale,
     z_score_normalize,
 )
+
+# High-level modules (dependent on above)
+from data.features import FeatureBuilder, get_feature_builder
+from data.dataset import DerivDataset
+from data.loader import create_dataloaders
 from data.shadow_dataset import ShadowTradeDataset
 
 

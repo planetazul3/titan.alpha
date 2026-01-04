@@ -28,6 +28,7 @@ import torch
 from config.settings import Settings
 from data.processor import CandlePreprocessor, TickPreprocessor, VolatilityMetricsExtractor
 from data.common.schema import FEATURE_SCHEMA_VERSION, FeatureSchema, CandleInputSchema
+from data.staleness import check_data_staleness, StaleDataError
 import pandas as pd
 import pandera as pa
 
@@ -35,11 +36,6 @@ logger = logging.getLogger(__name__)
 
 
 logger = logging.getLogger(__name__)
-
-
-class StaleDataError(Exception):
-    """Raised when market data is too old for safe inference."""
-    pass
 
 
 class FeatureBuilder:
@@ -148,15 +144,7 @@ class FeatureBuilder:
         if timestamp is not None and len(candles) > 0:
             # Candle format: [Open, High, Low, Close, Volume, Timestamp]
             last_candle_ts = candles[-1, 5]
-            latency = timestamp - last_candle_ts
-            threshold = self.settings.trading.stale_candle_threshold
-            
-            if latency > threshold:
-                msg = f"Data is STALE! Latency: {latency:.2f}s (Threshold: {threshold}s). Last candle: {last_candle_ts}"
-                logger.error(msg)
-                raise StaleDataError(msg)
-            elif latency < -1.0: # Clock shift tolerance
-                 logger.warning(f"Future data detected? Latency: {latency:.2f}s")
+            check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)
                  
         # Process through canonical preprocessors
         tick_features = self._tick_pp.process(ticks)
@@ -209,13 +197,7 @@ class FeatureBuilder:
         # CRITICAL-004: Staleness Validation (Duplicate logic for numpy path)
         if timestamp is not None and len(candles) > 0:
             last_candle_ts = candles[-1, 5]
-            latency = timestamp - last_candle_ts
-            threshold = self.settings.trading.stale_candle_threshold
-            
-            if latency > threshold:
-                msg = f"Data is STALE! Latency: {latency:.2f}s (Threshold: {threshold}s)"
-                logger.error(msg)
-                raise StaleDataError(msg)
+            check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)
 
         tick_features = self._tick_pp.process(ticks)
         candle_features = self._candle_pp.process(candles)

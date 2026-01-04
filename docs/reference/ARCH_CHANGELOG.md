@@ -57,3 +57,23 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 #### 3. Event-Driven Backtesting (REC-004)
 *   **Change**: Implemented `BacktestEngine` and `scripts/backtest.py` that replay the full live pipeline.
 *   **Justification**: "What you test is what you fly". Vectorized backtests missed critical implementation details (latency, feature calculation drift). This architecture ensures offline metrics (Sharpe, Drawdown) map to online reality.
+
+## [1.1.1] - 2026-01-04
+
+### Critical Remediation (Phase 1 & 2)
+
+#### 1. Execution Pathway Resolution (C-001)
+*   **Change**: Implemented `SignalAdapter` to map `TradeSignal` -> `ExecutionRequest`.
+*   **Justification**: Decoupled decision logic from execution mechanics. Fixed critical `AttributeError`.
+
+#### 2. Data Type & Schema Harmonization (C-002)
+*   **Change**: Updated Feature Schema to explicitly support `float32` inputs. 
+*   **Justification**: Aligns schema validation with memory-mapped data pipeline (3.7 GiB constraint) while maintaining type safety.
+
+#### 3. Test Isolation (I-002)
+*   **Change**: Enforced strict environment isolation. Added `.env.test` and automatic detection in `settings.py`.
+*   **Justification**: Prevents accidental loading of production credentials during testing.
+
+#### 4. Architecture Refactoring (C-003, C-005)
+*   **Change**: Resolved circular dependencies in `data` package. Centralized staleness logic in `data/staleness.py`.
+*   **Justification**: Improves maintainability and testability of the data pipeline.

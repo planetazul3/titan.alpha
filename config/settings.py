@@ -549,6 +549,8 @@ class Settings(BaseSettings):
 def load_settings() -> Settings:
     """
     Load and validate settings from environment variables and .env file.
+    
+    Automatically selects .env.test if running in pytest environment.
 
     Returns:
         Validated Settings instance
@@ -560,8 +562,18 @@ def load_settings() -> Settings:
         >>> settings = load_settings()
         >>> print(f"Trading {settings.trading.symbol} on {settings.get_device()}")
     """
+    import os
     try:
-        settings = Settings()  # type: ignore[call-arg]
+        # I-002: Test Isolation Logic
+        is_test = os.getenv("PYTEST_CURRENT_TEST") is not None
+        env_file = ".env.test" if is_test else ".env"
+        
+        # We pass _env_file to the Pydantic Settings constructor which overrides the class default
+        settings = Settings(_env_file=env_file) # type: ignore[call-arg]
+        
+        if is_test:
+            logger.info("TEST MODE DETECTED: Loaded configuration from .env.test")
+            
         logger.info(f"Settings loaded successfully. Environment: {settings.environment}")
         logger.debug(f"Device preference: {settings.device_preference}")
         return settings

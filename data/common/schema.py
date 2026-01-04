@@ -59,12 +59,12 @@ class CandleInputSchema(pa.DataFrameModel):
     - Low <= Open/Close
     """
     
-    open: Series[float] = pa.Field(ge=0.0)
-    high: Series[float] = pa.Field(ge=0.0)
-    low: Series[float] = pa.Field(ge=0.0)
-    close: Series[float] = pa.Field(ge=0.0)
-    volume: Series[float] = pa.Field(ge=0.0)
-    timestamp: Series[float] = pa.Field(gt=0.0)
+    open: Series[np.float32] = pa.Field(ge=0.0, coerce=True)
+    high: Series[np.float32] = pa.Field(ge=0.0, coerce=True)
+    low: Series[np.float32] = pa.Field(ge=0.0, coerce=True)
+    close: Series[np.float32] = pa.Field(ge=0.0, coerce=True)
+    volume: Series[np.float32] = pa.Field(ge=0.0, coerce=True)
+    timestamp: Series[np.float64] = pa.Field(gt=0.0, coerce=True) # Timestamp usually float64 for precision
 
     @pa.dataframe_check
     def high_gte_low(cls, df: DataFrame) -> Series[bool]:
