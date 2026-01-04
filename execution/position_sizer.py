@@ -31,9 +31,10 @@ Example:
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
 
 
 @dataclass
@@ -65,6 +66,15 @@ class PositionSizeResult:
             "drawdown_multiplier": self.drawdown_multiplier,
             "reason": self.reason,
         }
+
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class PositionSizer(Protocol):
+    """Protocol for position sizing strategies."""
+    def suggest_stake_for_signal(self, signal: Any, **kwargs) -> float:
+        ...
+
 
 
 class KellyPositionSizer:
@@ -184,6 +194,7 @@ class KellyPositionSizer:
         model_confidence: float = 1.0,
         current_drawdown: float = 0.0,
         volatility_regime: str = "normal",
+        volatility: float = 0.0, # Added numeric volatility (0.0 = ignored)
         account_balance: float | None = None,
     ) -> PositionSizeResult:
         """
@@ -195,6 +206,7 @@ class KellyPositionSizer:
             model_confidence: Confidence score from model (0 to 1)
             current_drawdown: Current account drawdown as fraction (0 to 1)
             volatility_regime: Market volatility state ("low", "normal", "high")
+            volatility: Annualized realized volatility (decimal)
             account_balance: Optional current balance for dynamic sizing
         
         Returns:
@@ -231,7 +243,10 @@ class KellyPositionSizer:
             adjusted *= drawdown_mult
         
         # 6. Apply volatility regime adjustment
+        # Use simple regime string if provided, or could use numeric volatility logic
         if volatility_regime == "high":
+            adjusted *= self.high_volatility_reduction
+        elif volatility > 0.8: # Fallback if regime not set but numeric vol is high
             adjusted *= self.high_volatility_reduction
         
         # 7. Convert to stake amount
@@ -281,6 +296,7 @@ class KellyPositionSizer:
         model_confidence: float = 1.0,
         current_drawdown: float = 0.0,
         volatility_regime: str = "normal",
+        volatility: float = 0.0,
         account_balance: float | None = None,
     ) -> float:
         """
@@ -291,6 +307,7 @@ class KellyPositionSizer:
             model_confidence: Confidence score
             current_drawdown: Current drawdown
             volatility_regime: Volatility state
+            volatility: Realized volatility (decimal)
             account_balance: Optional balance for dynamic sizing
         
         Returns:
@@ -300,12 +317,17 @@ class KellyPositionSizer:
         # Use signal payout if present, else fallback to class default
         payout_ratio = getattr(signal, "payout_ratio", self.default_payout_ratio)
         
+        # Try to extract volatility from signal if not provided
+        if volatility == 0.0 and hasattr(signal, 'metadata'):
+            volatility = signal.metadata.get('volatility', 0.0)
+        
         result = self.compute_stake(
             probability=probability,
             payout_ratio=payout_ratio,
             model_confidence=model_confidence,
             current_drawdown=current_drawdown,
             volatility_regime=volatility_regime,
+            volatility=volatility,
             account_balance=account_balance,
         )
         
@@ -602,6 +624,91 @@ class FixedStakeSizer:
             reason=f"Fixed stake: ${self.stake:.2f}",
         )
     
+        return self.stake
+    
     def suggest_stake_for_signal(self, signal: Any, **kwargs) -> float:
         """Return fixed stake."""
         return self.stake
+
+
+class TargetVolatilitySizer:
+    """
+    Volatility-Targeted Position Sizing.
+    
+    Adjusts stake size inversely proportional to market volatility to maintain
+    a constant risk exposure.
+    
+    Formula:
+        Stake = (Target Volatility / Realized Volatility) * Base Stake
+        
+    Attributes:
+        target_volatility: The desired annualized volatility (e.g. 0.20 for 20%)
+        base_stake: The standard stake when volatility == target
+        min_stake: Minimum allowable stake
+        max_stake: Maximum allowable stake
+        volatility_lookback: Number of candles for volatility calculation (context only)
+    """
+    
+    def __init__(
+        self, 
+        base_stake: float,
+        target_volatility: float = 0.5, # 50% annualized volatility as baseline
+        min_stake: float = 1.0, 
+        max_stake: float = 50.0
+    ):
+        self.base_stake = base_stake
+        self.target_volatility = target_volatility
+        self.min_stake = min_stake
+        self.max_stake = max_stake
+        
+    def compute_stake(
+        self, 
+        volatility: float, 
+        **kwargs
+    ) -> PositionSizeResult:
+        """
+        Compute stake based on volatility.
+        
+        Args:
+            volatility: Current annualized realized volatility (decimal, e.g. 0.45)
+        """
+        if volatility <= 0:
+            # Fallback for invalid volatility
+            reason = "Invalid volatility (<=0), using base stake"
+            stake = self.base_stake
+            mult = 1.0
+        else:
+            # Calculate scaler
+            # If current vol (0.8) > target (0.4) -> mult = 0.5 -> half stake
+            # If current vol (0.2) < target (0.4) -> mult = 2.0 -> double stake
+            mult = self.target_volatility / volatility
+            
+            # Clamp multiplier for safety (e.g. don't go > 3x even if vol is tiny)
+            mult = max(0.2, min(3.0, mult))
+            
+            stake = self.base_stake * mult
+            reason = f"Vol Target: {self.target_volatility:.2f} / Current {volatility:.2f} -> {mult:.2f}x"
+            
+        # Apply bounds
+        final_stake = max(self.min_stake, min(self.max_stake, stake))
+        
+        return PositionSizeResult(
+            stake=round(final_stake, 2),
+            kelly_fraction=0.0,
+            adjusted_fraction=0.0,
+            confidence_multiplier=1.0,
+            drawdown_multiplier=mult, # Reusing this field for vol multiplier
+            reason=reason
+        )
+        
+    def suggest_stake_for_signal(self, signal: Any, volatility: float = 0.5, **kwargs) -> float:
+        """
+        Compute stake from signal metadata or provided volatility.
+        """
+        # Try to get volatility from signal metadata if not provided explicitly
+        if volatility == 0.5 and hasattr(signal, 'metadata'):
+            volatility = signal.metadata.get('volatility', 0.5)
+            
+        result = self.compute_stake(volatility=volatility)
+        return result.stake
+
