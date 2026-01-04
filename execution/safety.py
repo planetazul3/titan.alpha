@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Optional, TYPE_CHECKING
 
+from execution.common.types import ExecutionRequest
 from execution.executor import TradeExecutor, TradeResult, TradeSignal
 from execution.safety_store import SQLiteSafetyStateStore
 
@@ -80,7 +81,6 @@ class SafeTradeExecutor:
         inner_executor: TradeExecutor,
         config: ExecutionSafetyConfig,
         state_file: str | Path,
-        stake_resolver: Optional[Callable[[TradeSignal], float | Any]] = None,
         policy: Optional["ExecutionPolicy"] = None,
     ):
         """
@@ -90,13 +90,11 @@ class SafeTradeExecutor:
             inner_executor: Raw execution implementation
             config: Safety limits configuration
             state_file: Path to SQLite state DB
-            stake_resolver: Function to resolve stake amount for a signal
             policy: Optional ExecutionPolicy to register rate-limit vetoes with
         """
         self.inner = inner_executor
         self.config = config
         self.store = SQLiteSafetyStateStore(state_file)
-        self.stake_resolver = stake_resolver
         self._policy = policy
         
         # Concurrency safety
@@ -173,23 +171,19 @@ class SafeTradeExecutor:
              count = await self.store.get_trades_in_window_async(None, 60.0)
              return count < self.config.max_trades_per_minute
 
-    async def execute(self, signal: TradeSignal) -> TradeResult:
+    async def execute(self, request: ExecutionRequest) -> TradeResult:
         """
-        Execute trade with safety checks.
+        Execute execution request with safety checks.
         
         ARCHITECTURE NOTE (RISK-ARCH-REVIEW):
-        If policy is registered, kill switch and daily loss checks are handled by
-        the policy layer (DecisionEngine.process_model_output). This method focuses on:
+        This layer focuses on:
         - Per-symbol rate limits (local check)
-        - Stake validation
+        - Stake validation (vs Config limits)
         - Execution with retries
         - State persistence
         
-        For full unified veto checking, ensure ExecutionPolicy.check_vetoes() is
-        called before reaching this method.
-        
         Args:
-            signal: Trade signal
+            request: Validated execution request
             
         Returns:
             TradeResult (success or failure with error)
@@ -203,49 +197,29 @@ class SafeTradeExecutor:
             return self._reject("Daily limits exceeded")
 
         # 3. Check Short-Term Rate Limits (symbol-specific, always local)
-        # Assuming get_symbol_from_signal is available globally or imported
-        symbol = get_symbol_from_signal(signal)
-        if not await self._check_rate_limits(symbol):
+        if not await self._check_rate_limits(request.symbol):
              return self._reject("Rate limit exceeded")
              
-        # 4. Check Stake Amount (if resolver provided)
-        safe_signal = signal # Initialize safe_signal with original signal
-        if self.stake_resolver:
-            try:
-                # FIX: Pass the full signal to the resolver to get the ACTUAL stake logic
-                # Support both sync and async resolvers
-                if asyncio.iscoroutinefunction(self.stake_resolver):
-                    stake = await self.stake_resolver(signal)
-                else:
-                    stake = self.stake_resolver(signal)
-
-                if stake > self.config.max_stake_per_trade:
-                    msg = f"Stake {stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
-                    return self._reject(msg)
-                
-                # CRITICAL-003: Use immutable pattern for stake injection
-                # Instead of mutating the shared signal, we create a copy with the validated stake
-                safe_signal = signal.with_metadata(stake=stake)
-                
-            except Exception as e:
-                 logger.error(f"Error resolving stake in safety check: {e}")
-                 # Fail safe -> reject
-                 return self._reject(f"Stake resolution failed: {e}")
+        # 4. Check Stake Amount against Safety Config
+        # StrategyAdapter has suggested a stake, but Safety Shield has final veto
+        if request.stake > self.config.max_stake_per_trade:
+            msg = f"Stake {request.stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
+            return self._reject(msg)
 
         # 5. Execute with Retries
         if self.tracer:
             with self.tracer.start_as_current_span("safety_executor.execute") as span:
-                span.set_attribute("symbol", symbol)
-                span.set_attribute("contract_type", str(signal.contract_type))
-                span.set_attribute("stake", signal.metadata.get("stake", 0.0))
+                span.set_attribute("symbol", request.symbol)
+                span.set_attribute("contract_type", request.contract_type)
+                span.set_attribute("stake", request.stake)
                 
-                result = await self._execute_with_retry(safe_signal)
+                result = await self._execute_with_retry(request)
         else:
-            result = await self._execute_with_retry(safe_signal)
+            result = await self._execute_with_retry(request)
             
         # 6. Update State
         if result.success:
-            await self._record_trade(signal.metadata.get("symbol", "unknown"), result)
+            await self._record_trade(request.symbol, result)
 
         return result
 
@@ -287,7 +261,7 @@ class SafeTradeExecutor:
                      
              return True
 
-    async def _execute_with_retry(self, signal: TradeSignal) -> TradeResult:
+    async def _execute_with_retry(self, request: ExecutionRequest) -> TradeResult:
         """Execute with exponential backoff on business logic errors only.
         
         IMPORTANT: Transport-level errors (ConnectionError, TimeoutError) are 
@@ -320,7 +294,7 @@ class SafeTradeExecutor:
 
         for attempt in range(self.config.max_retry_attempts):
             try:
-                result = await self.inner.execute(signal)
+                result = await self.inner.execute(request)
                 return result
             except Exception as e:
                 error_code = getattr(e, "code", None) or ""
@@ -501,7 +475,4 @@ class SafeTradeExecutor:
         return result
 
 
-def get_symbol_from_signal(signal: TradeSignal) -> str:
-    """Extract symbol from signal metadata if available."""
-    # Logic depends on signal structure.
-    return str(signal.metadata.get("symbol", "unknown"))
+

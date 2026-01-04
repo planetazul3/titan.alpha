@@ -97,7 +97,18 @@ async def run_live_trading(args):
     # Records: inference latency, trade outcomes, regime assessments, P&L
     # ══════════════════════════════════════════════════════════════════════
     console_log("Initializing metrics collector...", "WAIT")
-    metrics = TradingMetrics(enable_prometheus=True)
+    # Records: inference latency, trade outcomes, regime assessments, P&L
+    # ══════════════════════════════════════════════════════════════════════
+    console_log("Initializing metrics collector...", "WAIT")
+    metrics = TradingMetrics(enable_prometheus=settings.observability.enable_prometheus)
+    
+    # Initialize AlertManager
+    from observability.alerting import get_alert_manager, AlertLevel, LogAlertChannel
+    alert_manager = get_alert_manager()
+    # Configure suppression based on settings
+    alert_manager._suppression_interval = settings.observability.alert_suppression_interval
+    
+    console_log(f"Alert Manager active (suppression: {settings.observability.alert_suppression_interval}s)", "SUCCESS")
     console_log("Metrics collector ready", "SUCCESS")
     logger.info(
         f"Metrics collector initialized (prometheus={'enabled' if metrics.use_prometheus else 'disabled'})"
@@ -233,6 +244,12 @@ async def run_live_trading(args):
                     logger.error(
                         f"[NETWORK] Failed to connect after {max_connect_retries} attempts"
                     )
+                    
+                    alert_manager.trigger(
+                        "connection_failure_fatal",
+                        f"Failed to connect to Deriv API after {max_connect_retries} attempts. System shutting down.",
+                        AlertLevel.CRITICAL
+                    )
                     raise
 
         # Initialize Position Sizer based on arguments
@@ -312,13 +329,20 @@ async def run_live_trading(args):
         )
         console_log("Real trade tracker initialized (API mode)", "SUCCESS")
 
+        # Create Strategy Adapter (IMPORTANT-005)
+        # Bridges Decision Engine (Signals) -> Execution (Requests)
+        from execution.strategy_adapter import StrategyAdapter
+        strategy_adapter = StrategyAdapter(settings, position_sizer=sizer)
+        console_log("Strategy Adapter initialized (Sizing + Durations)", "SUCCESS")
+
         # Create trade executor with SAFETY WRAPPER (production-grade controls)
         # The SafeTradeExecutor provides: rate limiting, P&L caps, kill switch
         console_log("Setting up trade executor with safety controls...", "WAIT")
         # Inject the chosen sizer into the raw executor
         # ID-001 Fix: Pass policy to executor for circuit breaker support
         from execution.executor import DerivTradeExecutor
-        raw_executor = DerivTradeExecutor(client, settings, position_sizer=sizer, policy=engine.policy)
+        # Executor no longer needs sizer, it just executes requests
+        raw_executor = DerivTradeExecutor(client, settings, policy=engine.policy)
 
         from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
         safety_config = ExecutionSafetyConfig(
@@ -336,26 +360,11 @@ async def run_live_trading(args):
         # L05: Unified DB path to prevent split-brain state
         safety_state_file = Path(settings.system.system_db_path)
 
-        # C06: Inject stake resolver for safety checks
-        async def stake_resolver(signal: Any) -> float:
-            # SAFETY FIX: Fetch REAL balance to ensure sizing matches execution reality
-            try:
-                # We need to fetch balance just like the executor would
-                # but currently client is not directly accessible here easily?
-                # Actually client is available in scope
-                current_balance = await client.get_balance()
-                logger.debug(f"Safety check balance fetch: {current_balance}")
-            except Exception as e:
-                logger.warning(f"Safety check balance fetch failed: {e}. Using None (defaults).")
-                current_balance = None
-                
-            return float(sizer.suggest_stake_for_signal(signal, account_balance=current_balance))
-
         executor = SafeTradeExecutor(
             inner_executor=raw_executor, 
             config=safety_config, 
             state_file=safety_state_file,
-            stake_resolver=stake_resolver
+            policy=engine.policy # Register vetoes
         )
         # Register executor with health monitor
         system_monitor.register_component("executor", create_executor_health_checker(executor))
@@ -599,24 +608,25 @@ async def run_live_trading(args):
                             )
                             logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
 
-                        try:
-                            await run_inference(
-                                model,
-                                engine,
-                                executor,
-                                buffer,
-                                feature_builder,
-                                device,
-                                settings,
-                                metrics,
-                                calibration_monitor=calibration_monitor,
-                                trade_tracker=real_trade_tracker,
-                                challengers=challengers,
-                            )
-                            inference_count += 1
-                        except Exception as inf_e:
-                            logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
-                            metrics.record_error("inference_failure")
+                            try:
+                                await run_inference(
+                                    model,
+                                    engine,
+                                    executor,
+                                    buffer,
+                                    feature_builder,
+                                    device,
+                                    settings,
+                                    metrics,
+                                    calibration_monitor=calibration_monitor,
+                                    trade_tracker=real_trade_tracker,
+                                    challengers=challengers,
+                                    strategy_adapter=strategy_adapter,
+                                )
+                                inference_count += 1
+                            except Exception as inf_e:
+                                logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
+                                metrics.record_error("inference_failure")
                         
                         last_inference_time = time.time() # Update for cooldown
 
@@ -947,6 +957,7 @@ async def run_inference(
     calibration_monitor: CalibrationMonitor | None = None,
     trade_tracker: Any | None = None,  # RealTradeTracker for outcome tracking
     challengers: list[dict[str, Any]] | None = None, # OPT5: List of challenger stacks
+    strategy_adapter: Any | None = None, # IMPORTANT-005
 ):
     """
     Run single inference cycle with regime veto integration.
@@ -972,13 +983,16 @@ async def run_inference(
         metrics: TradingMetrics instance for recording metrics
         return_recon_error: If True, return reconstruction error for validation
         calibration_monitor: Optional CalibrationMonitor for graceful degradation
+        strategy_adapter: StrategyAdapter for signal-to-request conversion (optional for backward compat/testing)
 
     Returns:
         If return_recon_error is True, returns the reconstruction error float.
         Otherwise returns None.
     """
     import time
-
+    
+    # ... [Inference logic skipped for brevity - unchanged] ...
+    
     inference_start = time.perf_counter()
     
     # R01: Create span for entire inference cycle if tracing enabled
@@ -1114,16 +1128,49 @@ async def run_inference(
 
         logger.info(f"Real trades: {len(real_trades)}")
 
+        # Calculate realized volatility for position sizing
+        # Use close prices from buffer
+        import numpy as np
+        closes = buffer.get_candles_array(include_forming=False)[:, 3]
+        volatility = 0.0
+        if len(closes) > 20:
+             # Simple annualized vol estimate
+             log_returns = np.diff(np.log(closes[-20:]))
+             volatility = float(np.std(log_returns) * np.sqrt(365 * 24 * 60))
+
         # Execute trades via abstraction (broker-isolated)
         for signal in real_trades:
-            logger.info(f"EXECUTING: {signal}")
+            # Inject volatility context for sizing
+            if signal.metadata is None:
+                signal.metadata = {}
+            signal.metadata['volatility'] = volatility
+            
+            # IMPORTANT-005: Transform Signal -> ExecutionRequest
+
+            # IMPORTANT-005: Transform Signal -> ExecutionRequest
+            execution_request = None
+            if strategy_adapter:
+                # Fetch balance logic (optional for Kelly)
+                # Ideally this should be cached or fetched efficiently
+                # For now assuming simple sizing or adapter handles it
+                # Adapter.convert_signal(signal, account_balance=...)
+                try:
+                     execution_request = strategy_adapter.convert_signal(signal)
+                     logger.info(f"EXECUTING Request: {execution_request}")
+                except Exception as e:
+                     logger.error(f"Strategy Adapter failed to convert signal: {e}")
+                     continue
+            else:
+                 logger.error("No StrategyAdapter provided! Cannot execute.")
+                 continue
+
             
             # ATOMIC EXECUTION SAFETY: Record intent BEFORE API call
             # If app crashes after API succeeds but before confirmation,
             # the trade will be in ATTEMPTING state for investigation
             intent_id = None
-            stake = settings.trading.stake_amount
-            contract_type = getattr(signal, "contract_type", "unknown")
+            stake = execution_request.stake
+            contract_type = execution_request.contract_type
             
             if trade_tracker and hasattr(trade_tracker, '_store'):
                 import uuid
@@ -1138,7 +1185,7 @@ async def run_inference(
                 )
             
             exec_start = time.perf_counter()
-            result = await executor.execute(signal)
+            result = await executor.execute(execution_request)
             exec_latency = time.perf_counter() - exec_start
 
             # Record execution latency

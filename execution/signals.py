@@ -19,6 +19,7 @@ class TradeSignal:
     direction: str | None  # 'CALL', 'PUT', 'TOUCH', 'NO_TOUCH'
     probability: float
     timestamp: datetime
+    symbol: str = "R_100" # Default for backward compatibility
     metadata: dict[str, Any] = field(default_factory=dict)
     signal_id: str = field(default="")
 

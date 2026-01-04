@@ -13,6 +13,7 @@ from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.signals import TradeSignal
 from execution.executor import TradeResult
 from execution.outcome_resolver import resolve_trade_transactionally
+from execution.common.types import ExecutionRequest
 
 @pytest.mark.asyncio
 async def test_concurrent_safety_checks(tmp_path):
@@ -37,7 +38,7 @@ async def test_concurrent_safety_checks(tmp_path):
     
     mock_executor = MagicMock()
     # Simulate IO delay in execution
-    async def fast_exec(signal):
+    async def fast_exec(request): # Changed from signal to request
         await asyncio.sleep(0.001) 
         return TradeResult(success=True, contract_id=f"EXEC_{time.time()}")
     mock_executor.execute = AsyncMock(side_effect=fast_exec)
@@ -57,9 +58,22 @@ async def test_concurrent_safety_checks(tmp_path):
         ) for i in range(N_SIGNALS)
     ]
     
+    # Convert to ExecutionRequests (Manual adapter simulation)
+    requests = [
+        ExecutionRequest(
+            signal_id=s.signal_id,
+            symbol="R_100",
+            contract_type=s.contract_type,
+            stake=10.0, # Fixed stake for stress test
+            duration=1,
+            duration_unit="m",
+            barrier=None
+        ) for s in signals
+    ]
+    
     # 3. Fire all concurrently
     start_time = time.time()
-    results = await asyncio.gather(*[safe_executor.execute(s) for s in signals])
+    results = await asyncio.gather(*[safe_executor.execute(r) for r in requests])
     end_time = time.time()
     
     duration = end_time - start_time
