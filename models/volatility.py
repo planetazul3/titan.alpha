@@ -58,4 +58,6 @@ class VolatilityExpert(nn.Module):
         """
         recon = self.reconstruct(x)
         error = torch.mean((x - recon) ** 2, dim=1)
+        # CRITICAL-003: Harden against overflow/NaN
+        error = torch.nan_to_num(error, nan=1e6, posinf=1e6, neginf=1e6)
         return error

@@ -12,8 +12,10 @@ from .types import (
     MacroRegime,
     MicroRegime,
     VolatilityRegime,
+    VolatilityRegime,
     HierarchicalRegimeAssessment,
 )
+from .tracker import WindowedPercentileTracker
 
 
 class HurstExponentEstimator:
@@ -161,11 +163,16 @@ class HierarchicalRegimeDetector:
         self.vol_detector = VolatilityRegimeDetector(vol_low_percentile, vol_high_percentile)
         self.hurst_estimator = HurstExponentEstimator(hurst_min_window)
         self.reconstruction_weight = reconstruction_weight
+        # CRITICAL-003: Dynamic normalization
+        self.recon_tracker = WindowedPercentileTracker(window_size=2000)
 
     def assess(self, prices: np.ndarray, reconstruction_error: float = 0.0) -> HierarchicalRegimeAssessment:
         macro, trend_strength = self.trend_detector.detect(prices)
         volatility, vol_percentile = self.vol_detector.detect(prices)
         hurst = self.hurst_estimator.estimate(prices)
+
+        # Update tracker and get percentile
+        recon_percentile = self.recon_tracker.update(reconstruction_error)
 
         if hurst > 0.55:
             micro = MicroRegime.TRENDING
@@ -177,13 +184,14 @@ class HierarchicalRegimeDetector:
         trust_score = self._calculate_trust_score(
             macro, volatility, micro,
             trend_strength, vol_percentile, hurst,
-            reconstruction_error
+            recon_percentile
         )
 
         details = {
             "trend_strength": trend_strength,
             "vol_percentile": vol_percentile,
             "hurst_exponent": hurst,
+            "recon_percentile": recon_percentile,
         }
 
         return HierarchicalRegimeAssessment(
@@ -196,7 +204,7 @@ class HierarchicalRegimeDetector:
         )
 
     def _calculate_trust_score(
-        self, macro, volatility, micro, trend_strength, vol_percentile, hurst, reconstruction_error
+        self, macro, volatility, micro, trend_strength, vol_percentile, hurst, recon_percentile
     ) -> float:
         trust = 1.0
 
@@ -215,8 +223,16 @@ class HierarchicalRegimeDetector:
         else:
             trust *= 0.9
 
-        recon_penalty = 1.0 - min(1.0, reconstruction_error * 2) * self.reconstruction_weight
-        trust *= recon_penalty
+        # CRITICAL-003: Penalize based on dynamic percentile
+        # 99th percentile -> 0.1 penalty factor (severe veto)
+        # 95th percentile -> 0.5 penalty
+        # 50th percentile -> 1.0 (no penalty)
+        if recon_percentile > 99:
+             trust *= 0.0  # Hard Veto (Regime Mismatch)
+        elif recon_percentile > 95:
+             trust *= 0.5
+        elif recon_percentile > 80:
+             trust *= 0.8
 
         return float(np.clip(trust, 0.0, 1.0))
 

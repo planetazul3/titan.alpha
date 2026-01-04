@@ -67,6 +67,7 @@ To meet the high-frequency and safety requirements, the architecture employs:
 
 #### 5.2.1 Data Subsystem (`data/`)
 *   **`features.py`**: The **Canonical Feature Source**. Contains the `FeatureBuilder` class. It enforces that the exact same math (log returns, Z-scores) is applied in both `scripts/train.py` and `scripts/live.py`.
+*   **`schema.py`**: Defines `CandleInputSchema` using **Pandera**. Enforces strict statistical validation (e.g., High >= Low) on raw data inputs before processing.
 *   **`buffer.py`**: `MarketDataBuffer` manages the sliding window of live data, ensuring the model always has a complete context window (e.g., last 200 candles) for inference.
 *   **`normalizers.py`**: Pure NumPy implementations of mathematical transforms.
 
@@ -84,7 +85,7 @@ To meet the high-frequency and safety requirements, the architecture employs:
     2.  **Circuit Breaker** (Consecutive loss limit)
     3.  **Daily P&L Cap** (Stop loss for the day)
     4.  **Rate Limits** (API constraints)
-*   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made, whether executed or not.
+*   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)** with version numbers to prevent race conditions during async outcome updates.
 
 ## 6. Runtime View
 
@@ -112,6 +113,7 @@ To meet the high-frequency and safety requirements, the architecture employs:
 | **H3** | Volatility Veto | Volatility Anomaly > `REGIME_VETO_THRESHOLD` (Percentile/StdDev) | Veto Signal |
 | **H4** | Warmup Veto | Buffer candles < `WARMUP_PERIOD` | Reject Signal |
 | **H5** | Regime Veto | Regime == `UNCERTAIN` (High AE Error) | Veto Signal |
+| **H6** | Staleness Veto | Data Latency > `STALE_THRESHOLD` | Reject Signal (Data Quality) |
 
 ### 7.2 Persistence
 *   **Safety State**: stored in `data_cache/safety_state.db`. Contains items like `daily_pnl` and `consecutive_losses`. Must persist across process restarts to prevent risk limit bypass.
