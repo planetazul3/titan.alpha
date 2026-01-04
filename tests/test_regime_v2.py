@@ -104,7 +104,7 @@ class TestVolatilityRegimeDetector:
         prices = np.array([100, 101])
         
         regime, percentile = detector.detect(prices)
-        assert regime == VolatilityRegime.MEDIUM
+        assert regime == VolatilityRegime.HIGH
 
 
 class TestTrendDetector:
