@@ -18,7 +18,9 @@ from config.constants import CONTRACT_TYPES
 from execution.contract_params import ContractDurationResolver
 from execution.idempotency_store import SQLiteIdempotencyStore
 from execution.signals import TradeSignal
+from execution.signals import TradeSignal
 from observability.execution_logging import execution_logger
+from deriv_api import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -156,11 +158,46 @@ class DerivTradeExecutor:
                 self._record_failure(error_msg)  # Multi-failure tracking
                 return TradeResult(success=False, error=error_msg)
 
+        except APIError as e:
+            # Handle Deriv-specific API errors
+            # APIError usually has a 'message' and 'code' if it comes from the API response
+            error_code = getattr(e, "code", "UnknownAPIError")
+            error_msg = str(e)
+            
+            logger.error(f"API Error during execution ({error_code}): {error_msg}")
+            execution_logger.log_trade_failure(signal.signal_id, error_msg, details={"code": error_code})
+            
+            self._failed_count += 1
+            
+            # Rate limits are critical but temporary
+            if "RateLimit" in str(error_code) or "RateLimit" in error_msg:
+                 logger.warning("Rate limit hit! Circuit breaker will likely trigger soon.")
+            
+            self._record_failure(f"{error_code}: {error_msg}")
+            return TradeResult(success=False, error=f"APIError: {error_msg}")
+
+        except ConnectionError as e:
+            logger.error(f"Connection lost during execution: {e}")
+            execution_logger.log_trade_failure(signal.signal_id, "ConnectionError")
+            self._failed_count += 1
+            self._record_failure("ConnectionError")
+            return TradeResult(success=False, error="ConnectionError")
+
         except Exception as e:
+            logger.exception(f"Unexpected error during execution: {e}")
             execution_logger.log_trade_failure(signal.signal_id, str(e))
             self._failed_count += 1
             self._record_failure(str(e))  # Multi-failure tracking for all exceptions
             return TradeResult(success=False, error=str(e))
+            
+    async def shutdown(self) -> None:
+        """Gracefully close resources."""
+        if self.idempotency_store:
+            try:
+                await self.idempotency_store.close()
+                logger.info("Executor: Idempotency store closed.")
+            except Exception as e:
+                logger.error(f"Executor: Failed to close idempotency store: {e}")
     
     def _record_failure(self, error_msg: str) -> None:
         """
@@ -209,6 +246,9 @@ class MockTradeExecutor:
     async def execute(self, signal: TradeSignal) -> TradeResult:
         self._signals.append(signal)
         return TradeResult(success=True, contract_id=f"MOCK_{signal.signal_id}")
+    
+    async def shutdown(self) -> None:
+        pass
         
     def get_signals(self) -> list[TradeSignal]:
         return self._signals # type: ignore[no-any-return]

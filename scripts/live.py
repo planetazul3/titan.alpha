@@ -926,6 +926,8 @@ async def run_live_trading(args):
             # Log safety wrapper statistics
             safety_stats = executor.get_safety_statistics()
             logger.info(f"Safety statistics: {safety_stats}")
+            # IMPORTANT-001: Graceful shutdown
+            await executor.shutdown()
 
         console_log("System shutdown complete", "INFO")
 
