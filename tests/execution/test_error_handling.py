@@ -13,10 +13,15 @@ class TestExecutorErrorHandling(unittest.IsolatedAsyncioTestCase):
         self.settings = MagicMock(spec=Settings)
         self.settings.trading = MagicMock()
         self.settings.trading.stake_amount = 10.0
-        self.settings.contracts = MagicMock() # Needed for DurationResolver
-        # Mock duration resolver to return fixed values
+        self.settings.contracts = MagicMock() 
+        self.settings.contracts.duration_rise_fall = 3
+        self.settings.contracts.duration_touch = 3
+        self.settings.contracts.duration_range = 3
+        
+        # Mock duration resolver defaults too just in case
         self.settings.trading.default_duration = 5
         self.settings.trading.default_duration_unit = "m"
+        self.settings.trading.barrier_offset = 0.5
         
         self.executor = DerivTradeExecutor(self.client, self.settings)
         

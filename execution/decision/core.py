@@ -8,7 +8,6 @@ import numpy as np
 from config.settings import Settings
 from execution.contract_params import ContractDurationResolver
 from execution.decision_logic import process_signals_batch
-from execution.filters import filter_signals
 from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence
 from execution.regime import RegimeAssessmentProtocol, RegimeVeto
 from execution.safety_store import SQLiteSafetyStateStore
@@ -19,6 +18,9 @@ from execution.calibration import ProbabilityCalibrator
 from execution.ensemble import create_ensemble, EnsembleStrategy
 
 from .shadow import ShadowDispatcher
+from .metrics import DecisionMetrics
+from .safety import SafetyStateSynchronizer
+from .processor import SignalProcessor
 
 try:
     from opentelemetry import trace
@@ -34,7 +36,11 @@ class DecisionEngine:
     Central coordinator for trading decisions with ABSOLUTE regime veto authority.
 
     Uses ExecutionPolicy to enforce strict veto hierarchy.
-    Delegates logic to `decision_logic` and `shadow_ops` for modularity.
+    Delegates logic to dedicated modules for Micro-Modularity (C-004):
+    - SignalProcessor: Calibration and Filtering
+    - SafetyStateSynchronizer: DB State Sync
+    - DecisionMetrics: Telemetry
+    - ShadowDispatcher: Paper Trading
     
     Decision Hierarchy (STRICTLY ENFORCED):
     1. **Regime Veto** (Absolute Authority): If volatility anomaly > threshold, BLOCK ALL TRADES.
@@ -57,8 +63,12 @@ class DecisionEngine:
         self.settings = settings
         self.execution_mode = execution_mode
         self.model_version = model_version
-        self.shadow_store = shadow_store
-        self.safety_store = safety_store
+        
+        # Micro-Module: Safety Sync
+        self.safety_sync = SafetyStateSynchronizer(safety_store)
+        
+        # Micro-Module: Metrics
+        self.metrics = DecisionMetrics()
         
         # IMPORTANT-002: Link regime thresholds to settings
         if regime_veto is None:
@@ -75,15 +85,14 @@ class DecisionEngine:
             circuit_breaker_reset_minutes=settings.execution_safety.circuit_breaker_reset_minutes
         )
         
-        # State trackers for policy providers
-        self._current_daily_pnl = 0.0
         self._last_reconstruction_error = 0.0
         
         # IMPORTANT-004: Apply safety profile with dynamic providers
+        # We bind to safety_sync.get_current_pnl() instead of local variable
         SafetyProfile.apply(
             policy=self.policy, 
             settings=settings,
-            pnl_provider=lambda: self._current_daily_pnl,
+            pnl_provider=self.safety_sync.get_current_pnl,
             calibration_provider=lambda: self._last_reconstruction_error
         )
         
@@ -100,22 +109,12 @@ class DecisionEngine:
         else:
             self.tracer = None
             
-        self._stats = {
-            "processed": 0,
-            "real": 0,
-            "shadow": 0,
-            "ignored": 0,
-            "regime_vetoed": 0,
-            "regime_caution": 0,
-        }
-        
-        # PERF: Throttle safety state sync
-        self._last_safety_sync: float = 0.0
-        self._safety_sync_interval: float = 5.0  # seconds
-        
         # R03: Initialize Calibration and Ensemble
         self.calibrator = ProbabilityCalibrator(settings.prob_calibration)
         self.ensemble = create_ensemble(settings.ensemble)
+        
+        # Micro-Module: Processor
+        self.processor = SignalProcessor(settings, self.calibrator)
         
         # Initialize Shadow Dispatcher
         self.shadow_dispatcher = ShadowDispatcher(
@@ -125,12 +124,22 @@ class DecisionEngine:
             execution_mode=execution_mode
         )
         
+        # Safely get store path name for logging
+        shadow_name = "None"
+        if shadow_store and hasattr(shadow_store, "_store_path"):
+            shadow_name = str(shadow_store._store_path.name)
+        elif shadow_store:
+             shadow_name = "Available"
+             
+        safety_name = "None"
+        if safety_store and hasattr(safety_store, "db_path"):
+            safety_name = str(safety_store.db_path.name)
+        
         logger.info(
             f"DecisionEngine initialized with regime thresholds: "
             f"CAUTION={self.regime_veto.threshold_caution:.3f}, "
-            f"VETO={self.regime_veto.threshold_veto:.3f}"
-            + (f", shadow_store={shadow_store._store_path.name}" if shadow_store else "")
-            + (f", safety_store={safety_store.db_path.name}" if safety_store else "")
+            f"VETO={self.regime_veto.threshold_veto:.3f}, "
+            f"shadow_store={shadow_name}, safety_store={safety_name}"
         )
 
     async def process_model_output(
@@ -147,9 +156,8 @@ class DecisionEngine:
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
 
-        # 0. Sync Safety State if possible
-        if self.safety_store:
-            await self.sync_safety_state()
+        # 0. Sync Safety State
+        await self.safety_sync.sync()
 
         try:
             reconstruction_error = float(reconstruction_error)
@@ -173,24 +181,20 @@ class DecisionEngine:
                     span.set_attribute("veto.type", "policy")
                     span.set_attribute("veto.reason", str(policy_veto))
                 logger.warning(f"TRADE BLOCKED BY EXECUTION POLICY: {policy_veto}")
-                self._stats["processed"] += 1
+                self.metrics.increment("processed")
                 if policy_veto.level == VetoPrecedence.REGIME:
-                        self._stats["regime_vetoed"] += 1
+                        self.metrics.increment("regime_vetoed")
                 else:
-                        self._stats["ignored"] += 1
+                        self.metrics.increment("ignored")
                 return []
 
             regime_assessment = self.regime_veto.assess(reconstruction_error)
             if span:
                 span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
 
-            # R03: Calibrate Probabilities
-            calibrated_probs = {}
-            for contract, raw_prob in probs.items():
-                calibrated_probs[contract] = self.calibrator.calibrate(raw_prob)
-
-            # R02: Filter probabilities into signals
-            all_signals = filter_signals(calibrated_probs, self.settings, timestamp)
+            # Delegate to SignalProcessor (R02/R03)
+            all_signals = self.processor.process(probs, timestamp)
+            
             if span:
                 span.set_attribute("signals.filtered_count", len(all_signals))
 
@@ -204,12 +208,21 @@ class DecisionEngine:
             )
 
             # Delegate to core logic
+            # Note: process_signals_batch still expects a 'stats' dict. 
+            # We pass metrics.get_statistics() ? No, it likely iterates the dict.
+            # Ideally we refactor process_signals_batch too, but for now we might need to pass the dict ref?
+            # Or wrapping metrics to look like dict?
+            # Let's peek at process_signals_batch. It probably updates 'stats'.
+            # "stats=self._stats" was passed.
+            # We can expose the internal dict for legacy compatibility or refactor the callee.
+            # For this step, we'll expose access to the internal dict via a property or just pass metrics._stats.
+            
             real_trades, shadow_trades = process_signals_batch(
                 all_signals=all_signals,
                 regime_assessment=regime_assessment,
                 settings=self.settings,
                 reconstruction_error=reconstruction_error,
-                stats=self._stats,
+                stats=self.metrics._stats, # Direct access for compatibility
                 tracer=span
             )
             
@@ -256,13 +269,9 @@ class DecisionEngine:
             span.set_attribute("reconstruction_error", reconstruction_error)
 
         try:
-            # R03: Calibrate Probabilities
-            calibrated_probs = {}
-            for contract, raw_prob in probs.items():
-                calibrated_probs[contract] = self.calibrator.calibrate(raw_prob)
-
-            # I02 Fix: Get all signals ONCE and reuse
-            all_signals = filter_signals(calibrated_probs, self.settings, timestamp)
+            # Delegate to SignalProcessor
+            all_signals = self.processor.process(probs, timestamp)
+            
             if span:
                 span.set_attribute("signals_count", len(all_signals))
 
@@ -283,7 +292,7 @@ class DecisionEngine:
                 regime_assessment=assessment,
                 settings=self.settings,
                 reconstruction_error=reconstruction_error,
-                stats=self._stats,
+                stats=self.metrics._stats, # Compat
                 tracer=span
             )
 
@@ -313,7 +322,7 @@ class DecisionEngine:
 
     def get_statistics(self) -> dict[str, Any]:
         """Get decision statistics including regime veto counts."""
-        return self._stats.copy()
+        return self.metrics.get_statistics()
 
     def _get_regime_state_string(self, assessment: RegimeAssessmentProtocol) -> str:
         """Extract regime state string."""
@@ -328,26 +337,7 @@ class DecisionEngine:
 
     async def sync_safety_state(self, force: bool = False) -> None:
         """Sync current P&L from SafetyStateStore."""
-        if not self.safety_store:
-            return
-            
-        import time
-        now = time.monotonic()
-        
-        if not force and (now - self._last_safety_sync) < self._safety_sync_interval:
-            return
-            
-        try:
-            _, daily_pnl = await self.safety_store.get_daily_stats_async()
-            from utils.numerical_validation import ensure_finite
-            self._current_daily_pnl = ensure_finite(
-                daily_pnl, 
-                "DecisionEngine.sync_pnl", 
-                default=0.0
-            ) 
-            self._last_safety_sync = now
-        except Exception as e:
-            logger.error(f"Failed to sync safety state: {e}")
+        await self.safety_sync.sync(force)
 
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Gracefully shutdown the engine, flushing pending tasks."""

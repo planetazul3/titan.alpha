@@ -77,11 +77,28 @@ def test_verify_i002_test_isolation():
     finally:
         del os.environ["PYTEST_CURRENT_TEST"]
 
+def test_verify_c004_decision_engine():
+    print("\n--- Verifying C-004 (Decision Engine Refactor) ---")
+    settings = load_settings()
+    # Mock dependencies
+    storage = MagicMock()
+    
+    from execution.decision.core import DecisionEngine
+    engine = DecisionEngine(settings, shadow_store=storage)
+    
+    # Check if sub-components are initialized
+    assert hasattr(engine, "metrics")
+    assert hasattr(engine, "safety_sync")
+    assert hasattr(engine, "processor")
+    
+    print("✅ DecisionEngine initialized with micro-modules.")
+
 if __name__ == "__main__":
     try:
         test_verify_c001_signal_adapter()
         test_verify_c002_schema_float32()
         test_verify_i002_test_isolation()
+        test_verify_c004_decision_engine()
         print("\n✨ ALL VERIFICATIONS PASSED")
     except Exception as e:
         print(f"\n❌ VERIFICATION FAILED: {e}")

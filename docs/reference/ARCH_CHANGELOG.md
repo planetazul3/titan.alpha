@@ -77,3 +77,7 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 #### 4. Architecture Refactoring (C-003, C-005)
 *   **Change**: Resolved circular dependencies in `data` package. Centralized staleness logic in `data/staleness.py`.
 *   **Justification**: Improves maintainability and testability of the data pipeline.
+
+#### 5. Decision Engine Modularization (C-004)
+*   **Change**: Refactored `DecisionEngine` into micro-modules: `DecisionMetrics`, `SafetyStateSynchronizer`, `SignalProcessor`.
+*   **Justification**: Reduced cyclomatic complexity and file size (Satisfies C-004/REC-001). Improved testing granularity.

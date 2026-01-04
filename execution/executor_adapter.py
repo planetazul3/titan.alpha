@@ -50,7 +50,17 @@ class SignalAdapter:
         
         # 3. Resolve Stake
         if self.position_sizer:
-            stake = self.position_sizer.calculate_stake(signal.probability)
+            try:
+                # Use the protocol method
+                stake = self.position_sizer.suggest_stake_for_signal(signal)
+            except AttributeError:
+                # Fallback if position_sizer doesn't follow protocol exactly (e.g. old interface)
+                # But we should rely on protocol
+                if hasattr(self.position_sizer, "compute_stake"):
+                     res = self.position_sizer.compute_stake(probability=signal.probability)
+                     stake = res.stake
+                else:
+                    stake = self.settings.trading.stake_amount
         else:
             stake = self.settings.trading.stake_amount
             
