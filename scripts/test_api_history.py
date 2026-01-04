@@ -1,8 +1,7 @@
 
 import asyncio
-import os
+import asyncio
 from data.ingestion.client import DerivClient
-from dotenv import load_dotenv
 from config.settings import load_settings
 import datetime
 
@@ -35,10 +34,10 @@ async def test_call(client, name, params):
     except Exception as e:
         print(f"Execution Error: {e}")
 
+
 async def main():
-    load_dotenv()
     settings = load_settings()
-    token = os.getenv('DERIV_API_TOKEN')
+    # token variable was unused; DerivClient uses settings.deriv_api_token
     client = DerivClient(settings=settings)
     await client.connect()
     
