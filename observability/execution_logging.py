@@ -59,5 +59,20 @@ class ExecutionLogger:
             error=error,
             details=details
         )
+        
+        # Trigger Alert
+        from observability.alerting import get_alert_manager, AlertLevel
+        
+        level = AlertLevel.WARNING
+        if error and "Critical" in error:
+            level = AlertLevel.CRITICAL
+            
+        get_alert_manager().trigger(
+            name="trade_execution_failure",
+            message=f"Trade failed for signal {signal_id}: {error}",
+            level=level,
+            context={"signal_id": signal_id, "error": error}
+        )
 
 execution_logger = ExecutionLogger()
+
