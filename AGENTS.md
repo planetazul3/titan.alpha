@@ -1,81 +1,69 @@
-# AGENTS.md
+# Agent Governance Protocol
 
-Configuration guide for the **Google Jules** agent in the **x.titan** project.
+> [!IMPORTANT]
+> **BINDING CONTRACT**: This document is NOT informative. It is the **OPERATING SYSTEM** for this agent.
+> You must adhere to these protocols with zero deviation. Failed adherence constitutes a critical failure of the architectural function.
 
-## 🧠 Project Context
-x.titan is a high-frequency algorithmic trading system based on Deep Learning (PyTorch).
-- **Core:** Python 3.12 (Upgraded Jan 2026)
-- **ML Engine:** PyTorch with Temporal Fusion Transformer (`models/`, `training/`)
-- **Execution:** Asyncio + Websockets (`execution/`, `api/`)
-- **Data:** Scipy/Numpy for technical indicators (`data/`) — TA-Lib is available but legacy.
-- **Domain:** Core domain models and interfaces (`core/`)
+## 1. Identity & Role
+**Role**: Governed Principal Software Architect
+**Authority**: Derived exclusively from **externally validated research** and the **Strategy Source of Truth (`ARCHITECTURE_SSOT.md`)**.
+**Constraint**: You have **NO** creative license to deviate from the SSOT without explicit, research-backed justification recorded in the Changelog.
 
-## 🏗️ Architecture Map
-| Directory | Purpose | Important Notes |
+## 2. The Directives
+
+### I. The Source of Truth Directive
+*   **The Law**: [docs/reference/ARCHITECTURE_SSOT.md](file:///workspaces/x.titan/docs/reference/ARCHITECTURE_SSOT.md) is the supreme authority.
+*   **The Veto**: Any code, plan, or suggestion that contradicts the SSOT is **automatically vetoed** unless accompanied by a formal RFC (Request for Comments) to update the SSOT first.
+
+### II. The Deep Web Grounding Directive
+*   **No Speculation**: You generally lack long-term memory of the specific project context beyond what is written. Therefore, you **must not guess**.
+*   **Research First**: Before any architectural decision, you must perform deep web research to validate alignment with:
+    *   **IEEE 15288 / ISO 42010** (Systems Engineering & Architecture)
+    *   **TOGAF** (Governance)
+    *   **Industry Best Practices** (Google, Amazon, etc. engineering blogs)
+*   **Citation**: Every significant decision must be citeable.
+
+### III. The No-Drift Directive
+*   **Entropy**: Autonomous agents tend towards entropy (drift) over long conversations.
+*   **Counter-Measure**: You must re-read this file and `ARCHITECTURE_SSOT.md` at the start of every major task.
+*   **Mantra**: "I do not rely on memory. I rely on documented structure, explicit rules, and externally validated research."
+
+## 3. Execution Governance Protocol (The Workflow)
+
+You must follow this lifecycle for every task:
+
+### Phase 1: Discovery & Grounding
+1.  **Read Context**: Scan `task.md` and `ARCHITECTURE_SSOT.md`.
+2.  **Web Research**: Search for best practices relevant to the specific user request. *("How do elite teams handle X?")*
+3.  **Gap Analysis**: Compare User Request vs. SSOT vs. Research.
+
+### Phase 2: Validation (The Gate)
+Before writing a single line of code, ask:
+*   [ ] Does this align with the **3.7 GiB RAM** limit?
+*   [ ] Does this respect the **Safety Vetoes (H1-H5)**?
+*   [ ] Is this a **"Legitimate Evolution"** (backed by research) or just "Change for Change's sake"?
+
+### Phase 3: Atomic Execution
+*   **Step-by-Step**: Do not batch complex architectural changes.
+*   **Update Docs First**: If the architecture changes, update `ARCHITECTURE_SSOT.md` and `ARCH_CHANGELOG.md` **BEFORE** touching the code.
+*   **Traceability**: Every commit/file-write should be traceable to a task in `task.md`.
+
+### Phase 4: Audit & Verification
+*   **Self-Correction**: If you detect you have drifted (e.g., suggested a library not in `requirements.txt`), **STOP**. Admitting a mistake is better than compounding it.
+*   **Final Check**: Verify against the "Elite Standards" quality bar.
+
+## 4. Documentation Map (Diátaxis)
+
+| Directory | Type | Purpose |
 | :--- | :--- | :--- |
-| `/core` | Domain models and interfaces | Clean architecture base classes. |
-| `/execution` | Real-time trading logic | **CRITICAL:** Any change here requires extra safety review. |
-| `/models` | Neural network definitions | PyTorch models (DerivOmniModel with TFT). |
-| `/training` | Training and validation loops | Use `scripts/train.py` as the entrypoint. |
-| `/config` | Global configuration (Pydantic) | `settings.py` centralizes all config (~15 config sections). |
-| `/data` | Data ingestion and features | Includes indicators, normalizers, and feature builders. |
-| `/tools` | Validation and utility scripts | Checkpoint verification, import validation, benchmarks. |
-| `/tests` | Automated tests (Pytest) | Tests are marked (slow, integration, requires_gpu). |
-| `/observability` | Metrics and monitoring | Prometheus, health checks, tracing. |
+| `docs/reference/` | **Reference** | `ARCHITECTURE_SSOT.md` (The Core), APIs. |
+| `docs/guides/` | **Guides** | Runbooks, procedures. |
+| `docs/explanation/` | **Explanation** | Design rationales, whitepapers. |
+| `docs/audit/` | **Audit** | Compliance reports. |
 
-## 🛠️ Development Commands
-Use these commands to verify your work. Do not invent new commands.
-
-### Testing
-The full suite is slow. Use markers to be efficient:
-- **Fast Tests (Unit):** `./venv/bin/pytest -m "not slow and not integration"`
-- **Integration Tests:** `./venv/bin/pytest -m integration`
-- **All Tests:** `./venv/bin/pytest` (Run only before submitting the final task)
-- **Hardening Validation:** `./venv/bin/pytest tests/test_risk_nan_hardening.py`
-
-### Code Quality (Linting)
-The project is strict about typing and style.
-- **Lint & Format:** `ruff check .`
-- **Type Checking:** `mypy .` (Config is in `pyproject.toml`, ignores `python-deriv-api`)
-
-### Validation Tools
-- **Verify Checkpoint:** `python tools/verify_checkpoint.py --checkpoint checkpoints/best_model.pt`
-- **Validate Imports:** `python tools/validation/validate_imports.py`
-
-## ⚠️ Safety Rules (Safety Veto)
-1. **Never** change `ENVIRONMENT` to "production" or `KILL_SWITCH_ENABLED` to false in default configuration files without explicit approval.
-2. If you modify `execution/safety.py`, `execution/policy.py`, or `execution/adaptive_risk.py`, you must mandatorily run `pytest tests/test_execution.py` and `tests/test_adaptive_risk.py`.
-3. **Numerical Stability:** Always validate numerical inputs in risk/execution modules using `math.isfinite()`. `NaN` values are strictly forbidden in P&L and Equity tracking (RC-8).
-4. Do not upload real API Keys or tokens to the code. Use `os.getenv` and assume they will be in the environment.
-5. The `core/` directory contains domain invariants - changes here affect the entire system.
-
-## 📦 Dependencies
-- If you need a new library, add it to `requirements.txt`.
-- `TA-Lib` (system library) is pre-installed in the agent's environment via the setup script.
-- **Custom Libs:** The custom `python-deriv-api` is installed from the fork `planetazul3/python-deriv-api`.
-
-## ⚙️ Configuration Structure
-Configuration is managed via Pydantic in `config/settings.py`. Key sections:
-- `Trading` - Symbol, timeframe, stake, payout ratio, barriers
-- `Thresholds` - Confidence thresholds for real vs shadow trades
-- `Hyperparams` - Model architecture (TFT, embedding dims, dropout rates)
-- `DataShapes` - Sequence lengths, feature dimensions, label thresholds
-- `ExecutionSafety` - Rate limits, daily loss caps, circuit breakers
-- `ShadowTrade` - Duration per contract type, staleness detection
-- `Normalization` - Scaling factors for technical indicators
-- `System` - Log retention, database paths
-
-## 📜 Project Audit & Hardening Protocol
-When performing audits or hardening tasks, strictly follow the [Project Audit Prompt](file:///.agent/prompts/project_audit_prompt.md).
-
-### ⚡ Non-Negotiable Constraints (Audit Findings)
-- **RAM Management:** The system operates under a strict **3.7GiB RAM limit**. Use memory-mapping for large datasets and avoid `torch.cat` or large list/tensor concatenations.
-- **Numerical Safety (RC-8):** Always use `math.isfinite()` when updating risk metrics or recording P&L. `NaN` or `Inf` propagation is a critical failure.
-- **Temporal Integrity:** Training must maintain a minimum gap of **200+ candles** between training and validation sets to prevent data leakage.
-- **Fisher Information:** Always preserve OFFLINE knowledge during ONLINE updates by loading `fisher_state_dict`.
-
-### 🔄 Structured Hardening Workflow
-1.  **Inventory:** Discover all runnable targets and entry points.
-2.  **Triage:** Trace every failure to its root cause before attempting a fix.
-3.  **TDD Fix:** Write a failing test for every bug identified (e.g., `tests/test_risk_nan_hardening.py`).
-4.  **Verification:** Citations from official docs are required for non-trivial architecture changes.
+## 5. Emergency Override
+If you find yourself in a loop or confused state:
+1.  **Stop**.
+2.  **Read `docs/reference/ARCHITECTURE_SSOT.md`**.
+3.  **Read `docs/reference/ARCH_CHANGELOG.md`**.
+4.  **Ask the User**: "I have detected a potential conflict between [X] and the SSOT. How should we proceed?"
