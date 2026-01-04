@@ -60,7 +60,7 @@ To meet the high-frequency and safety requirements, the architecture employs:
 | `config` | **Central Configuration**. Single source of truth for all tunable parameters. | `settings.py`, `constants.py` |
 | `data` | **Data Pipeline**. Ingestion, normalization, and feature engineering. | `features.py`, `buffer.py`, `DerivDataset` |
 | `models` | **inference Engine**. Neural network definitions and forward pass logic. | `core.py`, `temporal.py`, `spatial.py` |
-| `execution` | **Decision & Safety**. Business logic, risk management, and API bridging. | `decision.py`, `safety.py`, `executor.py` |
+| `execution` | **Decision & Safety**. Business logic, risk management, and API bridging. | `decision.py`, `safety.py`, `executor.py`, `position_sizer.py`, `backtest.py` |
 | `training` | **Optimization**. Training loops and validation. | `train.py`, `trainer.py` |
 
 ### 5.2 Level 2: Component Details
@@ -78,14 +78,12 @@ To meet the high-frequency and safety requirements, the architecture employs:
 *   **`volatility.py`**: Autoencoder. Input: Volatility metrics. Output: Reconstruction Error (used for Regime Veto).
 
 #### 5.2.3 Execution Subsystem (`execution/`)
-*   **`decision.py`**: Evaluates model probabilities against thresholds.
+*   **`decision.py`**: Evaluates model probabilities against thresholds. Now integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
+*   **`position_sizer.py`**: **Dynamic Risk Management**. Calculates optimal stake using `KellyPositionSizer` or `TargetVolatilitySizer`, decoupled from signal logic.
 *   **`regime.py`**: Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
-*   **`safety.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks:
-    1.  **Kill Switch** (Global override)
-    2.  **Circuit Breaker** (Consecutive loss limit)
-    3.  **Daily P&L Cap** (Stop loss for the day)
-    4.  **Rate Limits** (API constraints)
-*   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)** with version numbers to prevent race conditions during async outcome updates.
+*   **`safety.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.
+*   **`backtest.py`**: **Event-Driven Replay**. Replays historical data through the full pipeline (`Buffer` -> `Model` -> `Decision`) to ensure "What you test is what you fly".
+*   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)**.
 
 ## 6. Runtime View
 
@@ -93,15 +91,16 @@ To meet the high-frequency and safety requirements, the architecture employs:
 1.  **Ingest**: `DerivClient` receives a new Candle Close event.
 2.  **Update**: `MarketDataBuffer` appends the candle and updates sliding windows.
 3.  **Process**: `FeatureBuilder` takes the window and generates a Normalized Tensor.
-4.  **Infer**: `DerivOmniModel` runs the forward pass. Returns `probabilities` and `reconstruction_error`.
-5.  **Evaluate**: `DecisionEngine` checks thresholds.
+4.  **Infer**: `DerivOmniModel` runs the forward pass. Returns raw probabilities.
+5.  **Calibrate & Ensemble**: `ProbabilityCalibrator` maps raw outputs to win rates. `EnsembleStrategy` combines multiple model outputs.
+6.  **Evaluate**: `DecisionEngine` checks thresholds.
     *   *IF* `reconstruction_error` > Limit: **VETO** (Unknown Regime).
     *   *ELSE IF* `probability` < Threshold: **IGNORE**.
     *   *ELSE*: Generate `TradeSignal`.
-6.  **Safeguard**: `SafeTradeExecutor` runs H1-H5 checks.
+7.  **Safeguard**: `SafeTradeExecutor` runs H1-H6 policies.
     *   *IF* Pass: Execute Trade via API.
     *   *IF* Fail: Log rejection code.
-7.  **Record**: `ShadowStore` records inputs, model outputs, and final decision.
+8.  **Record**: `ShadowStore` records inputs, model outputs, and final decision.
 
 ## 7. Cross-cutting Concepts
 

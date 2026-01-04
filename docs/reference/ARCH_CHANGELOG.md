@@ -41,3 +41,19 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 *   **[SSOT] Volatility Veto (H3)**: metric definition evolved from `ATR` to `Volatility Anomaly (Percentile/StdDev)`.
     *   **Rationale**: The `ATR` metric was insufficient for detecting relative regime shifts in synthetic indices. The system now uses a `VolatilityExpert` (Autoencoder) and statistical percentiles to detect out-of-distribution events.
     *   **Status**: Justified Evolution (Audit Finding #3).
+
+## [1.1.0] - 2026-01-04
+
+### Feature Expansion: Sizing, Ensembles, Backtesting
+
+#### 1. Advanced Position Sizing (REC-002)
+*   **Change**: Introduced `PositionSizer` protocol with `KellyPositionSizer` and `TargetVolatilitySizer`.
+*   **Justification**: Decouple risk management from signal generation. Enable dynamic staking based on edge (Kelly) and market volatility (Target Vol), reducing risk during turbulence.
+
+#### 2. Model Ensemble & Calibration (REC-003)
+*   **Change**: Added `ProbabilityCalibrator` (Isotonic/Binning) and `EnsembleStrategy` (Voting/Weighted). Integrated into `DecisionEngine`.
+*   **Justification**: Raw model probabilities are often uncalibrated. Calibration ensures `0.7` confidence means `70%` win rate. Ensembling reduces variance and dependency on single model checkpoints.
+
+#### 3. Event-Driven Backtesting (REC-004)
+*   **Change**: Implemented `BacktestEngine` and `scripts/backtest.py` that replay the full live pipeline.
+*   **Justification**: "What you test is what you fly". Vectorized backtests missed critical implementation details (latency, feature calculation drift). This architecture ensures offline metrics (Sharpe, Drawdown) map to online reality.
