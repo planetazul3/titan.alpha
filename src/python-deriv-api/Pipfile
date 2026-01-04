@@ -1,0 +1,13 @@
+[packages]
+websockets = "==10.3"
+reactivex = "==4.0.*"
+deriv-api = {editable = true, path = "."}
+mako = ">=1.3.6"
+
+[dev-packages]
+pytest = "*"
+pytest-runner = "*"
+pytest-mock = "*"
+pytest-asyncio = "*"
+pdoc3 = "*"
+coverage = "===4.5.4"
