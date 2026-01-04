@@ -21,6 +21,7 @@ import logging
 import hashlib
 from dataclasses import dataclass
 
+from pydantic import ValidationError
 import numpy as np
 import torch
 
@@ -29,6 +30,14 @@ from data.processor import CandlePreprocessor, TickPreprocessor, VolatilityMetri
 from data.common.schema import FEATURE_SCHEMA_VERSION, FeatureSchema
 
 logger = logging.getLogger(__name__)
+
+
+logger = logging.getLogger(__name__)
+
+
+class StaleDataError(Exception):
+    """Raised when market data is too old for safe inference."""
+    pass
 
 
 class FeatureBuilder:
@@ -94,7 +103,11 @@ class FeatureBuilder:
         )
 
     def build(
-        self, ticks: np.ndarray, candles: np.ndarray, validate: bool = True
+        self, 
+        ticks: np.ndarray, 
+        candles: np.ndarray, 
+        validate: bool = True,
+        timestamp: float | None = None
     ) -> dict[str, torch.Tensor]:
         """
         Build features from raw market data.
@@ -105,6 +118,8 @@ class FeatureBuilder:
             ticks: Raw tick prices, shape (N,) where N >= tick_length
             candles: Raw OHLCVT data, shape (M, 6) where M >= candle_length
             validate: Whether to validate output shapes (recommended True)
+            timestamp: Current system timestamp (unix float) for staleness checks.
+                       If None, checks are skipped.
 
         Returns:
             Dict with:
@@ -114,6 +129,8 @@ class FeatureBuilder:
 
         Raises:
             ValueError: If input data is insufficient or output fails validation
+            StaleDataError: If data is older than allowed threshold
+
 
         Example:
             >>> features = builder.build(raw_ticks, raw_candles)
@@ -122,7 +139,23 @@ class FeatureBuilder:
             ...     features['candles'].unsqueeze(0),
             ...     features['vol_metrics'].unsqueeze(0)
             ... )
+            ...     features['vol_metrics'].unsqueeze(0)
+            ... )
         """
+        # CRITICAL-004: Staleness Validation
+        if timestamp is not None and len(candles) > 0:
+            # Candle format: [Open, High, Low, Close, Volume, Timestamp]
+            last_candle_ts = candles[-1, 5]
+            latency = timestamp - last_candle_ts
+            threshold = self.settings.trading.stale_candle_threshold
+            
+            if latency > threshold:
+                msg = f"Data is STALE! Latency: {latency:.2f}s (Threshold: {threshold}s). Last candle: {last_candle_ts}"
+                logger.error(msg)
+                raise StaleDataError(msg)
+            elif latency < -1.0: # Clock shift tolerance
+                 logger.warning(f"Future data detected? Latency: {latency:.2f}s")
+                 
         # Process through canonical preprocessors
         tick_features = self._tick_pp.process(ticks)
         candle_features = self._candle_pp.process(candles)
@@ -141,7 +174,11 @@ class FeatureBuilder:
         }
 
     def build_numpy(
-        self, ticks: np.ndarray, candles: np.ndarray, validate: bool = True
+        self, 
+        ticks: np.ndarray, 
+        candles: np.ndarray, 
+        validate: bool = True,
+        timestamp: float | None = None
     ) -> dict[str, np.ndarray]:
         """
         Build features as numpy arrays (for dataset creation).
@@ -151,9 +188,19 @@ class FeatureBuilder:
             candles: Raw OHLCVT data
             validate: Whether to validate shapes
 
-        Returns:
             Dict with numpy arrays instead of tensors
         """
+        # CRITICAL-004: Staleness Validation (Duplicate logic for numpy path)
+        if timestamp is not None and len(candles) > 0:
+            last_candle_ts = candles[-1, 5]
+            latency = timestamp - last_candle_ts
+            threshold = self.settings.trading.stale_candle_threshold
+            
+            if latency > threshold:
+                msg = f"Data is STALE! Latency: {latency:.2f}s (Threshold: {threshold}s)"
+                logger.error(msg)
+                raise StaleDataError(msg)
+
         tick_features = self._tick_pp.process(ticks)
         candle_features = self._candle_pp.process(candles)
         vol_features = self._vol_ext.extract(candles)

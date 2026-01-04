@@ -990,7 +990,12 @@ async def run_inference(
         t_np = buffer.get_ticks_array()
         c_np = buffer.get_candles_array()
 
-        features = feature_builder.build(ticks=t_np, candles=c_np)
+        # CRITICAL-004: Pass validation timestamp
+        features = feature_builder.build(
+            ticks=t_np, 
+            candles=c_np,
+            timestamp=time.time()
+        )
 
         t_tensor = features["ticks"].unsqueeze(0).to(device)
         c_tensor = features["candles"].unsqueeze(0).to(device)
