@@ -68,7 +68,9 @@ class TradeSignal:
     def from_dict(cls, d: dict[str, Any]) -> "TradeSignal":
         """Deserialize from dictionary."""
         d_copy = d.copy()
-        d_copy["timestamp"] = datetime.fromisoformat(d["timestamp"])
+        if isinstance(d["timestamp"], str):
+             d_copy["timestamp"] = datetime.fromisoformat(d["timestamp"])
+        # If it's already datetime, leave it
         return cls(**d_copy)
 
 

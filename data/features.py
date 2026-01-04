@@ -30,7 +30,7 @@ from data.processor import CandlePreprocessor, TickPreprocessor, VolatilityMetri
 from data.common.schema import FEATURE_SCHEMA_VERSION, FeatureSchema, CandleInputSchema
 from data.staleness import check_data_staleness, StaleDataError
 import pandas as pd
-import pandera as pa
+import pandera.pandas as pa
 
 logger = logging.getLogger(__name__)
 
