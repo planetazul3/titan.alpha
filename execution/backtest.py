@@ -13,13 +13,18 @@ import asyncio
 import logging
 import random
 import pandas as pd
+import torch
 from datetime import datetime, timezone, timedelta
 from typing import AsyncIterator, Any
 from pathlib import Path
 
+from data.events import CandleEvent
+from data.buffer import MarketDataBuffer
+
 from data.ingestion.client import DerivClient
 from execution.executor import TradeResult
 from config.settings import Settings
+from execution.metrics import TradingMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +36,11 @@ class BacktestClient:
     - Balance tracks P&L internally.
     - Slippage can be simulated.
     """
-    def __init__(self, initial_balance: float = 10000.0, slip_prob: float = 0.0, slip_avg: float = 0.0):
+    def __init__(self, initial_balance: float = 10000.0, slip_prob: float = 0.0, slip_avg: float = 0.0, latency_ms: float = 0.0):
         self.balance = initial_balance
         self.slip_prob = slip_prob
         self.slip_avg = slip_avg
+        self.latency_ms = latency_ms
         self.positions: list[dict[str, Any]] = []
         self.current_price = 100.0
         self.current_time = datetime.now(timezone.utc)
@@ -53,6 +59,10 @@ class BacktestClient:
         
     async def buy(self, amount: float, contract_type: str, duration: int, 
                   symbol: str, barrier: float | None = None, barrier2: float | None = None) -> Any:
+        # Simulate network latency
+        if self.latency_ms > 0:
+            await asyncio.sleep(self.latency_ms / 1000.0)
+
         # Simulate execution
         # In live client, this returns a Dictionary or Contract object
         # We'll return a mock dict
@@ -222,6 +232,13 @@ class BacktestEngine:
         slip_prob: float = 0.0,
         slip_avg: float = 0.0,
         payout_ratio: float = 0.90,
+        # Pipeline Components (Optional for simple replay, required for full simulation)
+        buffer: Any = None,
+        feature_builder: Any = None,
+        model: Any = None,
+        decision_engine: Any = None,
+        executor: Any = None,
+        strategy_adapter: Any = None,
     ):
         """
         Initialize backtest engine.
@@ -233,10 +250,24 @@ class BacktestEngine:
             slip_prob: Probability of slippage (0.0 to 1.0)
             slip_avg: Average slippage amount when applied
             payout_ratio: Win payout multiplier (e.g., 0.90 = 90%)
+            buffer: MarketDataBuffer (optional)
+            feature_builder: FeatureBuilder (optional)
+            model: PyTorch model (optional)
+            decision_engine: DecisionEngine (optional)
+            executor: SafeTradeExecutor (optional)
+            strategy_adapter: StrategyAdapter (optional)
         """
         self.settings = settings
         self.data_path = data_path
         self.payout_ratio = payout_ratio
+        
+        self.buffer = buffer
+        self.feature_builder = feature_builder
+        self.model = model
+        self.decision_engine = decision_engine
+        self.executor = executor
+        self.strategy_adapter = strategy_adapter
+        
         self.client = BacktestClient(
             initial_balance=initial_balance,
             slip_prob=slip_prob,
@@ -338,6 +369,96 @@ class BacktestEngine:
                 low=low_price,
             )
             
+            # C02: Execute Pipeline if components are present
+            if self.buffer and self.feature_builder and self.model and self.decision_engine and self.executor:
+                # 1. Create Candle Event
+                event = CandleEvent(
+                    symbol=self.settings.trading.symbol,
+                    timestamp=timestamp,
+                    open=float(row.get("open", close_price)),
+                    high=high_price if high_price else close_price,
+                    low=low_price if low_price else close_price,
+                    close=close_price,
+                    volume=float(row.get("volume", 0.0))
+                )
+                
+                # 2. Update Buffer
+                is_new = self.buffer.update_candle(event)
+                
+                # 3. Run Inference on new candle
+                if is_new and self.buffer.is_ready():
+                    try:
+                        # Build Features
+                        features = self.feature_builder.build_numpy(
+                            self.buffer.snapshot(),
+                            timestamp=timestamp.timestamp()
+                        )
+                        
+                        # Prepare Tensor
+                        tick_window, candle_window = features
+                        
+                        # Convert to tensor
+                        device = self.settings.get_device()
+                        tick_tensor = torch.from_numpy(tick_window).float().unsqueeze(0).to(device)
+                        candle_tensor = torch.from_numpy(candle_window).float().unsqueeze(0).to(device)
+                        
+                        # Inference
+                        self.model.eval()
+                        with torch.no_grad():
+                            outputs = self.model(tick_tensor, candle_tensor)
+                            
+                        # Parse outputs (assuming model returns dict or tuple)
+                        # Standard x.titan model return: (probs_dict, reconstruction_error, etc)
+                        # Or if it's the newer model: {"probs": ..., "reconstruction_error": ...}
+                        
+                        probs = {}
+                        reconstruction_error = 0.0
+                        
+                        if isinstance(outputs, dict):
+                            probs = outputs.get("probs", {})
+                            reconstruction_error = outputs.get("reconstruction_error", 0.0)
+                        elif isinstance(outputs, tuple):
+                             # Compat with older models
+                             probs = outputs[0]
+                             if len(outputs) > 1:
+                                 reconstruction_error = outputs[1]
+
+                        # 4. Decision Engine
+                        signals = await self.decision_engine.process_model_output(
+                            probs=probs,
+                            reconstruction_error=reconstruction_error,
+                            timestamp=timestamp,
+                            market_data={"close": close_price}
+                        )
+                        
+                        # 5. Execution
+                        from execution.executor import ExecutionRequest
+                        
+                        for signal in signals:
+                            if self.strategy_adapter:
+                                req = self.strategy_adapter.convert_signal(
+                                    signal, 
+                                    account_balance=self.client.balance
+                                )
+                            else:
+                                # Fallback: direct execution request with simple sizing.
+                                req = ExecutionRequest(
+                                    signal_id=signal.signal_id,
+                                    symbol=signal.metadata.get("symbol", self.settings.trading.symbol),
+                                    direction=signal.direction,
+                                    contract_type=signal.contract_type if hasattr(signal, 'contract_type') else "RISE_FALL", # Check attr
+                                    duration=1, # Default
+                                    stake=10.0, # Default
+                                    payout_limit=None
+                                )
+                            
+                            logger.info(f"Signal generated: {signal.direction} @ {timestamp}")
+                            await self.executor.execute(req)
+                            
+                    except Exception as e:
+                        logger.error(f"Pipeline error at {timestamp}: {e}", exc_info=True)
+
+            
             # Track drawdown
             current_balance = self.client.balance
             if current_balance > peak_balance:
@@ -351,31 +472,44 @@ class BacktestEngine:
                 await asyncio.sleep(0)
         
         # Calculate final statistics
-        final_balance = self.client.balance
-        net_pnl = final_balance - self.initial_balance
-        return_pct = (net_pnl / self.initial_balance) * 100
         
-        wins = sum(1 for p in self.client.positions if p.get("outcome") == "win")
-        losses = sum(1 for p in self.client.positions if p.get("outcome") == "loss")
-        total_trades = wins + losses
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
-        
-        stats = {
-            "total_trades": total_trades,
-            "wins": wins,
-            "losses": losses,
-            "win_rate": win_rate,
-            "initial_balance": self.initial_balance,
-            "final_balance": final_balance,
-            "net_pnl": net_pnl,
-            "return_pct": return_pct,
-            "max_drawdown": max_drawdown * 100,  # As percentage
-        }
+        # Prepare trades list for metrics calculator
+        trade_history = []
+        for pos in self.client.positions:
+            if pos["status"] == "closed":
+                outcome = pos.get("outcome", "unknown")
+                # Profit/Loss = Payout - Stake (if win), -Stake (if loss)
+                # But our client implementation adds payout to balance on win.
+                # Logic:
+                # Win: Payout = Stake * (1 + PayoutRatio)
+                #      Profit = Payout - Stake = Stake * PayoutRatio
+                # Loss: Profit = -Stake
+                
+                # However, backtest client logic:
+                # buy: balance -= stake
+                # win: balance += stake * (1+payout)
+                # net: stake * payout
+                
+                # Let's derive PnL from outcome
+                stake = pos["amount"]
+                if outcome == "win":
+                    pnl = stake * self.payout_ratio
+                else:
+                    pnl = -stake
+                    
+                trade_history.append({
+                    "outcome": outcome,
+                    "profit_loss": pnl,
+                    "exit_time": pos.get("exit_time")
+                })
+
+        metrics = TradingMetrics.calculate(trade_history, initial_balance=self.initial_balance)
         
         logger.info(
-            f"Backtest complete: {total_trades} trades, "
-            f"{wins}W/{losses}L ({win_rate:.1f}%), "
-            f"PnL: ${net_pnl:+.2f} ({return_pct:+.1f}%)"
+            f"Backtest complete: {metrics.total_trades} trades, "
+            f"{metrics.winning_trades}W/{metrics.losing_trades}L ({metrics.win_rate:.1f}%), "
+            f"PnL: ${metrics.net_profit:+.2f} ({metrics.return_pct:+.1f}%)"
+            f"Sharpe: {metrics.sharpe_ratio:.2f}, DD: {metrics.max_drawdown_pct:.2f}%"
         )
         
-        return stats
+        return metrics.__dict__
