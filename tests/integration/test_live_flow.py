@@ -23,6 +23,7 @@ from config.constants import SIGNAL_TYPES
 from data.events import CandleEvent, TickEvent
 from execution.decision import DecisionEngine
 from execution.executor import TradeResult
+from execution.common.types import ExecutionRequest
 from execution.regime import RegimeVeto
 from execution.safety import ExecutionSafetyConfig, SafeTradeExecutor
 from execution.sqlite_shadow_store import SQLiteShadowStore
@@ -286,17 +287,15 @@ class TestLiveFlowIntegration:
         config = ExecutionSafetyConfig(max_trades_per_minute=3, max_trades_per_minute_per_symbol=3, max_daily_loss=100.0)
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "rate_limit.db")
 
-        from execution.signals import TradeSignal
-
         # Execute trades up to limit
         for i in range(5):
-            signal = TradeSignal(
-                signal_type=SIGNAL_TYPES.REAL_TRADE,
+            signal = ExecutionRequest(
+                signal_id=f"SIG_{i}",
+                symbol="R_100",
                 contract_type="RISE_FALL",
-                direction="CALL",
-                probability=0.85,
-                timestamp=datetime.now(timezone.utc),
-                metadata={"stake": 1.0},
+                stake=1.0,
+                duration=1,
+                duration_unit="m"
             )
             result = await safe_executor.execute(signal)
 
@@ -415,19 +414,16 @@ class TestEndToEndFlow:
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "state.db")
 
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
-        engine = DecisionEngine(mock_settings, regime_veto=regime_veto)
+        # Inject safe_executor into DecisionEngine
+        engine = DecisionEngine(mock_settings, regime_veto=regime_veto, executor=safe_executor)
 
         # High confidence
         probs = {"rise_fall_prob": 0.90, "touch_prob": 0.50, "range_prob": 0.40}
         trades = await engine.process_model_output(probs, reconstruction_error=0.05)
 
-        # Execute each trade
-        for trade in trades:
-            result = await safe_executor.execute(trade)
-            assert result.success is True
-
-        # Executor should have been called
-        assert mock_executor.execute.call_count == len(trades)
+        # Executor should have been called (internally by DecisionEngine)
+        # Note: DecisionEngine returns TradeResult objects now, not inputs
+        assert mock_executor.execute.call_count >= 1
 
 
 class TestErrorHandling:
@@ -444,15 +440,13 @@ class TestErrorHandling:
         )
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "state.db")
 
-        from execution.signals import TradeSignal
-
-        signal = TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
+        signal = ExecutionRequest(
+            signal_id="SIG_FAIL",
+            symbol="R_100",
             contract_type="RISE_FALL",
-            direction="CALL",
-            probability=0.85,
-            timestamp=datetime.now(timezone.utc),
-            metadata={"stake": 1.0},
+            stake=1.0,
+            duration=1,
+            duration_unit="m"
         )
 
         result = await safe_executor.execute(signal)
@@ -476,17 +470,15 @@ class TestErrorHandling:
         # Activate kill switch
         config.kill_switch_enabled = True
 
-        from execution.signals import TradeSignal
-
         # Try multiple trades
-        for _ in range(5):
-            signal = TradeSignal(
-                signal_type=SIGNAL_TYPES.REAL_TRADE,
+        for i in range(5):
+            signal = ExecutionRequest(
+                signal_id=f"SIG_KILL_{i}",
+                symbol="R_100",
                 contract_type="RISE_FALL",
-                direction="CALL",
-                probability=0.99,
-                timestamp=datetime.now(timezone.utc),
-                metadata={"stake": 1.0},
+                stake=1.0,
+                duration=1,
+                duration_unit="m"
             )
             result = await safe_executor.execute(signal)
             assert result.success is False

@@ -12,13 +12,13 @@ from execution.filters import filter_signals
 from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence
 from execution.regime import RegimeAssessmentProtocol, RegimeVeto
 from execution.safety_store import SQLiteSafetyStateStore
-from execution.shadow_ops import fire_shadow_trade_task
 from execution.shadow_store import ShadowTradeStore
-from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.signals import TradeSignal
 from execution.calibration import ProbabilityCalibrator
 from execution.ensemble import create_ensemble, EnsembleStrategy
+
+from .shadow import ShadowDispatcher
 
 try:
     from opentelemetry import trace
@@ -56,6 +56,9 @@ class DecisionEngine:
     ):
         self.settings = settings
         self.execution_mode = execution_mode
+        self.model_version = model_version
+        self.shadow_store = shadow_store
+        self.safety_store = safety_store
         
         # IMPORTANT-002: Link regime thresholds to settings
         if regime_veto is None:
@@ -65,10 +68,7 @@ class DecisionEngine:
         else:
             self.regime_veto = regime_veto
 
-        self.shadow_store = shadow_store
-        self.safety_store = safety_store
         self.duration_resolver = ContractDurationResolver(settings)
-        self.model_version = model_version
         
         # AUDIT-FIX: Pass configurable circuit breaker timeout from settings
         self.policy = policy or ExecutionPolicy(
@@ -109,9 +109,6 @@ class DecisionEngine:
             "regime_caution": 0,
         }
         
-        # Track pending background tasks for graceful shutdown
-        self._pending_shadow_tasks: set[asyncio.Task] = set()
-        
         # PERF: Throttle safety state sync
         self._last_safety_sync: float = 0.0
         self._safety_sync_interval: float = 5.0  # seconds
@@ -119,6 +116,14 @@ class DecisionEngine:
         # R03: Initialize Calibration and Ensemble
         self.calibrator = ProbabilityCalibrator(settings.prob_calibration)
         self.ensemble = create_ensemble(settings.ensemble)
+        
+        # Initialize Shadow Dispatcher
+        self.shadow_dispatcher = ShadowDispatcher(
+            settings=settings,
+            shadow_store=shadow_store,
+            model_version=model_version,
+            execution_mode=execution_mode
+        )
         
         logger.info(
             f"DecisionEngine initialized with regime thresholds: "
@@ -189,23 +194,14 @@ class DecisionEngine:
             if span:
                 span.set_attribute("signals.filtered_count", len(all_signals))
 
-            # Store shadow trades in background
-            if self.shadow_store:
-                for sig in all_signals:
-                    fire_shadow_trade_task(
-                        pending_tasks=self._pending_shadow_tasks,
-                        store=self.shadow_store,
-                        settings=self.settings,
-                        resolver=self.duration_resolver,
-                        model_version=self.model_version,
-                        execution_mode=self.execution_mode,
-                        signal=sig,
-                        reconstruction_error=reconstruction_error,
-                        regime_state=self._get_regime_state_string(regime_assessment),
-                        entry_price=entry_price or 0.0,
-                        regime_vetoed=regime_assessment.is_vetoed(),
-                        metadata=market_data,
-                    )
+            # Dispatch shadow trades (Background)
+            self.shadow_dispatcher.dispatch(
+                signals=all_signals,
+                reconstruction_error=reconstruction_error,
+                regime_assessment=regime_assessment,
+                entry_price=entry_price or 0.0,
+                market_data=market_data
+            )
 
             # Delegate to core logic
             real_trades, shadow_trades = process_signals_batch(
@@ -217,23 +213,14 @@ class DecisionEngine:
                 tracer=span
             )
             
-            # Fire tasks for demoted shadow trades
-            if self.shadow_store:
-                 for st in shadow_trades:
-                     fire_shadow_trade_task(
-                        pending_tasks=self._pending_shadow_tasks,
-                        store=self.shadow_store,
-                        settings=self.settings,
-                        resolver=self.duration_resolver,
-                        model_version=self.model_version,
-                        execution_mode=self.execution_mode,
-                        signal=st, # ShadowTrade matches TradeSignal protocol for storage
-                        reconstruction_error=reconstruction_error,
-                        regime_state=self._get_regime_state_string(regime_assessment),
-                        entry_price=entry_price or 0.0,
-                        regime_vetoed=regime_assessment.is_vetoed(),
-                        metadata=market_data,
-                    )
+            # Dispatch demoted shadow trades
+            self.shadow_dispatcher.dispatch(
+                signals=shadow_trades, # ShadowTrade compatible
+                reconstruction_error=reconstruction_error,
+                regime_assessment=regime_assessment,
+                entry_price=entry_price or 0.0,
+                market_data=market_data
+            )
 
             if span:
                 span.set_attribute("signals.real_count", len(real_trades))
@@ -261,7 +248,6 @@ class DecisionEngine:
             timestamp = datetime.now(timezone.utc)
 
         assessment = self.regime_veto.assess(reconstruction_error)
-        regime_state = self._get_regime_state_string(assessment)
         
         span = None
         if self.tracer:
@@ -280,25 +266,16 @@ class DecisionEngine:
             if span:
                 span.set_attribute("signals_count", len(all_signals))
 
-            # Store shadow trades with full context
-            if self.shadow_store:
-                for sig in all_signals:
-                    fire_shadow_trade_task(
-                        pending_tasks=self._pending_shadow_tasks,
-                        store=self.shadow_store,
-                        settings=self.settings,
-                        resolver=self.duration_resolver,
-                        model_version=self.model_version,
-                        execution_mode=self.execution_mode,
-                        signal=sig,
-                        reconstruction_error=reconstruction_error,
-                        regime_state=regime_state,
-                        entry_price=entry_price,
-                        tick_window=tick_window,
-                        candle_window=candle_window,
-                        regime_vetoed=assessment.is_vetoed(),
-                        metadata=market_data,
-                    )
+            # Dispatch shadow trades with context
+            self.shadow_dispatcher.dispatch(
+                signals=all_signals,
+                reconstruction_error=reconstruction_error,
+                regime_assessment=assessment,
+                entry_price=entry_price,
+                market_data=market_data,
+                tick_window=tick_window,
+                candle_window=candle_window
+            )
 
             # Delegate to core logic
             real_trades, shadow_trades = process_signals_batch(
@@ -310,25 +287,16 @@ class DecisionEngine:
                 tracer=span
             )
 
-             # Fire tasks for demoted shadow trades
-            if self.shadow_store:
-                 for st in shadow_trades:
-                     fire_shadow_trade_task(
-                        pending_tasks=self._pending_shadow_tasks,
-                        store=self.shadow_store,
-                        settings=self.settings,
-                        resolver=self.duration_resolver,
-                        model_version=self.model_version,
-                        execution_mode=self.execution_mode,
-                        signal=st,
-                        reconstruction_error=reconstruction_error,
-                        regime_state=regime_state,
-                        entry_price=entry_price,
-                        tick_window=tick_window,
-                        candle_window=candle_window,
-                        regime_vetoed=assessment.is_vetoed(),
-                        metadata=market_data,
-                    )
+             # Dispatch demoted shadow trades
+            self.shadow_dispatcher.dispatch(
+                signals=shadow_trades,
+                reconstruction_error=reconstruction_error,
+                regime_assessment=assessment,
+                entry_price=entry_price,
+                market_data=market_data,
+                tick_window=tick_window,
+                candle_window=candle_window
+            )
 
             if span:
                 span.set_attribute("real_trades_count", len(real_trades))
@@ -383,15 +351,4 @@ class DecisionEngine:
 
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Gracefully shutdown the engine, flushing pending tasks."""
-        if not self._pending_shadow_tasks:
-            return
-
-        logger.info(f"DecisionEngine: Waiting for {len(self._pending_shadow_tasks)} shadow tasks to flush...")
-        _, pending = await asyncio.wait(self._pending_shadow_tasks, timeout=timeout)
-        
-        if pending:
-            logger.warning(f"DecisionEngine shutdown timed out with {len(pending)} tasks remaining.")
-            for task in pending:
-                task.cancel()
-        else:
-            logger.info("DecisionEngine: All shadow tasks flushed successfully.")
+        await self.shadow_dispatcher.shutdown(timeout=timeout)
