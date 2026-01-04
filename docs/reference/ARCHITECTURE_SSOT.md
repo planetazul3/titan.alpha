@@ -19,7 +19,7 @@ x.titan is a high-frequency, deep-learning-based algorithmic trading system desi
 ### 2.1 Technical Constraints
 *   **Runtime Environment**: Python 3.12 (strict requirement).
 *   **Resource Limits**:
-    *   **RAM**: Maximum distinct usage **3.7 GiB**. Large datasets must use memory-mapping.
+    *   **RAM**: Unconstrained (System Dependent). Large datasets should still use memory-mapping for efficiency.
     *   **Concurrency**: `asyncio` for I/O bound tasks, avoiding blocking calls in the main loop.
 *   **Dependencies**:
     *   **ML**: PyTorch (with CUDA/MPS acceleration).

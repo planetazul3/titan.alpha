@@ -39,7 +39,7 @@ You must follow this lifecycle for every task:
 
 ### Phase 2: Validation (The Gate)
 Before writing a single line of code, ask:
-*   [ ] Does this align with the **3.7 GiB RAM** limit?
+*   [ ] Does this align with available system resources?
 *   [ ] Does this respect the **Safety Vetoes (H1-H5)**?
 *   [ ] Is this a **"Legitimate Evolution"** (backed by research) or just "Change for Change's sake"?
 

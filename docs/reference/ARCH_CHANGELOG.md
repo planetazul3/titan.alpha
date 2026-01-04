@@ -81,3 +81,11 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 #### 5. Decision Engine Modularization (C-004)
 *   **Change**: Refactored `DecisionEngine` into micro-modules: `DecisionMetrics`, `SafetyStateSynchronizer`, `SignalProcessor`.
 *   **Justification**: Reduced cyclomatic complexity and file size (Satisfies C-004/REC-001). Improved testing granularity.
+
+## [1.2.0] - 2026-01-04
+
+### Architectural Updates
+
+#### 1. Removal of Resource Constraints
+*   **Change**: Removed 3.7 GiB RAM limit from `AGENTS.md` and `ARCHITECTURE_SSOT.md`.
+*   **Justification**: Enabling full system performance capabilities as per Operator request.
