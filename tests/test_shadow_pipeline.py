@@ -338,8 +338,8 @@ class TestPipelineIntegration:
             )
 
             # Await pending shadow tasks from dispatcher
-            if hasattr(engine, "shadow_dispatcher") and engine.shadow_dispatcher._background_tasks:
-                await asyncio.gather(*engine.shadow_dispatcher._background_tasks)
+            if hasattr(engine, "shadow_dispatcher") and engine.shadow_dispatcher._pending_tasks:
+                await asyncio.gather(*engine.shadow_dispatcher._pending_tasks)
 
             # Should have real trades (not vetoed)
             assert len(trades) > 0

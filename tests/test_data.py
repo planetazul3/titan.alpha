@@ -210,8 +210,17 @@ class TestFeatureBuilder:
         builder = FeatureBuilder(mock_settings)
 
         # Create test data
+        # Create test data with valid High >= Low structure
         ticks = np.random.rand(150).astype(np.float32) * 100 + 1
-        candles = np.random.rand(100, 6).astype(np.float32) * 100 + 1
+        
+        # O, H, L, C, V, E
+        candles = np.zeros((100, 6), dtype=np.float32)
+        candles[:, 0] = 100.0 + np.random.rand(100) # Open
+        candles[:, 3] = candles[:, 0] + np.random.randn(100) * 0.1 # Close
+        candles[:, 1] = np.maximum(candles[:, 0], candles[:, 3]) + np.random.rand(100) * 0.1 # High >= Max(O, C)
+        candles[:, 2] = np.minimum(candles[:, 0], candles[:, 3]) - np.random.rand(100) * 0.1 # Low <= Min(O, C)
+        candles[:, 4] = 100.0 # Volume
+        candles[:, 5] = np.arange(100) + 1000 # Epoch (must be > 0)
 
         features = builder.build(ticks=ticks, candles=candles)
 

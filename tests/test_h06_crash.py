@@ -47,7 +47,7 @@ def test_feature_builder_constant_data():
     # Constant candles (O=H=L=C=100, V=0)
     candles = np.zeros((100, 6), dtype=np.float32)
     candles[:, 0:4] = 100.0
-    candles[:, 5] = np.arange(100) # Epochs
+    candles[:, 5] = np.arange(100) + 1000 # Epochs (must be > 0)
     
     # Build features
     features = builder.build(ticks, candles)

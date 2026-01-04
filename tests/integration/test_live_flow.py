@@ -414,15 +414,33 @@ class TestEndToEndFlow:
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "state.db")
 
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
-        # Inject safe_executor into DecisionEngine
-        engine = DecisionEngine(mock_settings, regime_veto=regime_veto, executor=safe_executor)
+        # Inject safe_executor into DecisionEngine (DecisionEngine no longer accepts executor directly)
+        # We need to rely on the return signal being executed by the caller (integration test harness)
+        # But this test explicitly tests "executor called", so we must mock the flow where engine returns trades
+        # and we manually call executor, OR we assume engine used to call executor.
+        # Since engine no longer calls executor, we should update the test to verify engine returns trades
+        # and then WE call the executor, to verify the executor logic.
+        engine = DecisionEngine(mock_settings, regime_veto=regime_veto)
 
         # High confidence
         probs = {"rise_fall_prob": 0.90, "touch_prob": 0.50, "range_prob": 0.40}
         trades = await engine.process_model_output(probs, reconstruction_error=0.05)
 
-        # Executor should have been called (internally by DecisionEngine)
-        # Note: DecisionEngine returns TradeResult objects now, not inputs
+        # Manually execute trades to verify SafeExecutor interaction
+        # (Simulating the main loop in live.py)
+        for trade in trades:
+            # Simple conversion for testing
+            req = ExecutionRequest(
+                signal_id=trade.signal_id,
+                symbol=mock_settings.trading.symbol,
+                contract_type="RISE_FALL", # Matching mock setup
+                stake=1.0,
+                duration=1,
+                duration_unit="m"
+            )
+            await safe_executor.execute(req)
+
+        # Executor should have been called
         assert mock_executor.execute.call_count >= 1
 
 

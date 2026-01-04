@@ -227,13 +227,8 @@ class DecisionEngine:
             )
             
             # Dispatch demoted shadow trades
-            self.shadow_dispatcher.dispatch(
-                signals=shadow_trades, # ShadowTrade compatible
-                reconstruction_error=reconstruction_error,
-                regime_assessment=regime_assessment,
-                entry_price=entry_price or 0.0,
-                market_data=market_data
-            )
+            # R04 Fix: Removed redundant shadow dispatch.
+            # all_signals are already dispatched above.
 
             if span:
                 span.set_attribute("signals.real_count", len(real_trades))
@@ -296,16 +291,9 @@ class DecisionEngine:
                 tracer=span
             )
 
-             # Dispatch demoted shadow trades
-            self.shadow_dispatcher.dispatch(
-                signals=shadow_trades,
-                reconstruction_error=reconstruction_error,
-                regime_assessment=assessment,
-                entry_price=entry_price,
-                market_data=market_data,
-                tick_window=tick_window,
-                candle_window=candle_window
-            )
+            # R04 Fix: Removed redundant shadow dispatch. 
+            # all_signals are already dispatched above. 
+            # shadow_trades are just a subset (demoted signals).
 
             if span:
                 span.set_attribute("real_trades_count", len(real_trades))

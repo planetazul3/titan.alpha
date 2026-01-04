@@ -129,6 +129,7 @@ class TestSQLiteShadowStore:
         @dataclass
         class DummyRecord:
             trade_id: str
+            version_number: int = 1
         
         dummy = DummyRecord(trade_id="nonexistent_id")
         success = store.update_outcome(dummy, True, 100.0)
