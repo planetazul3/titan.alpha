@@ -27,7 +27,9 @@ import torch
 
 from config.settings import Settings
 from data.processor import CandlePreprocessor, TickPreprocessor, VolatilityMetricsExtractor
-from data.common.schema import FEATURE_SCHEMA_VERSION, FeatureSchema
+from data.common.schema import FEATURE_SCHEMA_VERSION, FeatureSchema, CandleInputSchema
+import pandas as pd
+import pandera as pa
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +165,20 @@ class FeatureBuilder:
 
         # Validate shapes
         if validate:
+            # IMPORTANT-002: Pandera Schema Validation
+            try:
+                # Convert to DataFrame for validation (lightweight for small batches)
+                df_candles = pd.DataFrame(
+                    candles, 
+                    columns=["open", "high", "low", "close", "volume", "timestamp"]
+                )
+                CandleInputSchema.validate(df_candles)
+            except pa.errors.SchemaError as e:
+                logger.error(f"Candle schema validation failed: {e}")
+                # Re-raise as ValueError for cleaner upstream handling, or keep SchemaError if preferred
+                # Strategy wants robust data, so we fail hard.
+                raise ValueError(f"Invalid market data structure: {e}")
+
             self.schema.validate_ticks(tick_features)
             self.schema.validate_candles(candle_features)
             self.schema.validate_volatility(vol_features)
@@ -206,6 +222,17 @@ class FeatureBuilder:
         vol_features = self._vol_ext.extract(candles)
 
         if validate:
+            # IMPORTANT-002: Pandera Schema Validation
+            try:
+                df_candles = pd.DataFrame(
+                    candles, 
+                    columns=["open", "high", "low", "close", "volume", "timestamp"]
+                )
+                CandleInputSchema.validate(df_candles)
+            except pa.errors.SchemaError as e:
+                logger.error(f"Candle schema validation failed: {e}")
+                raise ValueError(f"Invalid market data structure: {e}")
+
             self.schema.validate_ticks(tick_features)
             self.schema.validate_candles(candle_features)
             self.schema.validate_volatility(vol_features)
