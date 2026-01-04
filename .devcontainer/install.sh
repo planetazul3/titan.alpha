@@ -1,5 +1,5 @@
 #!/bin/bash
-# .devcontainer/install_talib.sh
+# .devcontainer/install.sh
 
 # --- PARTE 1: TA-Lib (Sistema y Python) ---
 echo "Instalando TA-Lib..."
@@ -30,5 +30,5 @@ fi
 # --- PARTE 3: Tu librería en Modo Editable ---
 echo "Configurando python-deriv-api..."
 
-# Instalamos en modo editable (-e)
-pip install -e git+https://github.com/planetazul3/python-deriv-api.git#egg=python-deriv-api
+# Instalamos en modo editable
+pip install git+https://github.com/planetazul3/python-deriv-api.git#egg=python-deriv-api

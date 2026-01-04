@@ -1,5 +1,11 @@
 {
-    "name": "Python 3 & TA-Lib",
-    "image": "mcr.microsoft.com/devcontainers/python:3",
-    "postCreateCommand": "bash .devcontainer/install.sh"
+  "name": "Python 3 & TA-Lib & SSH",
+  "image": "mcr.microsoft.com/devcontainers/python:3",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/install.sh",
+  "forwardPorts": [2222]
 }
