@@ -15,7 +15,10 @@ from execution.safety_store import SQLiteSafetyStateStore
 from execution.shadow_ops import fire_shadow_trade_task
 from execution.shadow_store import ShadowTradeStore
 from execution.sqlite_shadow_store import SQLiteShadowStore
+from execution.sqlite_shadow_store import SQLiteShadowStore
 from execution.signals import TradeSignal
+from execution.calibration import ProbabilityCalibrator
+from execution.ensemble import create_ensemble, EnsembleStrategy
 
 try:
     from opentelemetry import trace
@@ -113,6 +116,10 @@ class DecisionEngine:
         self._last_safety_sync: float = 0.0
         self._safety_sync_interval: float = 5.0  # seconds
         
+        # R03: Initialize Calibration and Ensemble
+        self.calibrator = ProbabilityCalibrator(settings.prob_calibration)
+        self.ensemble = create_ensemble(settings.ensemble)
+        
         logger.info(
             f"DecisionEngine initialized with regime thresholds: "
             f"CAUTION={self.regime_veto.threshold_caution:.3f}, "
@@ -172,8 +179,13 @@ class DecisionEngine:
             if span:
                 span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
 
+            # R03: Calibrate Probabilities
+            calibrated_probs = {}
+            for contract, raw_prob in probs.items():
+                calibrated_probs[contract] = self.calibrator.calibrate(raw_prob)
+
             # R02: Filter probabilities into signals
-            all_signals = filter_signals(probs, self.settings, timestamp)
+            all_signals = filter_signals(calibrated_probs, self.settings, timestamp)
             if span:
                 span.set_attribute("signals.filtered_count", len(all_signals))
 
@@ -258,8 +270,13 @@ class DecisionEngine:
             span.set_attribute("reconstruction_error", reconstruction_error)
 
         try:
+            # R03: Calibrate Probabilities
+            calibrated_probs = {}
+            for contract, raw_prob in probs.items():
+                calibrated_probs[contract] = self.calibrator.calibrate(raw_prob)
+
             # I02 Fix: Get all signals ONCE and reuse
-            all_signals = filter_signals(probs, self.settings, timestamp)
+            all_signals = filter_signals(calibrated_probs, self.settings, timestamp)
             if span:
                 span.set_attribute("signals_count", len(all_signals))
 

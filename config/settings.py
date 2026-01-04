@@ -270,6 +270,48 @@ class CalibrationConfig(BaseModel):
     )
 
 
+class ProbabilityCalibrationConfig(BaseModel):
+    """Probability calibration configuration.
+    
+    Controls how raw model probabilities are adjusted based on historical performance.
+    
+    Attributes:
+        enabled: Whether to apply calibration
+        method: 'isotonic' or 'sigmoid' or 'beta'
+        min_samples: Minimum trade samples required before attempting calibration
+        update_interval_minutes: How often to retrain calibrator
+    """
+    enabled: bool = Field(default=False, description="Enable probability calibration")
+    method: Literal["isotonic", "sigmoid", "beta"] = Field(
+        default="isotonic", description="Calibration method"
+    )
+    min_samples: int = Field(
+        default=100, description="Minimum samples to start calibration", ge=10
+    )
+    update_interval_minutes: int = Field(
+        default=60, description="Retrain interval in minutes", ge=1
+    )
+
+
+class EnsembleConfig(BaseModel):
+    """Model ensemble configuration.
+    
+    Controls how multiple model outputs are combined.
+    
+    Attributes:
+        enabled: Whether to use ensemble strategy
+        strategy: 'voting', 'average', 'weighted'
+        min_models: Minimum models required for valid consensus
+    """
+    enabled: bool = Field(default=False, description="Enable model ensembling")
+    strategy: Literal["voting", "average", "weighted"] = Field(
+        default="average", description="Ensemble strategy"
+    )
+    min_models: int = Field(
+        default=1, description="Minimum models for valid output", ge=1
+    )
+
+
 class ContractConfig(BaseModel):
     """Contract duration configuration.
     
@@ -356,6 +398,8 @@ class ObservabilityConfig(BaseModel):
     Attributes:
         enable_prometheus: Enable Prometheus metrics export
         health_check_file_path: Path to system health JSON file
+        log_level: Logging level (INFO, DEBUG, WARNING)
+        alert_suppression_interval: Seconds to suppress duplicate alerts
     """
     
     enable_prometheus: bool = Field(
@@ -363,6 +407,12 @@ class ObservabilityConfig(BaseModel):
     )
     health_check_file_path: str = Field(
         default="logs/system_health.json", description="Health check output file"
+    )
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
+        default="INFO", description="Global logging level"
+    )
+    alert_suppression_interval: int = Field(
+        default=300, description="Duplicate alert suppression interval (seconds)", ge=0
     )
 
 
@@ -414,6 +464,8 @@ class Settings(BaseSettings):
     data_shapes: DataShapes
     execution_safety: ExecutionSafety = Field(default_factory=ExecutionSafety)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
+    prob_calibration: ProbabilityCalibrationConfig = Field(default_factory=ProbabilityCalibrationConfig)
+    ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     contracts: ContractConfig = Field(default_factory=ContractConfig)
     shadow_trade: ShadowTradeConfig = Field(default_factory=ShadowTradeConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
