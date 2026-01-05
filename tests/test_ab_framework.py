@@ -38,65 +38,70 @@ class TestABFramework(unittest.TestCase):
             os.remove(self.db_path)
 
     async def async_test_champion_challenger_logging(self):
-        # 1. Setup Champion Engine (REAL)
-        champion_engine = DecisionEngine(
-            settings=self.settings,
-            shadow_store=self.store,
-            model_version="champion-v1",
-            execution_mode="REAL"
-        )
-        
-        # 2. Setup Challenger Engine (SHADOW)
-        challenger_engine = DecisionEngine(
-            settings=self.settings,
-            shadow_store=self.store,
-            model_version="challenger-v1",
-            execution_mode="SHADOW"
-        )
-        
-        # 3. Simulate Inputs
-        probs = {"rise_fall_prob": 0.8}
-        recon_error = 0.05
-        
-        # 4. Run Process (Concurrent simulation)
-        # Champion (0.8 probability)
-        await champion_engine.process_with_context(
-            probs=probs,
-            reconstruction_error=recon_error,
-            tick_window=[100.0, 101.0],
-            candle_window=[[100.0, 101.0, 99.0, 100.5]],
-            entry_price=100.5,
-            timestamp=None
-        )
-        
-        # Challenger (0.55 probability)
-        await challenger_engine.process_with_context(
-            probs={"rise_fall_prob": 0.55}, # Different probs
-            reconstruction_error=recon_error,
-            tick_window=[100.0, 101.0],
-            candle_window=[[100.0, 101.0, 99.0, 100.5]],
-            entry_price=100.5,
-            timestamp=None
-        )
-        
-        # 5. Flush tasks
-        await champion_engine.shutdown()
-        await challenger_engine.shutdown()
-        
-        # 6. Verify Store
-        records = self.store.query()
-        self.assertEqual(len(records), 2)
-        
-        champion_record = next(r for r in records if r.model_version == "champion-v1")
-        challenger_record = next(r for r in records if r.model_version == "challenger-v1")
-        
-        # Verify Metadata
-        self.assertEqual(champion_record.metadata.get("execution_mode"), "REAL")
-        self.assertEqual(challenger_record.metadata.get("execution_mode"), "SHADOW")
-        
-        # Verify Probs
-        self.assertAlmostEqual(champion_record.probability, 0.8)
-        self.assertAlmostEqual(challenger_record.probability, 0.55)
+        try:
+            # 1. Setup Champion Engine (REAL)
+            champion_engine = DecisionEngine(
+                settings=self.settings,
+                shadow_store=self.store,
+                model_version="champion-v1",
+                execution_mode="REAL"
+            )
+            
+            # 2. Setup Challenger Engine (SHADOW)
+            challenger_engine = DecisionEngine(
+                settings=self.settings,
+                shadow_store=self.store,
+                model_version="challenger-v1",
+                execution_mode="SHADOW"
+            )
+            
+            # 3. Simulate Inputs
+            probs = {"rise_fall_prob": 0.8}
+            recon_error = 0.05
+            
+            # 4. Run Process (Concurrent simulation)
+            # Champion (0.8 probability)
+            await champion_engine.process_with_context(
+                probs=probs,
+                reconstruction_error=recon_error,
+                tick_window=[100.0, 101.0],
+                candle_window=[[100.0, 101.0, 99.0, 100.5]],
+                entry_price=100.5,
+                timestamp=None
+            )
+            
+            # Challenger (0.55 probability)
+            await challenger_engine.process_with_context(
+                probs={"rise_fall_prob": 0.55}, # Different probs
+                reconstruction_error=recon_error,
+                tick_window=[100.0, 101.0],
+                candle_window=[[100.0, 101.0, 99.0, 100.5]],
+                entry_price=100.5,
+                timestamp=None
+            )
+            
+            # 5. Flush tasks
+            await champion_engine.shutdown()
+            await challenger_engine.shutdown()
+            
+            # 6. Verify Store
+            records = self.store.query()
+            self.assertEqual(len(records), 2)
+            
+            champion_record = next(r for r in records if r.model_version == "champion-v1")
+            challenger_record = next(r for r in records if r.model_version == "challenger-v1")
+            
+            # Verify Metadata
+            self.assertEqual(champion_record.metadata.get("execution_mode"), "REAL")
+            self.assertEqual(challenger_record.metadata.get("execution_mode"), "SHADOW")
+            
+            # Verify Probs
+            self.assertAlmostEqual(champion_record.probability, 0.8)
+            self.assertAlmostEqual(challenger_record.probability, 0.55)
+            
+        finally:
+            # Engines might hold references?
+            pass
 
     def test_run_async(self):
         asyncio.run(self.async_test_champion_challenger_logging())

@@ -272,21 +272,25 @@ class TestSQLiteShadowStoreConcurrency:
                     store.append(record)
             except Exception as e:
                 errors.append(e)
+            finally:
+                store.close()
 
-        # Start 5 writer threads
-        threads = [threading.Thread(target=writer, args=(i,)) for i in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        try:
+            # Start 5 writer threads
+            threads = [threading.Thread(target=writer, args=(i,)) for i in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
-        # Should have no errors
-        assert len(errors) == 0
+            # Should have no errors
+            assert len(errors) == 0
 
-        # Should have all records
-        records = store.query()
-        assert len(records) == 50
-        store.close()
+            # Should have all records
+            records = store.query()
+            assert len(records) == 50
+        finally:
+            store.close()
 
     def test_concurrent_reads_writes(self, tmp_path):
         """Should handle concurrent reads and writes."""
@@ -318,6 +322,8 @@ class TestSQLiteShadowStoreConcurrency:
                     time.sleep(0.01)
             except Exception as e:
                 errors.append(e)
+            finally:
+                store.close()
 
         def writer():
             try:
@@ -336,21 +342,25 @@ class TestSQLiteShadowStoreConcurrency:
                     time.sleep(0.02)
             except Exception as e:
                 errors.append(e)
+            finally:
+                store.close()
 
-        threads = [
-            threading.Thread(target=reader),
-            threading.Thread(target=reader),
-            threading.Thread(target=writer),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        try:
+            threads = [
+                threading.Thread(target=reader),
+                threading.Thread(target=reader),
+                threading.Thread(target=writer),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
-        assert len(errors) == 0
-        # Final count should be 15 (10 initial + 5 from writer)
-        assert len(store.query()) == 15
-        store.close()
+            assert len(errors) == 0
+            # Final count should be 15 (10 initial + 5 from writer)
+            assert len(store.query()) == 15
+        finally:
+            store.close()
 
 
 class TestSQLiteShadowStoreMigration:
@@ -384,16 +394,17 @@ class TestSQLiteShadowStoreMigration:
         db_path = tmp_path / "migrated.db"
         store = SQLiteShadowStore.from_ndjson(ndjson_path, db_path)
 
-        # Verify
-        migrated = store.query()
-        assert len(migrated) == 5
+        try:
+            # Verify
+            migrated = store.query()
+            assert len(migrated) == 5
 
-        # Check data integrity
-        for i, r in enumerate(migrated):
-            assert r.contract_type == "RISE_FALL"
-            assert r.probability == 0.75
-
-        store.close()
+            # Check data integrity
+            for i, r in enumerate(migrated):
+                assert r.contract_type == "RISE_FALL"
+                assert r.probability == 0.75
+        finally:
+            store.close()
 
     def test_migrate_handles_malformed(self, tmp_path):
         """Should skip malformed lines during migration."""
@@ -434,7 +445,9 @@ class TestSQLiteShadowStoreMigration:
         db_path = tmp_path / "cleaned.db"
         store = SQLiteShadowStore.from_ndjson(ndjson_path, db_path)
 
-        # Should have imported 2 valid records
-        records = store.query()
-        assert len(records) == 2
-        store.close()
+        try:
+            # Should have imported 2 valid records
+            records = store.query()
+            assert len(records) == 2
+        finally:
+            store.close()
