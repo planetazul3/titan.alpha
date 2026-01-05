@@ -8,6 +8,7 @@ from execution.common.types import ExecutionRequest
 from execution.signals import TradeSignal
 from execution.contract_params import ContractDurationResolver
 from execution.position_sizer import PositionSizer, FixedStakeSizer
+from execution.common.contract_mapping import map_signal_to_contract_type
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class StrategyAdapter:
         # types.CONTRACT_TYPES.RISE_FALL -> "CALL"/"PUT"
         # Let's do the rigorous mapping HERE so the Request is unambiguous.
         
-        deriv_contract_type = self._map_contract_type(signal)
+        deriv_contract_type = map_signal_to_contract_type(signal)
         
         # 4. Extract Barriers
         barrier = signal.metadata.get("barrier")
@@ -82,15 +83,4 @@ class StrategyAdapter:
             barrier2=barrier2
         )
         
-    def _map_contract_type(self, signal: TradeSignal) -> str:
-        """Map generic signal types to concrete execution contract types."""
-        if signal.contract_type == CONTRACT_TYPES.RISE_FALL:
-            return "CALL" if signal.direction == "CALL" else "PUT"
-        elif signal.contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
-            return "ONETOUCH" if signal.direction == "TOUCH" else "NOTOUCH"
-        elif signal.contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
-            return "RANGE" if signal.direction == "IN" else "UPORDOWN"
-        else:
-            # Fallback or error?
-            # Assuming direction is the contract type if unknown generic
-            return signal.direction or signal.contract_type
+

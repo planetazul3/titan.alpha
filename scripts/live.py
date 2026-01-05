@@ -1134,7 +1134,7 @@ async def run_inference(
         import numpy as np
         closes = buffer.get_candles_array(include_forming=False)[:, 3]
         volatility = 0.0
-        if len(closes) > 20:
+        if len(closes) > 20 and np.all(closes > 0):
              # Simple annualized vol estimate
              log_returns = np.diff(np.log(closes[-20:]))
              volatility = float(np.std(log_returns) * np.sqrt(365 * 24 * 60))
