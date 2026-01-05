@@ -88,4 +88,14 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 
 #### 1. Removal of Resource Constraints
 *   **Change**: Removed 3.7 GiB RAM limit from `AGENTS.md` and `ARCHITECTURE_SSOT.md`.
-*   **Justification**: Enabling full system performance capabilities as per Operator request.
+
+## [1.2.1] - 2026-01-05
+
+### Refactoring & Hardening
+#### 1. Contract Mapping Decoupling (Refactor)
+*   **Change**: Extracted `map_signal_to_contract_type` to `execution/common/contract_mapping.py`.
+*   **Justification**: Reduces technical debt and improves testability of `StrategyAdapter`.
+
+#### 2. Runtime Warning Resolution (Hardening)
+*   **Change**: Added safe-guards in `scripts/live.py` for volatility calculation.
+*   **Justification**: Prevents log noise from `divide by zero` on empty/flat history.

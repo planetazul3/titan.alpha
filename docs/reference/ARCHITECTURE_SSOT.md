@@ -78,12 +78,16 @@ To meet the high-frequency and safety requirements, the architecture employs:
 *   **`volatility.py`**: Autoencoder. Input: Volatility metrics. Output: Reconstruction Error (used for Regime Veto).
 
 #### 5.2.3 Execution Subsystem (`execution/`)
-*   **`decision.py`**: Evaluates model probabilities against thresholds. Now integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
+*   **`decision.py`**: Evaluates model probabilities against thresholds. Integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
 *   **`position_sizer.py`**: **Dynamic Risk Management**. Calculates optimal stake using `KellyPositionSizer` or `TargetVolatilitySizer`, decoupled from signal logic.
 *   **`regime.py`**: Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
 *   **`safety.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.
 *   **`backtest.py`**: **Event-Driven Replay**. Replays historical data through the full pipeline (`Buffer` -> `Model` -> `Decision`) to ensure "What you test is what you fly".
 *   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)**.
+
+#### 5.2.4 Calibration & Ensembling (`execution/`)
+*   **`calibration.py`**: `ProbabilityCalibrator`. Maps raw model logits/probabilities to realized win rates using Isotonic Regression.
+*   **`ensemble.py`**: `EnsembleStrategy`. Combines predictions from multiple model checkpoints (e.g., Voting, Weighted Average) to reduce variance.
 
 ## 6. Runtime View
 
@@ -124,6 +128,7 @@ To meet the high-frequency and safety requirements, the architecture employs:
 *   **Entry Points**:
     *   `scripts/live.py`: Main daemon.
     *   `scripts/train.py`: Training job.
+    *   `scripts/backtest.py`: Historical simulation and validation.
 
 ## 9. Glossary
 *   **Shadow Trade**: A simulated trade logged to the database used for validating model performance on live data without financial risk.

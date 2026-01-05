@@ -20,9 +20,8 @@ class ProbabilityCalibrator:
     will map 0.9 -> 0.6, preventing Kelly criterion from over-betting.
     """
     
-    def __init__(self, config: ProbabilityCalibrationConfig):
         self.config = config
-        self._regressor = None
+        self._regressor: Any = None
         self._last_update = datetime.min
         self._lock = threading.Lock()
         self._is_fitted = False
@@ -32,16 +31,7 @@ class ProbabilityCalibrator:
         self._bin_wins = np.zeros(10)
         self._bin_counts = np.zeros(10)
         
-    def calibrate(self, raw_prob: float) -> float:
-        """
-        Apply calibration to a raw probability score.
-        """
-        if not self.config.enabled:
-            return raw_prob
-            
-        if not self._is_fitted:
-            # Fallback to identity or simple heuristic if not enough data
-            return raw_prob
+
             
     def update(self, probabilities: list[float], outcomes: list[bool]) -> None:
         """

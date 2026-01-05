@@ -442,14 +442,16 @@ class BacktestEngine:
                                 )
                             else:
                                 # Fallback: direct execution request with simple sizing.
+                                from execution.common.contract_mapping import map_signal_to_contract_type
                                 req = ExecutionRequest(
                                     signal_id=signal.signal_id,
                                     symbol=signal.metadata.get("symbol", self.settings.trading.symbol),
-                                    direction=signal.direction,
-                                    contract_type=signal.contract_type if hasattr(signal, 'contract_type') else "RISE_FALL", # Check attr
+                                    contract_type=map_signal_to_contract_type(signal),
                                     duration=1, # Default
+                                    duration_unit="m",
                                     stake=10.0, # Default
-                                    payout_limit=None
+                                    barrier=None,
+                                    barrier2=None
                                 )
                             
                             logger.info(f"Signal generated: {signal.direction} @ {timestamp}")

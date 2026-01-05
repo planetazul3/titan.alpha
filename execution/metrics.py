@@ -33,7 +33,7 @@ class TradingMetrics:
     """
     
     @staticmethod
-    def calculate(trades: List[Dict[str, Any]], initial_balance: Float = 10000.0) -> TradeMetrics:
+    def calculate(trades: List[Dict[str, Any]], initial_balance: float = 10000.0) -> TradeMetrics:
         """
         Calculate metrics from a list of trade dictionaries.
         
