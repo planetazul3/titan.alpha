@@ -19,6 +19,11 @@ from observability.shadow_logging import shadow_trade_logger
 
 logger = logging.getLogger(__name__)
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from execution.sqlite_shadow_store import SQLiteShadowStore
+
 
 def extract_barrier_value(metadata: dict[str, Any], key: str) -> float | None:
     """Safely extract and parse barrier value from metadata."""
@@ -46,7 +51,7 @@ def extract_barrier_value(metadata: dict[str, Any], key: str) -> float | None:
 
 
 async def do_store_shadow_trade(
-    store: ShadowTradeStore,
+    store: "ShadowTradeStore | SQLiteShadowStore",
     settings: Settings,
     resolver: ContractDurationResolver,
     model_version: str,
@@ -106,7 +111,7 @@ async def do_store_shadow_trade(
 
 def fire_shadow_trade_task(
     pending_tasks: set,
-    store: ShadowTradeStore | None,
+    store: "ShadowTradeStore | SQLiteShadowStore | None",
     settings: Settings,
     resolver: ContractDurationResolver,
     model_version: str,

@@ -106,7 +106,7 @@ def readonly_connection(db_path: Path) -> sqlite3.Connection:
 
 
 # Caching for stats
-_stats_cache = {"data": None, "timestamp": 0.0}
+_stats_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 STATS_CACHE_TTL = 5.0  # seconds
 
 def get_shadow_trade_stats() -> ShadowTradeStats:
@@ -120,8 +120,12 @@ def get_shadow_trade_stats() -> ShadowTradeStats:
     global _stats_cache
     
     current_time = time.time()
-    if _stats_cache["data"] and (current_time - _stats_cache["timestamp"] < STATS_CACHE_TTL):
-        return _stats_cache["data"]
+    cached_ts = _stats_cache.get("timestamp", 0.0)
+    cached_data = _stats_cache.get("data")
+    
+    from typing import cast
+    if cached_data and isinstance(cached_ts, float) and (current_time - cached_ts < STATS_CACHE_TTL):
+        return cast(ShadowTradeStats, cached_data)
 
     try:
         with readonly_connection(SHADOW_DB_PATH) as conn:
