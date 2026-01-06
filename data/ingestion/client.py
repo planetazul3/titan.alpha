@@ -484,16 +484,32 @@ class DerivClient:
                 self._circuit_breaker.record_success()
 
                 # RxPY to async generator adapter
-                queue: asyncio.Queue = asyncio.Queue()
+                # I02 Fix: Bounded queue to prevent memory exhaustion under backpressure
+                queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
                 stream_ended = False
+                overflow_count = 0  # Track dropped items for observability
 
                 def on_next(item):
-                    nonlocal stream_ended
+                    nonlocal stream_ended, overflow_count
                     if stream_ended:
                         return
                     try:
                         quote = float(item["tick"]["quote"])
-                        queue.put_nowait(quote)
+                        try:
+                            queue.put_nowait(quote)
+                        except asyncio.QueueFull:
+                            # Drop oldest to make room for newest (LIFO-drop policy)
+                            try:
+                                queue.get_nowait()  # Discard oldest
+                                queue.put_nowait(quote)
+                            except asyncio.QueueEmpty:
+                                pass  # Race condition, queue drained
+                            overflow_count += 1
+                            if overflow_count % 100 == 1:  # Log every 100 drops
+                                logger.warning(
+                                    f"Tick queue overflow: dropped {overflow_count} items. "
+                                    f"Consumer may be lagging."
+                                )
                     except Exception as e:
                         logger.error(f"Error parsing tick: {e}")
 
@@ -592,16 +608,31 @@ class DerivClient:
                 # I01: Record success on subscription
                 self._circuit_breaker.record_success()
 
-                queue: asyncio.Queue = asyncio.Queue()
+                # I02 Fix: Bounded queue to prevent memory exhaustion
+                queue: asyncio.Queue = asyncio.Queue(maxsize=200)
                 stream_ended = False
+                overflow_count = 0
 
                 def on_next(item):
-                    nonlocal stream_ended
+                    nonlocal stream_ended, overflow_count
                     if stream_ended:
                         return
                     # item structure: {'ohlc': {'open': ..., 'high': ..., ...}}
                     if "ohlc" in item:
-                        queue.put_nowait(item["ohlc"])
+                        try:
+                            queue.put_nowait(item["ohlc"])
+                        except asyncio.QueueFull:
+                            # Drop oldest candle to make room
+                            try:
+                                queue.get_nowait()
+                                queue.put_nowait(item["ohlc"])
+                            except asyncio.QueueEmpty:
+                                pass
+                            overflow_count += 1
+                            if overflow_count % 10 == 1:
+                                logger.warning(
+                                    f"Candle queue overflow: dropped {overflow_count} items."
+                                )
                     elif "candles" in item:
                         # Initial history response - skip
                         pass

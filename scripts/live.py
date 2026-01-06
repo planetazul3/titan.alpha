@@ -753,7 +753,12 @@ async def run_live_trading(args):
                             logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
                             
                             # 1. Load into temporary model first (Atomic Step 1)
-                            new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+                            # I03 Fix: Offload blocking IO to executor to avoid freezing event loop
+                            loop = asyncio.get_running_loop()
+                            new_checkpoint = await loop.run_in_executor(
+                                None, 
+                                lambda: torch.load(checkpoint_path, map_location=device, weights_only=True)
+                            )
                             
                             # Issue E: Support multiple common checkpoint key variants
                             state_dict_key = None
@@ -778,21 +783,33 @@ async def run_live_trading(args):
                                 logger.warning(f"[HOT-RELOAD] Mismatch! Missing: {len(missing)}, Unexpected: {len(unexpected)}")
                                 console_log("Hot-reload aborted: architecture mismatch", "WARN")
                             else:
-                                # 3. Apply changes (Atomic Step 3)
+                                # I01 Fix: Validate schema BEFORE applying weights (prevent silent corruption)
+                                # 2.5. Schema Compatibility Check (BEFORE load_state_dict)
+                                try:
+                                    from utils.bootstrap import validate_model_compatibility
+                                    validate_model_compatibility(
+                                        new_checkpoint, 
+                                        settings, 
+                                        feature_builder=feature_builder
+                                    )
+                                    # Schema validated - safe to proceed
+                                except RuntimeError as schema_err:
+                                    logger.error(f"[HOT-RELOAD] Schema validation failed: {schema_err}")
+                                    console_log(f"Hot-reload aborted: {schema_err}", "ERROR")
+                                    # Continue using existing model - don't apply new weights
+                                    continue
+                                
+                                # 3. Apply changes (Atomic Step 3) - only after validation passes
                                 model.load_state_dict(new_checkpoint[state_dict_key], strict=False)
                                 model.eval()
                                 
                                 # 4. Update Metadata
+                                new_ver = "unknown"
                                 if "manifest" in new_checkpoint:
-                                    try:
-                                        from utils.bootstrap import validate_model_compatibility
-                                        validate_model_compatibility(new_checkpoint, settings)
-                                        new_ver = new_checkpoint["manifest"].get("model_version", "unknown")
-                                        if hasattr(engine, 'model_version'):
-                                            engine.model_version = new_ver
-                                        console_log(f"Model reloaded: v{new_ver}", "SUCCESS")
-                                    except Exception as ve:
-                                        logger.error(f"[HOT-RELOAD] Version validation failed: {ve}")
+                                    new_ver = new_checkpoint["manifest"].get("model_version", "unknown")
+                                if hasattr(engine, 'model_version'):
+                                    engine.model_version = new_ver
+                                console_log(f"Model reloaded: v{new_ver}", "SUCCESS")
 
                                 # 5. Update State & Reset Monitors
                                 hot_reload_state["last_ckpt_mtime"] = current_mtime

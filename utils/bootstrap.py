@@ -23,24 +23,57 @@ from tools.verify_checkpoint import verify_checkpoint
 logger = logging.getLogger(__name__)
 
 
-def validate_model_compatibility(checkpoint: Dict[str, Any], settings: Settings) -> None:
+def validate_model_compatibility(
+    checkpoint: Dict[str, Any], 
+    settings: Settings,
+    feature_builder: Optional[FeatureBuilder] = None
+) -> None:
     """
     Validate that the checkpoint is compatible with current system settings.
     
     Checks:
     1. Feature schema version
     2. Data input shapes (sequence lengths)
+    3. Feature configuration hash (I01 Fix: prevents silent data corruption)
     
     Args:
         checkpoint: Loaded checkpoint dictionary
         settings: Current system settings
+        feature_builder: Optional FeatureBuilder for hash verification
         
     Raises:
         RuntimeError: If compatibility check fails
     """
     manifest = checkpoint.get("manifest")
+    
+    # I01 Fix: Feature configuration hash check (highest priority)
+    # This catches schema drift that version numbers might miss
+    model_hash = checkpoint.get("feature_config_hash") or checkpoint.get("feature_schema_hash")
+    
+    if model_hash:
+        if feature_builder is None:
+            # Create temporary builder for hash comparison
+            feature_builder = get_feature_builder(settings)
+        
+        current_hash = feature_builder.get_schema_hash()
+        if model_hash != current_hash:
+            raise RuntimeError(
+                f"FEATURE SCHEMA MISMATCH!\n"
+                f"  Model trained with hash: {model_hash}\n"
+                f"  Current config hash:     {current_hash}\n"
+                f"This indicates configuration drift between training and deployment. "
+                f"Retrain the model or restore the original settings."
+            )
+        logger.info(f"Feature schema hash verified: {current_hash[:16]}...")
+    else:
+        # Checkpoint doesn't have hash - log warning but continue (legacy checkpoint)
+        logger.warning(
+            "Checkpoint missing 'feature_config_hash'. "
+            "Consider retraining with newer training script for full schema validation."
+        )
+    
     if not manifest:
-        # Legacy checkpoint or no manifest
+        # Legacy checkpoint or no manifest, already checked hash above
         return
 
     from config.constants import FEATURE_SCHEMA_VERSION
