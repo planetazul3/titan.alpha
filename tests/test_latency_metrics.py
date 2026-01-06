@@ -4,10 +4,11 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import asyncio
 import time
 import torch
-# Need to import run_inference presumably by importing the module, but live.py is a script.
-# Standard pattern: import from scripts.live but need to make sure it's in path (already is via sys.path in live.py generally, but for tests?)
-# tests/test_latency_metrics.py -> can import scripts.live
-from scripts.live import run_inference
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from execution.orchestrator import InferenceOrchestrator
 from observability import TradingMetrics
 
 class TestLatencyMetrics(unittest.IsolatedAsyncioTestCase):
@@ -24,11 +25,13 @@ class TestLatencyMetrics(unittest.IsolatedAsyncioTestCase):
         mock_engine.process_with_context.return_value = []
         mock_engine.get_statistics.return_value = {}
         
-        mock_buffer = MagicMock()
-        mock_buffer.get_ticks_array.return_value = torch.zeros(60)
-        mock_buffer.get_candles_array.return_value = torch.zeros((60, 6))
-        mock_buffer.tick_count.return_value = 100
-        mock_buffer.candle_count.return_value = 100
+        # Orchestrator doesn't take buffer in run_cycle, it takes snapshot
+        snapshot = {
+            "ticks": torch.zeros(60),
+            "candles": torch.zeros((60, 6)),
+            "tick_count": 100,
+            "candle_count": 100 
+        }
         
         mock_fb = MagicMock()
         mock_fb.build.return_value = {
@@ -46,16 +49,20 @@ class TestLatencyMetrics(unittest.IsolatedAsyncioTestCase):
             return []
         mock_engine.process_with_context.side_effect = delayed_process
         
-        # Run
-        await run_inference(
+        # Initialize Orchestrator
+        orchestrator = InferenceOrchestrator(
             model=mock_model,
             engine=mock_engine,
             executor=AsyncMock(),
-            buffer=mock_buffer,
             feature_builder=mock_fb,
             device="cpu",
             settings=mock_settings,
-            metrics=mock_metrics,
+            metrics=mock_metrics
+        )
+        
+        # Run
+        await orchestrator.run_cycle(
+            market_snapshot=snapshot
         )
         
         # Verify
