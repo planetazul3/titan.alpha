@@ -466,7 +466,7 @@ async def run_live_trading(args):
                                     first_tick_received.set()
                                 # Log sparsely to avoid spam during startup
                                 if len(startup_buffer_ticks) % 10 == 0:
-                                    logger.debug(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
+                                    logger.info(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
                                 return # Continue to next iteration (skip processing)
 
                     # Strategy sees TickEvent, not broker-specific message
@@ -560,7 +560,7 @@ async def run_live_trading(args):
                         async with startup_lock:
                              if not startup_complete.is_set():
                                 startup_buffer_candles.append(candle_event)
-                                logger.debug(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
+                                logger.info(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
                                 return # Continue to next iteration
                         
                     # Buffer handles candle close detection internally
