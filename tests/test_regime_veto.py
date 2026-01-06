@@ -57,6 +57,39 @@ def mock_settings():
     return settings
 
 
+def test_regime_veto_invalid_thresholds_raises():
+    """Should raise if caution >= veto threshold."""
+    from execution.regime import RegimeVeto
+
+    with pytest.raises(ValueError, match="Caution threshold must be less than veto threshold"):
+        RegimeVeto(threshold_caution=0.5, threshold_veto=0.3)
+
+def test_regime_veto_from_settings():
+    """Test C-004: initialization from settings."""
+    from execution.regime import RegimeVeto
+    from execution.regime.types import CalibrationSource
+    from config.settings import Settings, Thresholds, ModelHyperparams, Trading, DataShapes
+    
+    hyperparams = ModelHyperparams.model_construct(
+        regime_caution_threshold=0.15,
+        regime_veto_threshold=0.45
+    )
+    # Construct minimal settings
+    settings = Settings.model_construct(
+        hyperparams=hyperparams,
+        thresholds=Thresholds.model_construct(),
+        trading=Trading.model_construct(),
+        data_shapes=DataShapes.model_construct(),
+        environment="development"
+    )
+    
+    veto = RegimeVeto.from_settings(settings)
+    
+    assert veto.threshold_caution == 0.15
+    assert veto.threshold_veto == 0.45
+    assert veto.calibration_source == CalibrationSource.SETTINGS
+
+
 @pytest.fixture
 def regime_veto():
     return RegimeVeto(threshold_caution=0.5, threshold_veto=1.0)

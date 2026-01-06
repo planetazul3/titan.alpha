@@ -439,6 +439,11 @@ async def run_live_trading(args):
         from training.auto_retrain import RetrainingTrigger
         perf_tracker = PerformanceTracker()
         retrain_trigger = RetrainingTrigger()
+        first_tick_received = asyncio.Event()
+    
+        # CRITICAL-001: Lock for startup synchronization
+        # Protects the transition from startup buffering to live processing
+        startup_lock = asyncio.Lock()
 
         async def process_ticks():
             """Process tick events from normalized MarketEventBus."""
@@ -449,13 +454,20 @@ async def run_live_trading(args):
                     # Update heartbeat timestamp
                     last_tick_time = datetime.now()
                     
-                    # H11: Buffer during startup
+                    logger.debug(f"Tick received: {tick_event}")
+                    
+                    # CRITICAL-001: Thread-safe startup buffering
                     if not startup_complete.is_set():
-                        startup_buffer_ticks.append(tick_event.price)
-                        # Log sparsely to avoid spam during startup
-                        if len(startup_buffer_ticks) % 10 == 0:
-                            logger.debug(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
-                        return # Continue to next iteration (skip processing)
+                        async with startup_lock:
+                            # Double-check inside lock
+                            if not startup_complete.is_set():
+                                startup_buffer_ticks.append(tick_event.price)
+                                if not first_tick_received.is_set(): # Set only once
+                                    first_tick_received.set()
+                                # Log sparsely to avoid spam during startup
+                                if len(startup_buffer_ticks) % 10 == 0:
+                                    logger.debug(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
+                                return # Continue to next iteration (skip processing)
 
                     # Strategy sees TickEvent, not broker-specific message
                     buffer.append_tick(tick_event.price)
@@ -540,11 +552,16 @@ async def run_live_trading(args):
             async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
                 start_time = datetime.now()
                 try:
-                    # H11: Buffer during startup
+                    if not candle_event:
+                        continue
+                        
+                    # CRITICAL-001: Thread-safe startup buffering
                     if not startup_complete.is_set():
-                        startup_buffer_candles.append(candle_event)
-                        logger.debug(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
-                        return # Continue to next iteration
+                        async with startup_lock:
+                             if not startup_complete.is_set():
+                                startup_buffer_candles.append(candle_event)
+                                logger.debug(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
+                                return # Continue to next iteration
                         
                     # Buffer handles candle close detection internally
                     is_new_candle = buffer.update_candle(candle_event)
@@ -879,8 +896,19 @@ async def run_live_trading(args):
             #   So we can safely drain the list and set the flag without race condition!
             #   Because we are in 'await' free block here (except if we await something).
             
-            replay_ticks = list(startup_buffer_ticks) # Copy
-            replay_candles = list(startup_buffer_candles)
+            # CRITICAL-001: Atomic Replay and Flag Setting
+            # Acquire lock to ensure no new items are added to startup buffer while we drain it
+            # and set the completion flag.
+            async with startup_lock:
+                replay_ticks = list(startup_buffer_ticks) # Copy
+                replay_candles = list(startup_buffer_candles)
+                
+                # Clear startup buffers to free memory
+                startup_buffer_ticks.clear()
+                startup_buffer_candles.clear()
+            
+                # ENABLE LIVE PROCESSING (Atomic with replay capture)
+                startup_complete.set()
             
             for t_price in replay_ticks:
                 buffer.append_tick(t_price)
@@ -889,13 +917,7 @@ async def run_live_trading(args):
             for c_event in replay_candles:
                 buffer.update_candle(c_event)
                 candle_count += 1
-                
-            # Clear startup buffers to free memory
-            startup_buffer_ticks.clear()
-            startup_buffer_candles.clear()
-            
-            # ENABLE LIVE PROCESSING
-            startup_complete.set()
+
             console_log(f"Synchronization complete. Replayed {len(replay_ticks)} ticks.", "SUCCESS")
             logger.info("Startup synchronization complete. Live processing enabled.")
 

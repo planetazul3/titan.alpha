@@ -59,6 +59,8 @@ class DerivOmniModel(nn.Module):
 
     def __init__(self, settings: Settings):
         super().__init__()
+        self.settings = settings
+
 
         logger.info("Initializing DerivOmniModel...")
 
@@ -128,6 +130,26 @@ class DerivOmniModel(nn.Module):
              raise TypeError(f"Model expected candles float32, got {candles.dtype}")
         if vol_metrics.dtype != torch.float32:
              raise TypeError(f"Model expected vol_metrics float32, got {vol_metrics.dtype}")
+             
+        # CRITICAL-002: Enforce Input Shapes
+        # Prevent silent failures from mismatched tensor dimensions
+        seq_ticks = self.settings.data_shapes.sequence_length_ticks
+        seq_candles = self.settings.data_shapes.sequence_length_candles
+        feat_candles = self.settings.data_shapes.feature_dim_candles
+        feat_vol = self.settings.data_shapes.feature_dim_volatility
+        
+        if ticks.dim() != 2 or ticks.shape[1] != seq_ticks:
+            raise ValueError(f"Invalid ticks shape: expected (B, {seq_ticks}), got {tuple(ticks.shape)}")
+            
+        if candles.dim() != 3 or candles.shape[1] != seq_candles or candles.shape[2] != feat_candles:
+            raise ValueError(
+                f"Invalid candles shape: expected (B, {seq_candles}, {feat_candles}), got {tuple(candles.shape)}"
+            )
+            
+        if vol_metrics.dim() != 2 or vol_metrics.shape[1] != feat_vol:
+            raise ValueError(
+                f"Invalid vol_metrics shape: expected (B, {feat_vol}), got {tuple(vol_metrics.shape)}"
+            )
 
         candles_mask = masks.get("candles_mask") if masks else None
         ticks_mask = masks.get("ticks_mask") if masks else None

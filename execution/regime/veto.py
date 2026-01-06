@@ -13,6 +13,7 @@ import torch
 from execution.common.types import TrustState
 from .types import CalibrationSource, RegimeAssessmentProtocol, RegimeAssessment, TrustState
 from .detectors import HierarchicalRegimeDetector
+from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,18 @@ class RegimeVeto:
         veto = checkpoint.get("regime_veto_threshold", fallback_veto)
         source = CalibrationSource.CHECKPOINT if "regime_caution_threshold" in checkpoint else CalibrationSource.DEFAULT
         return cls(threshold_caution=caution, threshold_veto=veto, calibration_source=source)
+
+    @classmethod
+    def from_settings(cls, settings: "Settings") -> "RegimeVeto":
+        """
+        CRITICAL-004: Safe initialization from application settings.
+        Ensures thresholds are loaded from validated configuration.
+        """
+        return cls(
+            threshold_caution=settings.hyperparams.regime_caution_threshold,
+            threshold_veto=settings.hyperparams.regime_veto_threshold,
+            calibration_source=CalibrationSource.SETTINGS
+        )
 
     def update_prices(self, prices: np.ndarray) -> None:
         """Update cached prices for hierarchical detection."""

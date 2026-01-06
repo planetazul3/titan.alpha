@@ -127,8 +127,13 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
 
     def update_daily_pnl(self, pnl: float):
         """Add pnl to daily total."""
-        from utils.numerical_validation import ensure_finite
-        pnl = ensure_finite(pnl, "update_daily_pnl", default=0.0)
+        import math
+        # CRITICAL-005: Strict NaN Check
+        if not math.isfinite(pnl):
+             raise ValueError(f"CRITICAL: Attempted to persist NaN PnL in update_daily_pnl: {pnl}")
+             
+        # from utils.numerical_validation import ensure_finite
+        # pnl = ensure_finite(pnl, "update_daily_pnl", default=0.0)
         
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
