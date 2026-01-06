@@ -28,6 +28,16 @@ from typing import Any
 
 import numpy as np
 
+
+from typing import TypedDict, Any
+
+class MarketSnapshot(TypedDict):
+    ticks: list[float]
+    candles: list[list[float]] # or np.ndarray if we convert
+    tick_count: int
+    candle_count: int
+    timestamp: float
+
 logger = logging.getLogger(__name__)
 
 
@@ -296,13 +306,13 @@ class MarketDataBuffer:
             Dict with 'ticks' and 'candles' numpy arrays.
         """
         # Create copies of data
-        ticks_snap = np.array(list(self._ticks))
+        ticks_snap = list(self._ticks)
         
         # Snapshot candles (excluding forming one for consistency with training)
         candles_list = list(self._candles)
         if len(candles_list) > self.candle_length:
             candles_list = candles_list[:-1]
-        candles_snap = np.array(candles_list)
+        candles_snap = [c.to_array() for c in candles_list]
         
         return {
             "ticks": ticks_snap, 

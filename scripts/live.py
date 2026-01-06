@@ -464,7 +464,7 @@ async def run_live_trading(args):
                 last_tick_time = datetime.now()
                 try:
                     # Update heartbeat timestamp
-                    last_tick_time = datetime.now()
+                    # Update heartbeat timestamp
                     
                     logger.debug(f"Tick received: {tick_event}")
                     
@@ -894,15 +894,6 @@ async def run_live_trading(args):
             console_log(f"Synchronization complete.", "SUCCESS")
             startup_complete.set()
             
-            for t_price in replay_ticks:
-                buffer.append_tick(t_price)
-                tick_count += 1
-                
-            for c_event in replay_candles:
-                buffer.update_candle(c_event)
-                candle_count += 1
-
-            console_log(f"Synchronization complete. Replayed {len(replay_ticks)} ticks.", "SUCCESS")
             logger.info("Startup synchronization complete. Live processing enabled.")
 
         except Exception as e:
@@ -1207,6 +1198,10 @@ async def run_inference(
 
             
             
+            # N2 (FIXED): Extract variables from execution_request
+            stake = execution_request.stake
+            contract_type = execution_request.contract_type
+            
             # C07 (FIXED): Atomic Intent Execution with Context Manager
             async with trade_tracker.intent(
                 direction=signal.direction,
@@ -1323,7 +1318,7 @@ async def _run_challenger_inference(
     t_np: np.ndarray,
     c_np: np.ndarray,
     entry_price: float,
-    buffer: Any
+    market_snapshot: Any # TypedDict 'MarketSnapshot' actually
 ) -> None:
     """
     Helper to run challenger inference concurrently.
@@ -1363,7 +1358,7 @@ async def _run_challenger_inference(
             tick_window=t_np,
             candle_window=c_np,
             entry_price=entry_price,
-            market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()}
+            market_data={"ticks_count": market_snapshot["tick_count"], "candles_count": market_snapshot["candle_count"]}
         )
     except Exception as e:
         logger.error(f"[CHALLENGER {version}] Failed: {e}")
