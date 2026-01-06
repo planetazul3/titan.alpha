@@ -1167,7 +1167,7 @@ async def run_inference(
                      assessment = engine.get_regime_assessment(reconstruction_error)
                      regime_state = engine.get_regime_state_string(assessment)
                      
-                     execution_request = strategy_adapter.convert_signal(
+                     execution_request = await strategy_adapter.convert_signal(
                          signal, 
                          reconstruction_error=reconstruction_error,
                          regime_state=regime_state

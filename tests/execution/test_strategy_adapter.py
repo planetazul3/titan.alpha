@@ -1,6 +1,6 @@
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 import asyncio
 
@@ -47,6 +47,7 @@ class TestExecutionRequest:
                 duration_unit="m"
             )
 
+@pytest.mark.asyncio
 class TestStrategyAdapter:
     def setup_method(self):
         self.settings = MagicMock(spec=Settings)
@@ -63,17 +64,26 @@ class TestStrategyAdapter:
         # Mock position sizer
         self.sizer = FixedStakeSizer(stake=20.0)
         
-        # Mock duration resolver
-        self.duration_resolver = MagicMock()
-        self.duration_resolver.resolve_duration.return_value = (1, "m")
+        # Mock param_service (Since StrategyAdapter instantiates it in __init__, we need to patch class or use Dependency Injection)
+        # For this test, let's just let it be created or patch execution.strategy_adapter.ContractParameterService
+        
+        # We need to start the patcher here and stop it in teardown, or use a context manager that persists?
+        # Standard pattern for setup_method:
+        self.patcher = patch('execution.strategy_adapter.ContractParameterService')
+        MockService = self.patcher.start()
+        instance = MockService.return_value
+        instance.resolve_duration.return_value = (1, "m")
+        instance.resolve_barriers.return_value = (None, None)
         
         self.adapter = StrategyAdapter(
             settings=self.settings,
-            position_sizer=self.sizer,
-            duration_resolver=self.duration_resolver
+            position_sizer=self.sizer
         )
 
-    def test_convert_signal_basic(self):
+    def teardown_method(self):
+        self.patcher.stop()
+
+    async def test_convert_signal_basic(self):
         """Test conversion of a standard signal."""
         signal = TradeSignal(
             signal_id="sig_1",
@@ -85,7 +95,8 @@ class TestStrategyAdapter:
             metadata={"symbol": "R_100"}
         )
         
-        request = self.adapter.convert_signal(signal)
+        # IMPORTANT-001: Await async conversion
+        request = await self.adapter.convert_signal(signal)
         
         assert isinstance(request, ExecutionRequest)
         assert request.signal_id == "sig_1"
@@ -95,7 +106,7 @@ class TestStrategyAdapter:
         assert request.duration == 1 # Default resolution for 1m
         assert request.duration_unit == "m"
 
-    def test_convert_signal_put(self):
+    async def test_convert_signal_put(self):
         """Test conversion of a PUT signal."""
         signal = TradeSignal(
             signal_id="sig_2",
@@ -107,11 +118,14 @@ class TestStrategyAdapter:
             metadata={"symbol": "R_100"}
         )
         
-        request = self.adapter.convert_signal(signal)
+        request = await self.adapter.convert_signal(signal)
         assert request.contract_type == "PUT"
 
-    def test_convert_signal_touch(self):
+    async def test_convert_signal_touch(self):
         """Test conversion of a TOUCH signal."""
+        # Setup specific return for touch
+        self.adapter.param_service.resolve_barriers.return_value = ("+1.5", None)
+        
         signal = TradeSignal(
             signal_id="sig_3",
             signal_type=SIGNAL_TYPES.REAL_TRADE,
@@ -122,11 +136,22 @@ class TestStrategyAdapter:
             metadata={"barrier": "+1.5", "symbol": "R_100"}
         )
         
-        request = self.adapter.convert_signal(signal)
+        request = await self.adapter.convert_signal(signal)
         assert request.contract_type == "ONETOUCH"
+        # Since we mocked the service in setup (technically), we need to ensure the instance we are using is the one we configured
+        # But wait, StrategyAdapter creates NEW instance.
+        # So we better rely on correct init.
+        # Actually in test_convert_signal_basic, I patched the class but didn't assign the mock to `self.adapter.param_service`.
+        # StrategyAdapter.__init__ does: self.param_service = ContractParameterService(settings)
+        # So if we want to control behaviors per test, we should overwrite it.
+        
+        # Manual Override for this test
+        self.adapter.param_service.resolve_barriers = MagicMock(return_value=("+1.5", None))
+        request = await self.adapter.convert_signal(signal)
+        
         assert request.barrier == "+1.5"
     
-    def test_stake_override_from_metadata(self):
+    async def test_stake_override_from_metadata(self):
         """Test that metadata stake overrides position sizer."""
         signal = TradeSignal(
             signal_id="sig_4",
@@ -138,5 +163,5 @@ class TestStrategyAdapter:
             metadata={"stake": 50.0, "symbol": "R_100"}
         )
         
-        request = self.adapter.convert_signal(signal)
+        request = await self.adapter.convert_signal(signal)
         assert request.stake == 50.0 

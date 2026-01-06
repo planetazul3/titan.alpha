@@ -88,7 +88,9 @@ class DerivTradeExecutor:
             from execution.executor_adapter import SignalAdapter
             adapter = SignalAdapter(self.settings, self.position_sizer)
             try:
-                request = adapter.to_execution_request(request)
+                # IMPORTANT-001: Await the async conversion (even if currently fast)
+                # This enables future async parameter resolution (e.g. live barriers)
+                request = await adapter.to_execution_request(request)
             except Exception as e:
                 logger.error(f"Failed to adapt signal {request.signal_id}: {e}")
                 return TradeResult(success=False, error=f"Signal Adaptation Error: {e}")

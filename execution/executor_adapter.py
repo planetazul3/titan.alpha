@@ -19,7 +19,7 @@ class SignalAdapter:
         self.position_sizer = position_sizer
         self.param_service = ContractParameterService(settings)
         
-    def to_execution_request(self, signal: TradeSignal) -> ExecutionRequest:
+    async def to_execution_request(self, signal: TradeSignal) -> ExecutionRequest:
         """
         Convert a high-level TradeSignal into a precise ExecutionRequest.
         
@@ -38,6 +38,7 @@ class SignalAdapter:
              raise ValueError(f"Signal {signal.signal_id} has no direction/contract_type")
 
         # 2. Resolve Duration and Barriers (CRITICAL-003)
+        # Future: These might become async if fetching live prices
         duration, unit = self.param_service.resolve_duration(signal.contract_type)
         barrier, barrier2 = self.param_service.resolve_barriers(signal.contract_type)
         
@@ -45,7 +46,11 @@ class SignalAdapter:
         if self.position_sizer:
             try:
                 # Use the protocol method
-                stake = self.position_sizer.suggest_stake_for_signal(signal)
+                # IMPORTANT-001: Support async position sizers if they exist
+                 if hasattr(self.position_sizer, "suggest_stake_for_signal_async"):
+                      stake = await self.position_sizer.suggest_stake_for_signal_async(signal)
+                 else:
+                      stake = self.position_sizer.suggest_stake_for_signal(signal)
             except AttributeError:
                 # Fallback if position_sizer doesn't follow protocol exactly
                 if hasattr(self.position_sizer, "compute_stake"):

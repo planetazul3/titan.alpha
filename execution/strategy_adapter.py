@@ -32,7 +32,7 @@ class StrategyAdapter:
         self.position_sizer = position_sizer or FixedStakeSizer(stake=settings.trading.stake_amount)
         self.param_service = ContractParameterService(settings)
         
-    def convert_signal(
+    async def convert_signal(
         self, 
         signal: TradeSignal, 
         account_balance: Optional[float] = None,
@@ -48,11 +48,20 @@ class StrategyAdapter:
         if stake is None:
             # R02: Pass volatility from metadata if available
             volatility = signal.metadata.get("volatility", 0.0)
-            stake = self.position_sizer.suggest_stake_for_signal(
-                signal, 
-                account_balance=account_balance,
-                volatility=volatility
-            )
+            
+            # IMPORTANT-001: Async Sizing Support
+            if hasattr(self.position_sizer, "suggest_stake_for_signal_async"):
+                 stake = await self.position_sizer.suggest_stake_for_signal_async(
+                    signal, 
+                    account_balance=account_balance,
+                    volatility=volatility
+                 )
+            else:
+                 stake = self.position_sizer.suggest_stake_for_signal(
+                    signal, 
+                    account_balance=account_balance,
+                    volatility=volatility
+                 )
             
         # 2. Resolve Duration and Barriers (CRITICAL-003)
         duration, duration_unit = self.param_service.resolve_duration(signal.contract_type)

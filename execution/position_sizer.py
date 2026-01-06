@@ -74,6 +74,13 @@ class PositionSizer(Protocol):
     """Protocol for position sizing strategies."""
     def suggest_stake_for_signal(self, signal: Any, **kwargs) -> float:
         ...
+        
+    async def suggest_stake_for_signal_async(self, signal: Any, **kwargs) -> float:
+        """
+        Optional async version for I/O bound sizing (e.g. fetching balance).
+        Default implementation delegates to sync version.
+        """
+        return self.suggest_stake_for_signal(signal, **kwargs)
 
 
 
