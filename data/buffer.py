@@ -312,7 +312,7 @@ class MarketDataBuffer:
         candles_list = list(self._candles)
         if len(candles_list) > self.candle_length:
             candles_list = candles_list[:-1]
-        candles_snap = [c.to_array() for c in candles_list]
+        candles_snap = list(candles_list)  # Copy the lists directly (already arrays)
         
         return {
             "ticks": ticks_snap, 

@@ -3,7 +3,7 @@ import pytest
 import torch
 from models.tft import TemporalFusionTransformer
 from models.core import DerivOmniModel
-from config.settings import Settings
+from config.settings import Settings, load_settings
 
 class TestTFTCovariates:
     def test_tft_with_static_covariates(self):
@@ -36,8 +36,7 @@ class TestTFTCovariates:
 
     def test_full_model_integration(self):
         """Verify DerivOmniModel correctly threads volatility stats to TFT."""
-        settings = Settings(environment="test", deriv_api_token="dummy_token")
-        settings.hyperparams.latent_dim = 8 # Force latent dim to match expectations
+        settings = load_settings()
         
         model = DerivOmniModel(settings)
         
@@ -45,14 +44,15 @@ class TestTFTCovariates:
         if hasattr(model.temporal, "tft"):
              assert model.temporal.tft.static_input_size == settings.hyperparams.latent_dim
         
-        # Full forward pass
-        ticks = torch.randn(2, 20)
-        candles = torch.randn(2, 30, 10)
-        vol_metrics = torch.randn(2, 4)
+        # Full forward pass using actual dimensions from settings
+        batch_size = 2
+        ticks = torch.randn(batch_size, settings.data_shapes.sequence_length_ticks)
+        candles = torch.randn(batch_size, settings.data_shapes.sequence_length_candles, settings.data_shapes.feature_dim_candles)
+        vol_metrics = torch.randn(batch_size, settings.data_shapes.feature_dim_volatility)
         
         logits = model(ticks, candles, vol_metrics)
         assert "rise_fall_logit" in logits
-        assert logits["rise_fall_logit"].shape == (2, 1)
+        assert logits["rise_fall_logit"].shape == (batch_size, 1)
 
 if __name__ == "__main__":
     pytest.main([__file__])

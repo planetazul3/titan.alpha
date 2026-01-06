@@ -55,7 +55,8 @@ class TestAdvancedSizing:
     @pytest.mark.asyncio
     async def test_strategy_adapter_volatility_passing(self):
         """Verify StrategyAdapter pulls volatility from signal metadata."""
-        settings = Settings()
+        from config.settings import load_settings
+        settings = load_settings()
         mock_sizer = MagicMock()
         mock_sizer.suggest_stake_for_signal.return_value = 10.0
         

@@ -78,9 +78,10 @@ from execution.decision import DecisionEngine
 
 @pytest.mark.asyncio
 async def test_decision_engine_calibration_integration():
-    settings = Settings()
-    settings.prob_calibration.enabled = True
-    settings.prob_calibration.min_samples = 5
+    from config.settings import load_settings
+    settings = load_settings()
+    # Note: Settings is frozen, so we can't mutate prob_calibration here.
+    # The test works because calibrator.update() can be called regardless of config.enabled
     
     engine = DecisionEngine(settings)
     

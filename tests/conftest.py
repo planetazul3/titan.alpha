@@ -1,5 +1,12 @@
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
+
+# Add project root to path for module resolution
+# This ensures pytest can import project modules without PYTHONPATH
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 # Mock talib if not present to allow tests to run on environments without C-libs
 try:
