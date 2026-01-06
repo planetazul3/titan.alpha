@@ -129,10 +129,10 @@ async def run_live_trading(args):
             checkpoint_path = default_ckpt
             logger.info("No checkpoint specified, auto-selecting 'best_model'")
         else:
-            if not args.test:
+            if not args.test and not args.skip_checkpoint_verify:
                  logger.critical("FATAL: No checkpoint found and 'best_model.pt' missing.")
                  return 1
-            logger.warning("Test mode: Model initialized with RANDOM weights.")
+            logger.warning("No Checkpoint Mode: Model initialized with RANDOM weights.")
     else:
         checkpoint_path = Path(args.checkpoint_dir) / f"{checkpoint_name}.pt"
         
