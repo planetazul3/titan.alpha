@@ -258,6 +258,11 @@ class SafeTradeExecutor:
         """Alias for register_outcome."""
         await self.register_outcome(pnl)
 
+    async def shutdown(self) -> None:
+        """Gracefully shutdown the inner executor."""
+        if hasattr(self.inner, "shutdown") and callable(self.inner.shutdown):
+            await self.inner.shutdown()
+
     def get_safety_statistics(self) -> dict:
         """Get current safety statistics."""
         return {
