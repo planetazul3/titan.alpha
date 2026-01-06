@@ -134,11 +134,18 @@ class SafeTradeExecutor:
             # 6. Update State
             if result.success:
                 await self._record_trade(request.symbol, result)
+                # For successful trades, DB now tracks this - release pending counter
+                # This must happen AFTER record_trade to prevent double-counting window
+                await self._release_rate_limit_reservation(request.symbol)
+            else:
+                # For failed trades, release the reservation immediately
+                await self._release_rate_limit_reservation(request.symbol)
 
             return result
-        finally:
-            # RELEASE RESERVATION
+        except Exception:
+            # On any exception, release the reservation
             await self._release_rate_limit_reservation(request.symbol)
+            raise
 
     def _reject(self, reason: str) -> TradeResult:
         logger.warning(f"Trade rejected by Safety Shield: {reason}")
