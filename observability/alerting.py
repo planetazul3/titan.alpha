@@ -139,6 +139,11 @@ class AlertManager:
             if name in self._last_alert_times:
                 del self._last_alert_times[name]
 
+    def set_suppression_interval(self, interval_sec: float) -> None:
+        """Update the global suppression interval."""
+        with self._lock:
+            self._suppression_interval = interval_sec
+
 # Global singleton for easy access (initialized in live.py)
 _global_alert_manager: Optional[AlertManager] = None
 
