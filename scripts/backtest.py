@@ -61,6 +61,37 @@ async def run_detailed_backtest(args):
     feature_builder = stack["feature_builder"]
     model = stack["model"]
     
+    # ISSUE-8: Pre-Backtest Schema Verification
+    # Verify that the model was trained with the same feature schema
+    if args.model:
+        import torch
+        try:
+            checkpoint = torch.load(args.model, map_location="cpu", weights_only=False)
+            # Check both key names for compatibility (trainer.py uses feature_config_hash)
+            model_hash = checkpoint.get("feature_config_hash") or checkpoint.get("feature_schema_hash")
+            current_hash = feature_builder.get_schema_hash()
+            
+            if model_hash:
+                if model_hash != current_hash:
+                    logger.error(
+                        f"FEATURE SCHEMA MISMATCH!\n"
+                        f"  Model trained with: {model_hash}\n"
+                        f"  Current config:     {current_hash}\n"
+                        f"Results will be INVALID. Retrain model or align settings."
+                    )
+                    if not args.force:
+                        logger.error("Use --force to run anyway (not recommended)")
+                        return
+                else:
+                    logger.info(f"Feature schema verified: {current_hash[:12]}...")
+            else:
+                logger.warning(
+                    "Model checkpoint missing 'feature_schema_hash'. "
+                    "Consider retraining with newer training script for full validation."
+                )
+        except Exception as e:
+            logger.warning(f"Could not verify feature schema: {e}")
+    
     # 4. Configure Execution Stack
     # Strategy Adapter
     from execution.position_sizer import KellyPositionSizer
@@ -156,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--slippage", type=float, default=0.0, help="Slippage probability")
     parser.add_argument("--device", default="cpu", help="Compute device (cpu/cuda)")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
+    parser.add_argument("--force", action="store_true", help="Run despite schema mismatch (not recommended)")
     
     args = parser.parse_args()
     
