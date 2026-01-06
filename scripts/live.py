@@ -434,6 +434,11 @@ async def run_live_trading(args):
         last_tick_log_count = 0  # For refined tick logging
         last_inference_time = 0.0  # CRITICAL RULE 1: Inference Cooldown
         
+        # Issue G: Progress counters for per-component staleness detection
+        import time as time_module
+        last_candle_progress_time = time_module.time()
+        last_inference_progress_time = time_module.time()
+        
         # C02 (FIXED): Persistent State dictionary with backoff tracking
         hot_reload_state = {
             "last_ckpt_mtime": 0,
@@ -750,9 +755,21 @@ async def run_live_trading(args):
                             # 1. Load into temporary model first (Atomic Step 1)
                             new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
                             
+                            # Issue E: Support multiple common checkpoint key variants
+                            state_dict_key = None
+                            for key in ["model_state_dict", "state_dict", "model"]:
+                                if key in new_checkpoint:
+                                    state_dict_key = key
+                                    break
+                            
+                            if state_dict_key is None:
+                                logger.error(f"[HOT-RELOAD] No valid state_dict key found. Available: {list(new_checkpoint.keys())}")
+                                console_log("Hot-reload aborted: no valid state_dict key", "WARN")
+                                continue
+                            
                             # 2. Validate Architecture (Atomic Step 2)
                             current_keys = set(model.state_dict().keys())
-                            new_keys = set(new_checkpoint["model_state_dict"].keys())
+                            new_keys = set(new_checkpoint[state_dict_key].keys())
                             
                             missing = current_keys - new_keys
                             unexpected = new_keys - current_keys
@@ -762,7 +779,7 @@ async def run_live_trading(args):
                                 console_log("Hot-reload aborted: architecture mismatch", "WARN")
                             else:
                                 # 3. Apply changes (Atomic Step 3)
-                                model.load_state_dict(new_checkpoint["model_state_dict"], strict=False)
+                                model.load_state_dict(new_checkpoint[state_dict_key], strict=False)
                                 model.eval()
                                 
                                 # 4. Update Metadata
@@ -828,88 +845,65 @@ async def run_live_trading(args):
                          else:
                               logger.warning(f"Background task {t.get_name()} finished unexpectedly")
 
-        # Start background tasks
-        tasks = [
-            asyncio.create_task(process_ticks(), name="tick_processor"),
-            asyncio.create_task(process_candles(), name="candle_processor"),
-            asyncio.create_task(heartbeat(), name="heartbeat_monitor"),
-            asyncio.create_task(maintenance_task(), name="maintenance_worker"),
-        ]
-
         # ══════════════════════════════════════════════════════════════════════
         # SYNCHRONIZATION PHASE
-        # 1. Background tasks are already buffering input
-        # 2. Fetch historical data to fill buffer
-        # 3. Replay buffered data
-        # 4. Enable real-time processing
+        # 1. Fetch historical data to fill buffer BEFORE starting long-running tasks
+        # 2. Then start tasks with TaskGroup for deterministic exception handling
         # ══════════════════════════════════════════════════════════════════════
         console_log("Synchronizing with market history...", "WAIT")
-        try:
-            # CRITICAL-001/002: Use Synchronizer for Atomic Startup
-            # 1. Fetch History
-            hist_ticks = await client.get_historical_ticks(count=settings.data_shapes.sequence_length_ticks)
-            hist_candles_raw = await client.get_historical_candles(
-                count=settings.data_shapes.sequence_length_candles, 
-                interval=60
-            )
-            
-            console_log(f"Fetched history: {len(hist_ticks)} ticks, {len(hist_candles_raw)} candles", "INFO")
-            
-            # 2. Atomic Transition
-            # synchronize.finalize_startup will:
-            # - Populate main buffer with history
-            # - Switch state to LIVE (atomically)
-            # - Replay buffered live events
-            synchronizer.finalize_startup(hist_ticks, hist_candles_raw)
-            
-            startup_complete.set()
-            logger.info("Startup synchronization complete. Live processing enabled.")
-
-        except Exception as e:
-            logger.critical(f"Synchronization failed: {e}")
-            console_log(f"Sync failed: {e}", "ERROR")
-            # Cancel tasks and exit
-            for t in tasks: t.cancel()
-            return 1
-
-
-        if not args.test:
-             # Add real trade tracker task if not in test mode
-             # RealTradeTracker does not have a start method, it works proactively
-             # tasks.append(asyncio.create_task(real_trade_tracker.start()))
-             pass
         
-        # Monitor tasks
-        # If any task fails, we should probably stop the system
-        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        # Fetch history before starting background tasks
+        hist_ticks = await client.get_historical_ticks(count=settings.data_shapes.sequence_length_ticks)
+        hist_candles_raw = await client.get_historical_candles(
+            count=settings.data_shapes.sequence_length_candles, 
+            interval=60
+        )
         
-        # H04 (FIXED): Graceful cancellation of background tasks
-        for task in pending:
-            task.cancel()
+        console_log(f"Fetched history: {len(hist_ticks)} ticks, {len(hist_candles_raw)} candles", "INFO")
         
-        # Await cancelled tasks to allow them to handle CancelledError and cleanup
-        if pending:
-             await asyncio.gather(*pending, return_exceptions=True)
+        # Atomic Transition: populate buffer and switch to LIVE mode
+        synchronizer.finalize_startup(hist_ticks, hist_candles_raw)
+        startup_complete.set()
+        logger.info("Startup synchronization complete. Live processing enabled.")
+
+        # Issue C (FIXED): Use TaskGroup for deterministic exception propagation
+        # TaskGroup automatically cancels all tasks when any task raises an exception
+        # and re-raises the exception after cleanup.
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(process_ticks(), name="tick_processor")
+            tg.create_task(process_candles(), name="candle_processor")
+            tg.create_task(heartbeat(), name="heartbeat_monitor")
+            tg.create_task(maintenance_task(), name="maintenance_worker")
             
     except Exception as e:
         logger.critical(f"FATAL ERROR in main loop: {e}", exc_info=True)
         console_log(f"CRITICAL ERROR: {e}", "ERROR")
         return 1
     finally:
-        if client:
-            await client.disconnect()
+        # Cleanup with exception handling to avoid masking errors
+        try:
+            if client:
+                await client.disconnect()
+        except Exception as e:
+            logger.error(f"Error disconnecting client: {e}")
         
         # Log statistics
-        if 'engine' in locals():
-            stats = engine.get_statistics()
-            logger.info(f"Session statistics: {stats}")
+        try:
+            if 'engine' in locals():
+                stats = engine.get_statistics()
+                logger.info(f"Session statistics: {stats}")
+        except Exception as e:
+            logger.error(f"Error getting engine statistics: {e}")
 
-        if 'executor' in locals() and executor:
-            # Log safety wrapper statistics
-            safety_stats = executor.get_safety_statistics()
-            logger.info(f"Safety statistics: {safety_stats}")
-            # IMPORTANT-001: Graceful shutdown
-            await executor.shutdown()
+        try:
+            if 'executor' in locals() and executor:
+                # Log safety wrapper statistics
+                safety_stats = executor.get_safety_statistics()
+                logger.info(f"Safety statistics: {safety_stats}")
+                # IMPORTANT-001: Graceful shutdown
+                await executor.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down executor: {e}")
 
         console_log("System shutdown complete", "INFO")
 
