@@ -73,3 +73,26 @@ def validate_numeric_dict(
             validated[k] = v
             
     return validated
+
+def validate_stake_amount(stake: Numeric, max_stake: float = 1000.0) -> float:
+    """Validate stake amount is positive, finite and within limits."""
+    val = float(ensure_finite(stake, "stake_amount", default=0.0))
+    if val < 0:
+        logger.warning(f"Negative stake {val} clamped to 0.0")
+        return 0.0
+    if val > max_stake:
+        logger.warning(f"Stake {val} exceeds limit {max_stake}, clamped.")
+        return max_stake
+    return val
+
+def validate_probability(prob: Numeric) -> float:
+    """Validate probability is in [0, 1]."""
+    val = float(ensure_finite(prob, "probability", default=0.0))
+    if val < 0.0: return 0.0
+    if val > 1.0: return 1.0
+    return val
+
+def validate_pnl(pnl: Numeric) -> float:
+    """Validate P&L is finite."""
+    return float(ensure_finite(pnl, "pnl", default=0.0))
+

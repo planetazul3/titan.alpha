@@ -137,10 +137,13 @@ class TestDecisionEngine:
             regime_veto_threshold=0.3
         )
         trading = Trading.model_construct(symbol="R_100", stake_amount=10.0)
+        from config.settings import DataShapes
+        data_shapes = DataShapes.model_construct(warmup_steps=0)
         return Settings.model_construct(
             thresholds=thresholds,
             hyperparams=hyperparams,
             trading=trading,
+            data_shapes=data_shapes,
             environment="development"
         )
 
@@ -302,7 +305,7 @@ class TestRegimeVeto:
         """
         from execution.decision import DecisionEngine
         from execution.regime import RegimeVeto
-        from config.settings import Settings, Thresholds, ModelHyperparams, Trading
+        from config.settings import Settings, Thresholds, ModelHyperparams, Trading, DataShapes
         thresholds = Thresholds.model_construct(
             confidence_threshold_high=0.75,
             learning_threshold_min=0.40,
@@ -317,6 +320,7 @@ class TestRegimeVeto:
             thresholds=thresholds,
             hyperparams=hyperparams,
             trading=trading,
+            data_shapes=DataShapes.model_construct(warmup_steps=0),
             environment="development"
         )
 

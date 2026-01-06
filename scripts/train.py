@@ -92,9 +92,11 @@ def main():
     total_len = len(dataset)
     train_size = int(0.8 * total_len)
     
-    # Gap to ensure no overlap in sliding windows
-    # Must account for: sequence_length + warmup_steps + lookahead
-    gap = settings.data_shapes.sequence_length_candles + settings.data_shapes.warmup_steps + dataset.lookahead
+    train_size = int(0.8 * total_len)
+    
+    # C-004: Enhanced Gap Calculation
+    from data.loader import calculate_minimum_temporal_gap
+    gap = calculate_minimum_temporal_gap(settings, lookahead_candles=dataset.lookahead)
     
     val_start = train_size + gap
     

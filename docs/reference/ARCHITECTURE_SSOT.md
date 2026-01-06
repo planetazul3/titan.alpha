@@ -79,6 +79,9 @@ To meet the high-frequency and safety requirements, the architecture employs:
 
 #### 5.2.3 Execution Subsystem (`execution/`)
 *   **`decision.py`**: Evaluates model probabilities against thresholds. Integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
+*   **`signal_adapter_service.py`**: **Adaptation Layer**. Centralizes conversion of TradeSignals to ExecutionRequests, handling duration resolution via `ContractParameterService` and position sizing.
+*   **`contract_params.py`**: **Parameter Resolution**. Centralized logic for resolving contract durations and barriers, preventing training/execution mismatches.
+*   **`idempotency_store.py`**: **Deduplication**. SQLite-based store preventing duplicate execution of the same signal ID.
 *   **`position_sizer.py`**: **Dynamic Risk Management**. Calculates optimal stake using `KellyPositionSizer` or `TargetVolatilitySizer`, decoupled from signal logic.
 *   **`regime.py`**: Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
 *   **`safety.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.

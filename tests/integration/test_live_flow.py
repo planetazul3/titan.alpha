@@ -53,7 +53,8 @@ def mock_settings():
     )
     data_shapes = DataShapes.model_construct(
         sequence_length_ticks=100,
-        sequence_length_candles=50
+        sequence_length_candles=50,
+        warmup_steps=0
     )
     contracts = ContractConfig.model_construct(
         duration_minutes=1,

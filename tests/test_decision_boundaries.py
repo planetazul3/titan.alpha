@@ -5,7 +5,10 @@ from config.settings import Settings
 
 @pytest.fixture
 def settings():
-    return Settings()
+    s = Settings()
+    # Override warmup for testing boundaries immediately
+    s.data_shapes.warmup_steps = 0
+    return s
 
 @pytest.fixture
 def decision_engine(settings):

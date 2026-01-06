@@ -51,6 +51,44 @@ def worker_init_fn(worker_id: int) -> None:
     random.seed(worker_seed)
     logger.debug(f"Initialized worker {worker_id} with seed {worker_seed}")
 
+def calculate_minimum_temporal_gap(settings: Settings, lookahead_candles: int = 1) -> int:
+    """
+    Calculate the minimum gap required between training and validation sets 
+    to prevent data leakage via sliding windows and lookahead labels.
+    
+    Formula: Gap = SequenceLength + Warmup + Lookahead + (SequenceLength * SafetyFactor)
+    SafetyFactor of 1.0 (another seq_len) ensures absolutely no overlap of input windows.
+    
+    Args:
+        settings: Settings object with data_shapes
+        lookahead_candles: Number of candles the label looks ahead
+        
+    Returns:
+        Minimum gap in candles
+    """
+    seq_len = settings.data_shapes.sequence_length_candles
+    warmup = settings.data_shapes.warmup_steps
+    
+    # Gap = (Input Window) + (Warmup) + (Label Lookahead) + (Safety Margin)
+    # Input Window: The features for time T depend on [T-seq_len, T]
+    # If Val[0] is at T_val, it sees [T_val-seq_len, T_val]
+    # Train[last] is at T_train.
+    # We need T_val-seq_len > T_train + lookahead (since Train label looked at T_train+lookahead)
+    # Actually simpler:
+    # Max Train Time involved = T_train + lookahead (Target)
+    # Min Val Time involved = T_val - seq_len - warmup (Features)
+    # We need Min Val > Max Train
+    # T_val - seq_len - warmup > T_train + lookahead
+    # T_val > T_train + seq_len + warmup + lookahead
+    # So Gap = seq_len + warmup + lookahead.
+    
+    # Adding an extra safety factor of 1.0 * seq_len just to be paranoid about window strides
+    safety_margin = int(seq_len * 1.0)
+    
+    gap = seq_len + warmup + lookahead_candles + safety_margin
+    return gap
+
+
 
 def create_dataloaders(
     train_data: Path, val_data: Path, settings: Settings, num_workers: int | None = None

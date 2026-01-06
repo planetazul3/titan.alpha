@@ -25,6 +25,7 @@ def service(mock_settings, mock_sizer):
 
 @pytest.mark.asyncio
 async def test_adapt_signal_success(service):
+    from datetime import datetime
     signal = TradeSignal(
         signal_id="test_sig",
         symbol="R_100",
@@ -32,7 +33,7 @@ async def test_adapt_signal_success(service):
         contract_type="RISE_FALL",
         direction="CALL",
         probability=0.8,
-        timestamp=1234567890.0
+        timestamp=datetime.now()
     )
     
     # Mock internal adapter's to_execution_request since it depends on other things
@@ -61,13 +62,22 @@ async def test_adapt_signal_success(service):
 
 @pytest.mark.asyncio
 async def test_adapt_signal_invalid_stake_warning(service):
-    signal = TradeSignal("id", "sym", "type", "contract", "dir", 0.5, 0.0)
+    from datetime import datetime
+    signal = TradeSignal(
+        signal_type="ML_MODEL",
+        contract_type="RISE_FALL",
+        direction="CALL",
+        probability=0.5,
+        timestamp=datetime.now(),
+        signal_id="id"
+    )
     
     service._internal_adapter = MagicMock()
-    # Return negative stake
-    service._internal_adapter.to_execution_request = AsyncMock(return_value=ExecutionRequest(
-        signal_id="id", symbol="sym", contract_type="CALL", stake=-5.0, duration=1, duration_unit="m"
-    ))
+    # Return negative stake object (mocked since real ExecutionRequest validates)
+    mock_req = MagicMock(spec=ExecutionRequest)
+    mock_req.stake = -5.0
+    mock_req.signal_id = "id"
+    service._internal_adapter.to_execution_request = AsyncMock(return_value=mock_req)
     
     # Should log warning but return request
     req = await service.adapt(signal)
@@ -75,7 +85,15 @@ async def test_adapt_signal_invalid_stake_warning(service):
 
 @pytest.mark.asyncio
 async def test_adapt_signal_failure(service):
-    signal = TradeSignal("id", "sym", "type", "contract", "dir", 0.5, 0.0)
+    from datetime import datetime
+    signal = TradeSignal(
+        signal_type="ML_MODEL",
+        contract_type="RISE_FALL",
+        direction="CALL",
+        probability=0.5,
+        timestamp=datetime.now(),
+        signal_id="id"
+    )
     service._internal_adapter.to_execution_request = AsyncMock(side_effect=ValueError("Adapt failed"))
     
     with pytest.raises(ValueError, match="Adapt failed"):

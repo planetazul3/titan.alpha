@@ -142,6 +142,12 @@ class DecisionEngine:
             f"shadow_store={shadow_name}, safety_store={safety_name}"
         )
 
+        # C-003: Warmup Tracking
+        self._warmup_candles_observed: int = 0
+        self._warmup_threshold: int = settings.data_shapes.warmup_steps
+        self._warmup_complete: bool = False
+        logger.info(f"Warmup configured: needs {self._warmup_threshold} candles before trading.")
+
     async def process_model_output(
         self,
         probs: dict[str, float],
@@ -155,6 +161,19 @@ class DecisionEngine:
         """
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
+
+        # C-003: Warmup Validation
+        # Increment observed count (assuming 1 call = 1 new candle processed in this context)
+        # Note: If called per-tick, this logic needs adjustment. Assuming called per-candle here.
+        if not self._warmup_complete:
+            self._warmup_candles_observed += 1
+            if self._warmup_candles_observed < self._warmup_threshold:
+                if self._warmup_candles_observed % 10 == 0:
+                    logger.debug(f"Warmup: {self._warmup_candles_observed}/{self._warmup_threshold} candles")
+                return []
+            else:
+                 self._warmup_complete = True
+                 logger.info("Warmup Period Complete: System ready for trading")
 
         # 0. Sync Safety State
         await self.safety_sync.sync()

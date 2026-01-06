@@ -27,8 +27,9 @@ def create_real_settings():
         latent_dim=16
     )
     data_shapes = DataShapes(
-        sequence_length_ticks=20,  # Must be >= 16
-        sequence_length_candles=20 # Must be >= 16
+        sequence_length_ticks=20,
+        sequence_length_candles=20,
+        warmup_steps=0
     )
     safety = ExecutionSafety()
     
@@ -50,7 +51,9 @@ async def test_idempotency_failure_blocks_execution():
     
     # Mocking idempotency store failure
     store = MagicMock()
+    # Fix C-001: Use AsyncMock for async methods
     store.get_contract_id_async = AsyncMock(side_effect=Exception("Idempotency check failure"))
+    store.check_and_reserve_async = AsyncMock(side_effect=Exception("Idempotency check failure"))
     
     settings = create_real_settings()
     executor = DerivTradeExecutor(client, settings, idempotency_store=store)
