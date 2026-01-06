@@ -108,17 +108,8 @@ class DecisionEngine:
             use_context=True
         )
 
-    def _generate_regime_veto_reason(self, error: float) -> str:
-        """Generate detailed reason for regime veto."""
-        assessment = self.regime_veto.assess(error)
-        details = ""
-        # Check for hierarchical details
-        if hasattr(assessment, "micro") and hasattr(assessment.micro, "value"):
-             details += f" Micro={assessment.micro.value}"
-        if hasattr(assessment, "volatility") and hasattr(assessment.volatility, "value"):
-             details += f" Vol={assessment.volatility.value}"
         
-        return f"Market anomaly detected (Regime Veto L4). Error: {error:.3f}{details}"
+
         
         if TRACING_ENABLED:
             self.tracer: Any = trace.get_tracer(__name__)
@@ -365,3 +356,15 @@ class DecisionEngine:
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Gracefully shutdown the engine, flushing pending tasks."""
         await self.shadow_dispatcher.shutdown(timeout=timeout)
+
+    def _generate_regime_veto_reason(self, error: float) -> str:
+        """Generate detailed reason for regime veto."""
+        assessment = self.regime_veto.assess(error)
+        details = ""
+        # Check for hierarchical details
+        if hasattr(assessment, "micro") and hasattr(assessment.micro, "value"):
+             details += f" Micro={assessment.micro.value}"
+        if hasattr(assessment, "volatility") and hasattr(assessment.volatility, "value"):
+             details += f" Vol={assessment.volatility.value}"
+        
+        return f"Market anomaly detected (Regime Veto L4). Error: {error:.3f}{details}"
