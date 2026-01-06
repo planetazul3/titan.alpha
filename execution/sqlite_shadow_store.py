@@ -471,6 +471,7 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         end: datetime | None = None,
         resolved_only: bool = False,
         unresolved_only: bool = False,
+        limit: int | None = None
     ):
         """
         Iterate over shadow trades from the store.
@@ -511,8 +512,9 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         try:
             # nosec B608 - where_clause is built from code-defined conditions (resolved_only,
             # unresolved_only, time range), not user input. Values use parameterized query.
+            limit_clause = f" LIMIT {limit}" if limit else ""
             cursor = conn.execute(
-                f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp", params # nosec
+                f"SELECT * FROM shadow_trades WHERE {where_clause} ORDER BY timestamp{limit_clause}", params # nosec
             )
             for row in cursor:
                 yield self._row_to_record(row)
@@ -525,6 +527,7 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         end: datetime | None = None,
         resolved_only: bool = False,
         unresolved_only: bool = False,
+        limit: int | None = None
     ) -> list[ShadowTradeRecord]:
         """
         Query shadow trades from the store.
@@ -534,12 +537,13 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
             end: End of time range (exclusive)
             resolved_only: Only return trades with outcomes
             unresolved_only: Only return trades without outcomes
+            limit: Maximum number of records to return
 
         Returns:
             List of matching shadow trade records
         """
         # Delegating to query_iter to avoid code duplication
-        return list(self.query_iter(start, end, resolved_only, unresolved_only))
+        return list(self.query_iter(start, end, resolved_only, unresolved_only, limit))
 
     def _row_to_record(self, row: sqlite3.Row) -> ShadowTradeRecord:
         """Convert a database row to ShadowTradeRecord."""

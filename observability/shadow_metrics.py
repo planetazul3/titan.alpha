@@ -133,8 +133,8 @@ class ShadowTradeMetrics:
         one_week_ago = now - timedelta(days=7)
         
         # Query recent trades (last 7 days, limited to max_detailed_trades)
-        recent_all = shadow_store.query(start=one_week_ago, resolved_only=False)
-        recent_resolved = shadow_store.query(start=one_week_ago, resolved_only=True)
+        recent_all = shadow_store.query(start=one_week_ago, resolved_only=False, limit=max_detailed_trades)
+        recent_resolved = shadow_store.query(start=one_week_ago, resolved_only=True, limit=max_detailed_trades)
         
         # Apply limit to prevent unbounded memory usage
         if len(recent_all) > max_detailed_trades:

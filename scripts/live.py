@@ -445,9 +445,6 @@ async def run_live_trading(args):
         retrain_trigger = RetrainingTrigger()
         first_tick_received = asyncio.Event()
     
-        perf_tracker = PerformanceTracker()
-        retrain_trigger = RetrainingTrigger()
-        first_tick_received = asyncio.Event()
     
         # CRITICAL-001 (FIXED): Unified Synchronization State
         # Replaces broken lock with explicit state flags
@@ -463,6 +460,8 @@ async def run_live_trading(args):
             nonlocal tick_count, last_tick_time, last_tick_log_count
             first_tick = True
             async for tick_event in event_bus.subscribe_ticks(symbol):
+                # H8 (FIXED): Update liveness immediately on receipt
+                last_tick_time = datetime.now()
                 try:
                     # Update heartbeat timestamp
                     last_tick_time = datetime.now()
@@ -924,8 +923,13 @@ async def run_live_trading(args):
         # If any task fails, we should probably stop the system
         _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         
+        # H04 (FIXED): Graceful cancellation of background tasks
         for task in pending:
             task.cancel()
+        
+        # Await cancelled tasks to allow them to handle CancelledError and cleanup
+        if pending:
+             await asyncio.gather(*pending, return_exceptions=True)
             
     except Exception as e:
         logger.critical(f"FATAL ERROR in main loop: {e}", exc_info=True)
