@@ -40,3 +40,8 @@
 - [ ] **Kill Switch**: `touch KILL_SWITCH` to stop execution immediately.
 - [ ] **Manual Stop**: `Ctrl+C` or `kill <pid>`.
 - [ ] **Log Access**: `tail -f logs/xtitan.log`.
+
+## 🛡️ Safety Validation (Live)
+- [ ] **H1 (Daily Loss)**: Verify trading stops if P&L < Limit.
+- [ ] **H3 (Volatility)**: Verify "VETO" log message during high vol periods.
+- [ ] **RC-8 (Numeric)**: Verify no `NaN` warnings in logs.

@@ -1,56 +1,62 @@
 # Production Runbook
 
-## Starting Live Trading
+## 🚨 Emergency Response
 
+### Kill Switch (Immediate Halt)
+To immediately stop all trading activity:
 ```bash
-cd /home/planetazul3/x.titan
-source venv/bin/activate
+# Method 1: File Trigger
+touch KILL_SWITCH
+
+# Method 2: Process Kill
+pkill -f "scripts/live.py"
+```
+
+### Database Rollback
+If the database is corrupted or contains invalid state:
+```bash
+# 1. Stop the service
+pkill -f "scripts/live.py"
+
+# 2. Backup corrupted state
+mv data_cache/safety_state.db data_cache/safety_state.db.bak
+mv data_cache/shadow_trades.db data_cache/shadow_trades.db.bak
+
+# 3. Restart (Will create fresh DBs)
 python scripts/live.py
 ```
 
-## Configuration (.env)
+## 🚀 Standard Operations
 
-| Setting | Recommended | Description |
-|---------|-------------|-------------|
-| `THRESHOLDS__CONFIDENCE_THRESHOLD_HIGH` | 0.70 | Real trades above this |
-| `EXECUTION_SAFETY__MAX_TRADES_PER_MINUTE` | 2 | Match contract duration |
-| `EXECUTION_SAFETY__MAX_DAILY_LOSS` | 50.0 | Stop-loss limit |
-
-## Monitoring
-
-**Console shows:**
-- `🧠 Running inference #N... (cooldown: 60.0s)` every minute
-- `👻 SHADOW TRADE` for learning-zone signals
-- `🎯 Resolved N shadow trade(s)` after 1 minute
-- `✅ WIN` or `❌ LOSS` with P&L
-
-**Heartbeat (every 60s):**
-```
-═══ HEARTBEAT ═══
-Ticks: N | Candles: N | Inferences: N
-Real Trades: N | Shadow Trades: N
-```
-
-## Troubleshooting
-
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Trading every 2s | Missing cooldown | Check `/critical-logic` |
-| Shadow trades not resolving | Timezone bug | Use `datetime.now(timezone.utc)` |
-| "Real trades: 0" | Confidence < threshold | Lower threshold or wait |
-
-## Clearing Data
-
+### Starting Service
 ```bash
-# Reset shadow trades
-rm -f data_cache/shadow_trades.db*
+# Activate environment
+source venv/bin/activate
 
-# Reset safety state (rate limits)
-rm -f data_cache/safety_state.db*
+# Start with detailed logging
+python scripts/live.py > logs/xtitan.log 2>&1 &
 ```
 
-## Generating Reports
+### Configuration Updates
+1.  Edit `.env`.
+2.  Restart service: `pkill -f scripts/live.py && python scripts/live.py`.
 
+### Database Maintenance
+Prune execution logs older than 30 days:
 ```bash
-python scripts/generate_shadow_report.py --days 7 --output reports/weekly.html
+python -c "from execution.db_maintenance import prune_all; prune_all(days=30)"
 ```
+
+## 📊 Monitoring & Alerts
+
+### Log Signatures to Watch
+| Severity | Pattern | Action |
+| :--- | :--- | :--- |
+| **CRITICAL** | `CRITICAL-001` | Database inconsistency. Stop immediately. |
+| **CRITICAL** | `RC-8` | Non-finite values. Check feature engineering. |
+| **WARNING** | `Regime Veto` | Normal in high volatility. Monitor only. |
+| **WARNING** | `Rate Limit` | API throttling. Check `MAX_TRADES_PER_MINUTE`. |
+
+### Health Checks
+- **Heartbeat**: Every 60s in logs. If missing > 2min, restart.
+- **Latency**: Check `metrics:decision_latency_ms`. Should be < 100ms.
