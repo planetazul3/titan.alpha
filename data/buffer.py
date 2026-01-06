@@ -284,6 +284,33 @@ class MarketDataBuffer:
         
         return np.array(candles_list)
 
+    def get_snapshot(self) -> dict[str, np.ndarray]:
+        """
+        Get an atomic snapshot of current buffer state.
+        
+        Returns a dictionary with deep copies of ticks and candles to ensure
+        data consistency during inference, preventing race conditions where
+        background tasks might update the buffer while inference is running.
+        
+        Returns:
+            Dict with 'ticks' and 'candles' numpy arrays.
+        """
+        # Create copies of data
+        ticks_snap = np.array(list(self._ticks))
+        
+        # Snapshot candles (excluding forming one for consistency with training)
+        candles_list = list(self._candles)
+        if len(candles_list) > self.candle_length:
+            candles_list = candles_list[:-1]
+        candles_snap = np.array(candles_list)
+        
+        return {
+            "ticks": ticks_snap, 
+            "candles": candles_snap,
+            "tick_count": len(ticks_snap),
+            "candle_count": len(candles_snap)
+        }
+
     def tick_count(self) -> int:
         """Get current number of ticks in buffer."""
         return len(self._ticks)

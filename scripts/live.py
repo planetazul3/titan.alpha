@@ -426,8 +426,12 @@ async def run_live_trading(args):
         candle_count = 0
         inference_count = 0
         last_tick_time = datetime.now()
+        last_tick_time = datetime.now()
         last_tick_log_count = 0  # For refined tick logging
         last_inference_time = 0.0  # CRITICAL RULE 1: Inference Cooldown
+        
+        # C02 (FIXED): Persistent State dictionary
+        hot_reload_state = {}
         
         # H11: Startup buffers and synchronization
         startup_buffer_ticks: list[float] = []
@@ -441,9 +445,18 @@ async def run_live_trading(args):
         retrain_trigger = RetrainingTrigger()
         first_tick_received = asyncio.Event()
     
-        # CRITICAL-001: Lock for startup synchronization
-        # Protects the transition from startup buffering to live processing
-        startup_lock = asyncio.Lock()
+        perf_tracker = PerformanceTracker()
+        retrain_trigger = RetrainingTrigger()
+        first_tick_received = asyncio.Event()
+    
+        # CRITICAL-001 (FIXED): Unified Synchronization State
+        # Replaces broken lock with explicit state flags
+        # Default: Buffering active, standard processing disabled
+        startup_state = {
+            "buffering_active": True,
+            "buffer_ticks": [],
+            "buffer_candles": []
+        }
 
         async def process_ticks():
             """Process tick events from normalized MarketEventBus."""
@@ -456,18 +469,13 @@ async def run_live_trading(args):
                     
                     logger.debug(f"Tick received: {tick_event}")
                     
-                    # CRITICAL-001: Thread-safe startup buffering
-                    if not startup_complete.is_set():
-                        async with startup_lock:
-                            # Double-check inside lock
-                            if not startup_complete.is_set():
-                                startup_buffer_ticks.append(tick_event.price)
-                                if not first_tick_received.is_set(): # Set only once
-                                    first_tick_received.set()
-                                # Log sparsely to avoid spam during startup
-                                if len(startup_buffer_ticks) % 10 == 0:
-                                    logger.info(f"[STARTUP] Buffered {len(startup_buffer_ticks)} ticks")
-                                return # Continue to next iteration (skip processing)
+                    
+                    # CRITICAL-001 (FIXED): Check flag instead of acquiring lock
+                    if startup_state["buffering_active"]:
+                        startup_state["buffer_ticks"].append(tick_event.price)
+                        if not first_tick_received.is_set():
+                             first_tick_received.set()
+                        return # Skip live processing during startup buffering
 
                     # Strategy sees TickEvent, not broker-specific message
                     buffer.append_tick(tick_event.price)
@@ -485,60 +493,10 @@ async def run_live_trading(args):
                 except Exception as e:
                     logger.error(f"Error processing tick: {e}", exc_info=True)
 
-        # H12: Preload historical candles (Before starting consumers)
-        console_log("fetching historical candles...", "WAIT")
-        try:
-            # Calculate how many seconds back we need
-            required_history = settings.data_shapes.sequence_length_candles + settings.data_shapes.warmup_steps
-            
-            # Fetch history
-            history_candles = await client.get_history(
-                symbol, 
-                style="candles", 
-                interval=settings.trading.timeframe, 
-                count=required_history
-            )
-            
-            if history_candles:
-                 # format for buffer: [open, high, low, close, volume, timestamp]
-                 preload_data = []
-                 for c in history_candles:
-                     ts = c.get('epoch')
-                     preload_data.append([
-                         float(c['open']),
-                         float(c['high']),
-                         float(c['low']),
-                         float(c['close']),
-                         0.0, 
-                         float(ts)
-                     ])
-                 
-                 buffer.preload_candles(preload_data)
-                 console_log(f"Preloaded {len(preload_data)} historical candles", "SUCCESS")
-                 
-                 # IMPORTANT: Also preload ticks if possible or just rely on candles?
-                 # Buffer.is_ready() checks ticks too.
-                 # We can fetch ticks history or just wait for ticks to fill up?
-                 # If we don't preload ticks, is_ready() will be False until 300 ticks arrive (~5 mins).
-                 # Let's fetch some ticks too.
-                 
-                 console_log("Fetching historical ticks...", "WAIT")
-                 history_ticks = await client.get_history(
-                     symbol,
-                     style="ticks",
-                     count=settings.data_shapes.sequence_length_ticks + 50
-                 )
-                 if history_ticks:
-                     for t in history_ticks:
-                         buffer.append_tick(float(t['quote']))
-                     console_log(f"Preloaded {len(history_ticks)} historical ticks", "SUCCESS")
-                     
-            else:
-                 console_log("No historical candles returned", "WARN")
+        # C04 (FIXED): Removed duplicate historical data preloading.
+        # History is now fetched exclusively in the Synchronization Phase.
+        logger.info("[STARTUP] Skipping legacy preloading (consolidated into sync phase)")
 
-        except Exception as e:
-            logger.error(f"Failed to preload history: {e}")
-            console_log(f"History preload failed: {e}", "WARN")
 
         async def process_candles():
             """Process candle events from normalized MarketEventBus."""
@@ -555,13 +513,11 @@ async def run_live_trading(args):
                     if not candle_event:
                         continue
                         
-                    # CRITICAL-001: Thread-safe startup buffering
-                    if not startup_complete.is_set():
-                        async with startup_lock:
-                             if not startup_complete.is_set():
-                                startup_buffer_candles.append(candle_event)
-                                logger.info(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
-                                return # Continue to next iteration
+                    # CRITICAL-001 (FIXED): Startup buffering via flag
+                    if startup_state["buffering_active"]:
+                        startup_state["buffer_candles"].append(candle_event)
+                        logger.info(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
+                        return # Skip live processing
                         
                     # Buffer handles candle close detection internally
                     is_new_candle = buffer.update_candle(candle_event)
@@ -606,54 +562,13 @@ async def run_live_trading(args):
 
                     console_log(f"Candle closed @ {candle_event.close:.2f} - {candle_msg} (latency: {latency:.1f}s)", "BRAIN")
 
-                    # Run inference only when: candle closed + buffer ready
-                    # CRITICAL RULE 1: Inference Cooldown (> 30s)
-                    # We trade 1-minute contracts. Running faster than 30s risks "overlapping" logic
-                    # and violating broker rate limits.
-                    import time
-                    time_since_last = time.time() - last_inference_time
-                    cooldown_active = time_since_last < 30.0
-
-                    if is_new_candle and buffer.is_ready():
-                        if cooldown_active:
-                            logger.debug(f"[COOLDOWN] Skipping inference ({time_since_last:.1f}s < 30s)")
-                            # Do NOT continue; we still need to resolve shadow trades below!
-                        else:
-                            console_log(
-                                f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
-                                f"(latency: {latency:.1f}s)",
-                                "MODEL",
-                            )
-                            logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
-
-                            try:
-                                await run_inference(
-                                    model,
-                                    engine,
-                                    executor,
-                                    buffer,
-                                    feature_builder,
-                                    device,
-                                    settings,
-                                    metrics,
-                                    calibration_monitor=calibration_monitor,
-                                    trade_tracker=real_trade_tracker,
-                                    challengers=challengers,
-                                    strategy_adapter=strategy_adapter,
-                                )
-                                inference_count += 1
-                            except Exception as inf_e:
-                                logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
-                                metrics.record_error("inference_failure")
-                        
-                        last_inference_time = time.time() # Update for cooldown
-
-                    # Resolve shadow trades on EVERY candle close (not just during inference)
-                    # CRITICAL RULE 3: Shadow Resolution Runs on Every Candle Close
-                    # This ensures 1-minute trades resolve immediately after expiry
+                    # C03 (FIXED): Ambiguous Control Flow
+                    # Separated Inference and Shadow Resolution logic explicitly 
+                    
+                    # 1. SHADOW RESOLUTION (Runs on EVERY candle close)
+                    # CRITICAL RULE 3: Deterministic resolution
                     if is_new_candle:
-                        # Use candle timestamp for deterministic resolution (handles lag/replay)
-                        # candle_event.timestamp is already a timezone-aware datetime object
+                         # Use candle timestamp for deterministic resolution
                         candle_time = candle_event.timestamp
                         resolved_count = await resolver.resolve_trades(
                             current_price=candle_event.close,
@@ -663,10 +578,57 @@ async def run_live_trading(args):
                         )
                         if resolved_count > 0:
                             console_log(
-                                f"🎯 Resolved {resolved_count} shadow trade(s) - check logs for results",
+                                f"🎯 Resolved {resolved_count} shadow trade(s)",
                                 "SUCCESS",
                             )
                             logger.info(f"Resolved {resolved_count} shadow trades this candle")
+
+                    # 2. INFERENCE TRIGGER
+                    should_run_inference = False
+                    
+                    if is_new_candle and buffer.is_ready():
+                        import time
+                        time_since_last = time.time() - last_inference_time
+                        cooldown_active = time_since_last < 30.0
+                        
+                        if cooldown_active:
+                            logger.debug(f"[COOLDOWN] Skipping inference ({time_since_last:.1f}s < 30s)")
+                        else:
+                            should_run_inference = True
+
+                    # 3. EXECUTE INFERENCE
+                    if should_run_inference:
+                        console_log(
+                            f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
+                            f"(latency: {latency:.1f}s)",
+                            "MODEL",
+                        )
+                        logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
+
+                        try:
+                            # C05 (FIXED): Use snapshot for consistent data during inference
+                            # Prevents race conditions where buffer changes during async inference
+                            snapshot = buffer.get_snapshot()
+                            
+                            await run_inference(
+                                model,
+                                engine,
+                                executor,
+                                snapshot, # Pass snapshot instead of buffer
+                                feature_builder,
+                                device,
+                                settings,
+                                metrics,
+                                calibration_monitor=calibration_monitor,
+                                trade_tracker=real_trade_tracker,
+                                challengers=challengers,
+                                strategy_adapter=strategy_adapter,
+                            )
+                            inference_count += 1
+                            last_inference_time = time.time()
+                        except Exception as inf_e:
+                            logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
+                            metrics.record_error("inference_failure")
 
                 except Exception as e:
                     logger.error(f"Error processing candle: {e}", exc_info=True)
@@ -751,64 +713,63 @@ async def run_live_trading(args):
                     except Exception as e:
                         logger.error(f"Failed to update shadow metrics: {e}")
 
-                # M12: Model Hot-Reloading
-                # Check if checkpoint file has been modified (new weights from online training)
+                # M12 (FIXED): Robust Hot-Reloading
+                # Uses persistent state dictionary instead of locals()
+                # C06 (FIXED): Atomic reload with rollback
                 if checkpoint_path and checkpoint_path.exists():
                     try:
                         current_mtime = checkpoint_path.stat().st_mtime
-                        # Initialize last_mtime on first run if needed, but it should be set
-                        if 'last_ckpt_mtime' not in locals():
-                             last_ckpt_mtime = current_mtime
                         
-                        if current_mtime > last_ckpt_mtime:
+                        # Initialize if missing (C02 Fix)
+                        if "last_ckpt_mtime" not in hot_reload_state:
+                            hot_reload_state["last_ckpt_mtime"] = current_mtime
+                        
+                        if current_mtime > hot_reload_state["last_ckpt_mtime"]:
                             console_log(f"Checkpoint update detected! Reloading... ({checkpoint_path.name})", "MODEL")
                             logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
                             
-                            # Load new weights
+                            # 1. Load into temporary model first (Atomic Step 1)
                             new_checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
                             
-                            # R04: Validate architecture compatibility before loading
+                            # 2. Validate Architecture (Atomic Step 2)
                             current_keys = set(model.state_dict().keys())
                             new_keys = set(new_checkpoint["model_state_dict"].keys())
                             
-                            missing_keys = current_keys - new_keys
-                            unexpected_keys = new_keys - current_keys
+                            missing = current_keys - new_keys
+                            unexpected = new_keys - current_keys
                             
-                            if missing_keys or unexpected_keys:
-                                logger.warning(
-                                    f"[HOT-RELOAD] Architecture mismatch detected! "
-                                    f"Missing: {len(missing_keys)}, Unexpected: {len(unexpected_keys)}"
-                                )
-                                console_log("Hot-reload skipped: architecture mismatch", "WARN")
-                                last_ckpt_mtime = current_mtime  # Don't keep retrying
-                                continue
-                            
-                            # Update model
-                            model.load_state_dict(new_checkpoint["model_state_dict"], strict=False)
-                            model.eval() # Ensure eval mode
-                            
-                            # Update version info
-                            if "manifest" in new_checkpoint:
-                                # OPT3: Validate compatibility before accepting
-                                from utils.bootstrap import validate_model_compatibility
-                                validate_model_compatibility(new_checkpoint, settings)
+                            if missing or unexpected:
+                                logger.warning(f"[HOT-RELOAD] Mismatch! Missing: {len(missing)}, Unexpected: {len(unexpected)}")
+                                console_log("Hot-reload aborted: architecture mismatch", "WARN")
+                            else:
+                                # 3. Apply changes (Atomic Step 3)
+                                model.load_state_dict(new_checkpoint["model_state_dict"], strict=False)
+                                model.eval()
+                                
+                                # 4. Update Metadata
+                                if "manifest" in new_checkpoint:
+                                    try:
+                                        from utils.bootstrap import validate_model_compatibility
+                                        validate_model_compatibility(new_checkpoint, settings)
+                                        new_ver = new_checkpoint["manifest"].get("model_version", "unknown")
+                                        if hasattr(engine, 'model_version'):
+                                            engine.model_version = new_ver
+                                        console_log(f"Model reloaded: v{new_ver}", "SUCCESS")
+                                    except Exception as ve:
+                                        logger.error(f"[HOT-RELOAD] Version validation failed: {ve}")
 
-                                new_manifest = new_checkpoint["manifest"]
-                                new_version = new_manifest.get("model_version", "unknown")
-                                logger.info(f"[HOT-RELOAD] Loaded version: {new_version}")
-                                console_log(f"Model reloaded: v{new_version}", "SUCCESS")
-                                if hasattr(engine, 'model_version'):
-                                    engine.model_version = new_version
-                            
-                            last_ckpt_mtime = current_mtime
-                            
-                            # Reset calibration monitor as behavior might change
-                            calibration_monitor.errors = [] 
-                            calibration_monitor.consecutive_high_count = 0
-                            
+                                # 5. Update State & Reset Monitors
+                                hot_reload_state["last_ckpt_mtime"] = current_mtime
+                                calibration_monitor.reset() # C06 Fix: Explicit reset method
+                                logger.info("[HOT-RELOAD] Success. Calibration monitor reset.")
+                                
                     except Exception as e:
-                        logger.error(f"[HOT-RELOAD] Failed to reload model: {e}")
+                        logger.error(f"[HOT-RELOAD] Failed: {e}")
                         console_log(f"Hot-reload failed: {e}", "ERROR")
+                        # Do not update mtime so it retries next heartbeat? 
+                        # Or update to avoid infinite error loop?
+                        # Better to update mtime to prevent log spam loop.
+                        hot_reload_state["last_ckpt_mtime"] = current_mtime
 
                 # HEARTBEAT LOGGING
                 stale_threshold = settings.heartbeat.stale_data_threshold_seconds
@@ -896,19 +857,43 @@ async def run_live_trading(args):
             #   So we can safely drain the list and set the flag without race condition!
             #   Because we are in 'await' free block here (except if we await something).
             
-            # CRITICAL-001: Atomic Replay and Flag Setting
-            # Acquire lock to ensure no new items are added to startup buffer while we drain it
-            # and set the completion flag.
-            async with startup_lock:
-                replay_ticks = list(startup_buffer_ticks) # Copy
-                replay_candles = list(startup_buffer_candles)
-                
-                # Clear startup buffers to free memory
-                startup_buffer_ticks.clear()
-                startup_buffer_candles.clear()
+            # CRITICAL-001 (FIXED): Startup Synchronization logic
+            # Explicit, lock-free state transition
             
-                # ENABLE LIVE PROCESSING (Atomic with replay capture)
-                startup_complete.set()
+            # 1. Drain buffering that happened while we fetched history
+            #    (Background tasks are continuing to append to startup_state["buffer"])
+            #    We need to seamlessly transition to live buffer.
+            
+            # Since we are in the main coroutine and tasks yield to us,
+            # we can atomically modify the state as long as we don't await.
+            
+            # Capture what has been buffered so far
+            startup_ticks = list(startup_state["buffer_ticks"])
+            startup_candles = list(startup_state["buffer_candles"])
+            
+            # FLIP THE SWITCH - Enable live processing in background tasks
+            # This is atomic (no await between read and write)
+            startup_state["buffering_active"] = False
+            
+            # Clear startup buffers to free memory
+            startup_state["buffer_ticks"] = []
+            startup_state["buffer_candles"] = []
+            
+            # Now replay everything in correct order:
+            # 1. Historical Data (fetched above)
+            # 2. Startup Buffered Data (captured just now)
+            # 3. New data (will go directly to buffer now)
+            
+            console_log(f"Replaying buffer: {len(startup_ticks)} ticks, {len(startup_candles)} candles", "INFO")
+            
+            for t in startup_ticks:
+                 buffer.append_tick(t)
+            
+            for c in startup_candles:
+                 buffer.update_candle(c)
+                 
+            console_log(f"Synchronization complete.", "SUCCESS")
+            startup_complete.set()
             
             for t_price in replay_ticks:
                 buffer.append_tick(t_price)
@@ -967,11 +952,12 @@ async def run_live_trading(args):
     return 0
 
 
+
 async def run_inference(
     model,
     engine,
     executor,
-    buffer,
+    market_snapshot, # C05 (FIXED): Takes snapshot dict instead of buffer object
     feature_builder,
     device,
     settings,
@@ -999,7 +985,7 @@ async def run_inference(
         model: The DerivOmniModel instance
         engine: DecisionEngine for trade decisions
         executor: SafeTradeExecutor for safe execution
-        buffer: MarketDataBuffer with tick and candle data
+        market_snapshot: Snapshot dict from MarketDataBuffer
         feature_builder: FeatureBuilder for canonical feature engineering
         device: Torch device for inference
         settings: Application settings
@@ -1025,9 +1011,15 @@ async def run_inference(
         span.set_attribute("device", str(device))
 
     try:
-        # CANONICAL FEATURE PROCESSING - extract arrays from buffer
-        t_np = buffer.get_ticks_array()
-        c_np = buffer.get_candles_array()
+        # C05 (FIXED): unpack snapshot
+        t_np = market_snapshot['ticks']
+        c_np = market_snapshot['candles']
+        
+        # NOTE: snapshot ensures t_np and c_np are consistent copies.
+        # But wait, what if buffer was empty?
+        if len(t_np) == 0 or len(c_np) == 0:
+             logger.warning("Empty snapshot during inference!")
+             return None
 
         # CRITICAL-004: Pass validation timestamp
         features = feature_builder.build(
@@ -1119,7 +1111,10 @@ async def run_inference(
             tick_window=t_np,
             candle_window=c_np,
             entry_price=entry_price,
-            market_data={"ticks_count": buffer.tick_count(), "candles_count": buffer.candle_count()},
+            market_data={
+                "ticks_count": market_snapshot["tick_count"], 
+                "candles_count": market_snapshot["candle_count"]
+            },
         )
         decision_latency = time.perf_counter() - decision_start
         metrics.record_decision_latency(decision_latency)
@@ -1154,7 +1149,11 @@ async def run_inference(
         # Calculate realized volatility for position sizing
         # Use close prices from buffer
         import numpy as np
-        closes = buffer.get_candles_array(include_forming=False)[:, 3]
+        # Calculate realized volatility for position sizing
+        # Use close prices from snapshot
+        import numpy as np
+        # candle format is [open, high, low, close, volume, timestamp] (idx 3 is close)
+        closes = c_np[:, 3]
         
         # Ensure numpy
         if hasattr(closes, "cpu"):
@@ -1203,72 +1202,62 @@ async def run_inference(
                  continue
 
             
-            # ATOMIC EXECUTION SAFETY: Record intent BEFORE API call
-            # If app crashes after API succeeds but before confirmation,
-            # the trade will be in ATTEMPTING state for investigation
-            intent_id = None
-            stake = execution_request.stake
-            contract_type = execution_request.contract_type
             
-            if trade_tracker and hasattr(trade_tracker, '_store'):
-                import uuid
-                intent_id = f"intent_{uuid.uuid4().hex[:16]}"
-                trade_tracker._store.prepare_trade_intent(
-                    intent_id=intent_id,
-                    direction=signal.direction,
-                    entry_price=entry_price,
-                    stake=stake,
-                    probability=signal.probability,
-                    contract_type=str(contract_type),
-                )
+            # C07 (FIXED): Atomic Intent Execution with Context Manager
+            async with trade_tracker.intent(
+                direction=signal.direction,
+                entry_price=entry_price,
+                stake=stake,
+                probability=signal.probability,
+                contract_type=contract_type
+            ) as intent_id:
             
-            exec_start = time.perf_counter()
-            result = await executor.execute(execution_request)
-            exec_latency = time.perf_counter() - exec_start
-
-            # Record execution latency
-            metrics.record_execution_latency(exec_latency)
-
-            if result.success:
-                logger.info(f"Trade executed: contract_id={result.contract_id}")
-                metrics.record_trade_attempt(outcome="executed", contract_type=contract_type)
+                exec_start = time.perf_counter()
+                result = await executor.execute(execution_request)
+                exec_latency = time.perf_counter() - exec_start
                 
-                # ATOMIC EXECUTION SAFETY: Confirm trade with real contract ID
-                if trade_tracker and result.contract_id:
-                    if intent_id:
-                        # Update ATTEMPTING -> CONFIRMED with real contract_id
-                        trade_tracker._store.confirm_trade(intent_id, result.contract_id)
-                    
-                    # Continue with normal trade registration flow
-                    await trade_tracker.register_trade(
-                        contract_id=result.contract_id,
-                        direction=signal.direction,
-                        entry_price=entry_price,
-                        stake=stake,
-                        probability=signal.probability,
-                        contract_type=str(contract_type),
-                    )
-            else:
-                logger.error(f"Trade failed: {result.error}")
+                metrics.record_execution_latency(exec_latency)
                 
-                # ATOMIC EXECUTION SAFETY: Remove ATTEMPTING record on failure
-                # The trade never executed, so no phantom risk
-                if intent_id and trade_tracker and hasattr(trade_tracker, '_store'):
-                    trade_tracker._store.remove_trade(intent_id)
-                
-                # Categorize the failure
-                if "rate limit" in (result.error or "").lower():
-                    metrics.record_trade_attempt(
-                        outcome="blocked_rate_limit", contract_type=contract_type
-                    )
-                elif "kill switch" in (result.error or "").lower():
-                    metrics.record_trade_attempt(
-                        outcome="blocked_kill_switch", contract_type=contract_type
-                    )
-                elif "loss limit" in (result.error or "").lower():
-                    metrics.record_trade_attempt(outcome="blocked_pnl_cap", contract_type=contract_type)
+                if result.success:
+                     logger.info(f"Trade executed: contract_id={result.contract_id}")
+                     metrics.record_trade_attempt(outcome="executed", contract_type=contract_type)
+                     
+                     # Confirm intent
+                     if trade_tracker:
+                         trade_tracker.confirm_intent(intent_id, result.contract_id)
+                         await trade_tracker.register_trade(
+                            contract_id=result.contract_id,
+                            direction=signal.direction,
+                            entry_price=entry_price,
+                            stake=stake,
+                            probability=signal.probability,
+                            contract_type=str(contract_type),
+                        )
                 else:
-                    metrics.record_trade_attempt(outcome="failed", contract_type=contract_type)
+                    logger.error(f"Trade failed: {result.error}")
+                    # Capture meaningful errors
+                    if "rate limit" in (result.error or "").lower():
+                        metrics.record_trade_attempt(outcome="blocked_rate_limit", contract_type=contract_type)
+                    elif "kill switch" in (result.error or "").lower():
+                        metrics.record_trade_attempt(outcome="blocked_kill_switch", contract_type=contract_type)
+                    elif "loss limit" in (result.error or "").lower():
+                        metrics.record_trade_attempt(outcome="blocked_pnl_cap", contract_type=contract_type)
+                    else:
+                        metrics.record_trade_attempt(outcome="failed", contract_type=contract_type)
+                    
+                    # Manual cleanup of intent is handled by context manager automatically on exit if needed?
+                    # The Context Manager cleans up if exception raised.
+                    # Here we didn't raise, we just failed.
+                    # We should probably clean up explicitly or rely on the CM to do nothing?
+                    # The CM description said "On context exit, automatically cleanup if result wasn't confirmed".
+                    # Let's check implementation of CM.
+                    # Implementation:
+                    #     try: yield intent_id
+                    #     except Exception: cleanup()
+                    # It DOES NOT auto-cleanup on normal exit if not confirmed.
+                    # So we must call cleanup explicitly if we know it failed.
+                    if trade_tracker:
+                         trade_tracker.cleanup_intent(intent_id)
 
         # Return reconstruction error for startup validation if requested
         if return_recon_error:

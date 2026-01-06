@@ -46,6 +46,13 @@ class PendingTrade:
     contract_type: str = "RISE_FALL"
 
 
+@dataclass
+class TradeIntent:
+    """Trade intent context object."""
+    id: str
+    tracker: "RealTradeTracker"
+
+
 class RealTradeTracker:
     """
     Tracks real trades using Deriv API for outcome resolution.
@@ -278,6 +285,85 @@ class RealTradeTracker:
                 logger.debug(f"[TRACKER] P&L update task dispatched: ${profit:+.2f}")
             except Exception as e:
                 logger.error(f"[TRACKER] Failed to dispatch P&L update: {e}")
+
+    from contextlib import asynccontextmanager
+    
+    @asynccontextmanager
+    async def intent(
+        self,
+        direction: str,
+        entry_price: float,
+        stake: float,
+        probability: float,
+        contract_type: str = "RISE_FALL",
+    ):
+        """
+        Context manager for atomic trade execution safety.
+        
+        Ensures trade intent is recorded before execution and cleaned up
+        appropriately whether execution succeeds or fails.
+        
+        Usage:
+            async with tracker.intent(...) as intent_id:
+                result = await executor.execute(...)
+                if result.success:
+                    # Confirmation happens automatically via outcome handling if needed
+                    # but typically we explicitly confirm with real contract ID
+                    tracker.confirm_intent(intent_id, result.contract_id)
+        
+        Yields:
+             intent_id: The ID of the recorded intent
+        """
+        import uuid
+        intent_id = f"intent_{uuid.uuid4().hex[:16]}"
+        
+        if not self._store:
+             # Fallback if no store (shouldn't happen in prod)
+             yield intent_id
+             return
+
+        # 1. Record Intent
+        try:
+            self._store.prepare_trade_intent(
+                intent_id=intent_id,
+                direction=direction,
+                entry_price=entry_price,
+                stake=stake,
+                probability=probability,
+                contract_type=str(contract_type),
+            )
+        except Exception as e:
+            logger.error(f"[TRACKER] Failed to record intent {intent_id}: {e}")
+            # We still yield, but maybe we should raise? 
+            # Proceeding without intent record defeats the purpose but stops blocking trading.
+            # logging error is sufficient.
+        
+        try:
+            yield intent_id
+        except Exception:
+            # Code block raised exception - trade likely didn't execute
+            # Clean up the intent
+            try:
+                self._store.remove_trade(intent_id)
+            except Exception as e:
+                 logger.error(f"[TRACKER] Failed to cleanup intent {intent_id}: {e}")
+            raise
+            
+    def confirm_intent(self, intent_id: str, contract_id: str) -> None:
+        """Confirm a trade intent with actual contract ID."""
+        if self._store:
+            try:
+                self._store.confirm_trade(intent_id, contract_id)
+            except Exception as e:
+                logger.error(f"[TRACKER] Failed to confirm intent {intent_id}: {e}")
+
+    def cleanup_intent(self, intent_id: str) -> None:
+        """Manually cleanup an intent (e.g. if execution failed)."""
+        if self._store:
+            try:
+                self._store.remove_trade(intent_id)
+            except Exception as e:
+                 logger.error(f"[TRACKER] Failed to cleanup intent {intent_id}: {e}")
     
     def get_pending_count(self) -> int:
         """Get number of pending trades awaiting resolution."""
