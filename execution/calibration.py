@@ -32,6 +32,10 @@ class ProbabilityCalibrator:
         self._bin_wins = np.zeros(10)
         self._bin_counts = np.zeros(10)
         
+        # Issue 6: Fallback tracking for observability
+        self._fallback_count = 0
+        self._calibration_count = 0
+        
 
             
     def update(self, probabilities: list[float], outcomes: list[bool]) -> None:
@@ -100,7 +104,12 @@ class ProbabilityCalibrator:
             return raw_prob
             
         if not self._is_fitted:
+            self._fallback_count += 1
+            if self._fallback_count == 1 or self._fallback_count % 100 == 0:
+                logger.warning(f"Calibrator not fitted, using raw probability (count: {self._fallback_count})")
             return raw_prob
+        
+        self._calibration_count += 1
             
         try:
             if self._regressor == "BINNING":
@@ -126,9 +135,16 @@ class ProbabilityCalibrator:
             return raw_prob
 
     def get_status(self) -> dict:
+        fallback_rate = (
+            self._fallback_count / (self._fallback_count + self._calibration_count)
+            if (self._fallback_count + self._calibration_count) > 0 else 0.0
+        )
         return {
             "enabled": self.config.enabled,
             "fitted": self._is_fitted,
             "last_update": self._last_update.isoformat() if self._last_update != datetime.min else None,
-            "method": self.config.method
+            "method": self.config.method,
+            "fallback_count": self._fallback_count,
+            "calibration_count": self._calibration_count,
+            "fallback_rate": round(fallback_rate, 4),
         }
