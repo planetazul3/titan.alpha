@@ -49,7 +49,7 @@ from observability.dashboard import (
 from observability.model_health import ModelHealthMonitor
 from execution.shadow_resolution import ShadowTradeResolver
 from execution.real_trade_tracker import RealTradeTracker
-from utils.bootstrap import create_trading_stack
+from utils.bootstrap import create_trading_stack, create_challenger_stack
 # NEW IMPORTS
 from execution.synchronizer import StartupSynchronizer
 from execution.orchestrator import InferenceOrchestrator
@@ -431,12 +431,15 @@ async def run_live_trading(args):
         candle_count = 0
         inference_count = 0
         last_tick_time = datetime.now()
-        last_tick_time = datetime.now()
         last_tick_log_count = 0  # For refined tick logging
         last_inference_time = 0.0  # CRITICAL RULE 1: Inference Cooldown
         
-        # C02 (FIXED): Persistent State dictionary
-        hot_reload_state = {}
+        # C02 (FIXED): Persistent State dictionary with backoff tracking
+        hot_reload_state = {
+            "last_ckpt_mtime": 0,
+            "consecutive_failures": 0,
+            "backoff_until": 0.0
+        }
         
         # H11: Startup buffers and synchronization
         startup_buffer_ticks: list[float] = []
@@ -631,6 +634,10 @@ async def run_live_trading(args):
                                 challengers=challengers
                             )
                             
+                            # Use return value for trend monitoring
+                            if reconstruction_error is not None and reconstruction_error > 0.3:
+                                console_log(f"⚠️ High reconstruction error: {reconstruction_error:.3f}", "WARN")
+                            
                             inference_count += 1
                             last_inference_time = time.time()
                             
@@ -732,10 +739,11 @@ async def run_live_trading(args):
                         if "last_ckpt_mtime" not in hot_reload_state:
                             hot_reload_state["last_ckpt_mtime"] = current_mtime
                         
-                        # Issue 5 (FIXED): Check if we failed this exact mtime recently to avoid spam
-                        # But still allow retry after some time? For now, we retry every heartbeat.
-                        
-                        if current_mtime > hot_reload_state["last_ckpt_mtime"]:
+                        # Skip if in backoff period
+                        import time as time_module
+                        if time_module.time() < hot_reload_state.get("backoff_until", 0):
+                            pass  # Silent skip during backoff
+                        elif current_mtime > hot_reload_state["last_ckpt_mtime"]:
                             console_log(f"Checkpoint update detected! Reloading... ({checkpoint_path.name})", "MODEL")
                             logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
                             
@@ -771,34 +779,30 @@ async def run_live_trading(args):
 
                                 # 5. Update State & Reset Monitors
                                 hot_reload_state["last_ckpt_mtime"] = current_mtime
+                                hot_reload_state["consecutive_failures"] = 0  # Reset on success
                                 calibration_monitor.reset() # C06 Fix: Explicit reset method
                                 logger.info("[HOT-RELOAD] Success. Calibration monitor reset.")
                                 
                     except Exception as e:
-                        logger.error(f"[HOT-RELOAD] Failed: {e}")
+                        # Exponential backoff for persistent failures
+                        import time as time_module
+                        hot_reload_state["consecutive_failures"] = hot_reload_state.get("consecutive_failures", 0) + 1
+                        failures = hot_reload_state["consecutive_failures"]
+                        
+                        # Backoff: 60s, 120s, 240s... max 30min
+                        backoff_seconds = min(60 * (2 ** (failures - 1)), 1800)
+                        hot_reload_state["backoff_until"] = time_module.time() + backoff_seconds
+                        
+                        logger.error(f"[HOT-RELOAD] Failed (attempt {failures}): {e}. Next retry in {backoff_seconds}s")
                         console_log(f"Hot-reload failed: {e}", "ERROR")
-                        # Fix Issue 5: Transient Reload Failure
-                        # Don't update mtime, so we retry on next heartbeat
-                        # But we must track that we *tried* to prevent log spam
-                        if "last_failed_mtime" not in hot_reload_state:
-                             hot_reload_state["last_failed_mtime"] = 0
                         
-                        if hot_reload_state["last_failed_mtime"] != current_mtime:
-                             # Only log once per failure
-                             # But we want to retry.
-                             pass
-                        
-                        hot_reload_state["last_failed_mtime"] = current_mtime
-                        # Do NOT update last_ckpt_mtime, so it remains "stale" and candidate for retry
-                        # The check `current_mtime > hot_reload_state["last_ckpt_mtime"]` will still be true
-                        # But we need to avoid spamming the log every heartbeat if it keeps failing.
-                        
-                        # Added simple backoff via last_failed_mtime check at start of block?
-                        # No, simpler: check if we just failed this MTIME.
-                        # Actually, wait. If we don't update last_ckpt_mtime, we retry next time.
-                        # If we want to suppress spam, we should check logging.
-                        # Let's just leave it to retry, but maybe log warning only.
-                        pass
+                        # Alert after 3 consecutive failures
+                        if failures >= 3:
+                            alert_manager.trigger(
+                                "hot_reload_persistent_failure",
+                                f"Model hot-reload failed {failures} times for {checkpoint_path.name}",
+                                AlertLevel.WARNING
+                            )
 
                 # HEARTBEAT LOGGING
                 stale_threshold = settings.heartbeat.stale_data_threshold_seconds
@@ -826,10 +830,10 @@ async def run_live_trading(args):
 
         # Start background tasks
         tasks = [
-            asyncio.create_task(process_ticks()),
-            asyncio.create_task(process_candles()),
-            asyncio.create_task(heartbeat()),
-            asyncio.create_task(maintenance_task()),
+            asyncio.create_task(process_ticks(), name="tick_processor"),
+            asyncio.create_task(process_candles(), name="candle_processor"),
+            asyncio.create_task(heartbeat(), name="heartbeat_monitor"),
+            asyncio.create_task(maintenance_task(), name="maintenance_worker"),
         ]
 
         # ══════════════════════════════════════════════════════════════════════
