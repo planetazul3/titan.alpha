@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from pandera.typing import DataFrame, Series
+import torch
 
 # Feature schema version - increment when feature definitions change
 FEATURE_SCHEMA_VERSION = "1.1"  # v1.1: Normalized volatility metrics for autoencoder

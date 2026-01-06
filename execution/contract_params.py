@@ -64,3 +64,7 @@ class ContractParameterService:
             
         return None, None
 
+
+
+# Backward compatibility alias
+ContractDurationResolver = ContractParameterService

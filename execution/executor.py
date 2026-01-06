@@ -18,6 +18,7 @@ from execution.common.types import ExecutionRequest
 from execution.contract_params import ContractParameterService
 from execution.idempotency_store import SQLiteIdempotencyStore
 from execution.signals import TradeSignal
+from execution.signal_adapter_service import SignalAdapterService
 from observability.execution_logging import execution_logger
 from deriv_api import APIError
 
@@ -69,6 +70,12 @@ class DerivTradeExecutor:
         self.policy = policy
         self.idempotency_store = idempotency_store
         self.param_service = ContractParameterService(settings)
+        
+        # Use SignalAdapterService (I-001)
+        self.adapter_service = SignalAdapterService(settings, self.position_sizer)
+        # Keep internal adapter for legacy direct access if needed
+        self.adapter = self.adapter_service._internal_adapter
+        
         self._executed_count = 0
 
         self._failed_count = 0
@@ -85,25 +92,35 @@ class DerivTradeExecutor:
         """
         # CRITICAL-FIX (C-001): Auto-adapt TradeSignal to ExecutionRequest
         if isinstance(request, TradeSignal):
-            from execution.executor_adapter import SignalAdapter
-            adapter = SignalAdapter(self.settings, self.position_sizer)
             try:
-                # IMPORTANT-001: Await the async conversion (even if currently fast)
-                # This enables future async parameter resolution (e.g. live barriers)
-                request = await adapter.to_execution_request(request)
+                # IMPORTANT-001: Use SignalAdapterService for centralized adaptation
+                request = await self.adapter_service.adapt(request)
             except Exception as e:
                 logger.error(f"Failed to adapt signal {request.signal_id}: {e}")
                 return TradeResult(success=False, error=f"Signal Adaptation Error: {e}")
 
+        # CRITICAL-FIX (C-001): Check circuit breaker status
+        if self._is_circuit_breaker_active():
+            error_msg = f"Circuit breaker active: {len(self._failure_timestamps)} failures in last {CIRCUIT_BREAKER_WINDOW_SECONDS}s"
+            logger.warning(error_msg)
+            return TradeResult(success=False, error=error_msg)
+
         try:
             # 5. Idempotency Check (CRITICAL-002)
+            # 5. Idempotency Check (CRITICAL-002)
             if self.idempotency_store:
-                cached_id = await self.idempotency_store.get_contract_id_async(request.signal_id)
-                if cached_id:
-                    logger.warning(f"Idempotency Guard: Signal {request.signal_id} already executed.")
+                # Atomic check-and-reserve
+                is_new, cached_id = await self.idempotency_store.check_and_reserve_async(request.signal_id, request.symbol)
+                if not is_new:
+                    logger.warning(f"Idempotency Guard: Signal {request.signal_id} already executed or pending. ID: {cached_id}")
                     return TradeResult(success=True, contract_id=cached_id, entry_price=request.stake)
 
             if check_only:
+                # If check_only, we should release the reservation if we made one? 
+                # Ideally check_only shouldn't reserve. But atomic reservation is safer.
+                # We'll just release it.
+                if self.idempotency_store:
+                    await self.idempotency_store.delete_record_async(request.signal_id)
                 return TradeResult(success=True)
 
             # 6. Structured Log Attempt (REC-001)
@@ -131,8 +148,9 @@ class DerivTradeExecutor:
                 execution_logger.log_trade_success(request.signal_id, contract_id, buy_price)
                 
                 # Record in idempotency store
+                # Record in idempotency store (Update the reservation)
                 if self.idempotency_store:
-                    await self.idempotency_store.record_execution_async(request.signal_id, contract_id, request.symbol)
+                    await self.idempotency_store.update_contract_id_async(request.signal_id, contract_id)
                 
                 self._executed_count += 1
                 self._clear_failure_window()  # Reset on success
@@ -160,6 +178,11 @@ class DerivTradeExecutor:
                  logger.warning("Rate limit hit! Circuit breaker will likely trigger soon.")
             
             self._record_failure(f"{error_code}: {error_msg}")
+            
+            # Clean up reservation on definite API failure
+            if self.idempotency_store:
+                await self.idempotency_store.delete_record_async(request.signal_id)
+                
             return TradeResult(success=False, error=f"APIError: {error_msg}")
 
         except ConnectionError as e:
@@ -204,10 +227,34 @@ class DerivTradeExecutor:
             self.policy.trigger_circuit_breaker(
                 f"Multi-failure circuit breaker: {len(self._failure_timestamps)} failures in {CIRCUIT_BREAKER_WINDOW_SECONDS}s. Last: {error_msg[:50]}"
             )
-            logger.error(
-                f"CIRCUIT BREAKER TRIGGERED: {len(self._failure_timestamps)} consecutive failures. "
-                f"Last error: {error_msg}"
-            )
+
+            
+    def _is_circuit_breaker_active(self) -> bool:
+        """Check if circuit breaker is currently active."""
+        if len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+            # Check if we are still within the window relative to the last failure
+            # Actually, simply having N failures in the list (which is pruned on append) 
+            # implies they are within the window.
+            # But we should double check time just to be safe if _record_failure hasn't been called recently.
+            
+            # Prune first
+            now = time.monotonic()
+            cutoff = now - CIRCUIT_BREAKER_WINDOW_SECONDS
+            active_failures = [t for t in self._failure_timestamps if t > cutoff]
+            
+            if len(active_failures) < len(self._failure_timestamps):
+                 # Lazy prune
+                 self._failure_timestamps = active_failures
+                 
+            return len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD
+            
+        return False
+
+    def reset_circuit_breaker(self) -> None:
+        """Manually reset the circuit breaker."""
+        logger.info(f"Manual circuit breaker reset. clearing {len(self._failure_timestamps)} failures.")
+        self._failure_timestamps.clear()
+        self._failed_count = 0
     
     def _clear_failure_window(self) -> None:
         """Clear failure window on successful execution."""

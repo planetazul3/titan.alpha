@@ -52,11 +52,18 @@ class TestAdvancedSizing:
         res_bounded = sizer_bounded.compute_stake(volatility=0.01) # Massive multiplier
         assert res_bounded.stake == 15.0
 
-    def test_strategy_adapter_volatility_passing(self):
+    @pytest.mark.asyncio
+    async def test_strategy_adapter_volatility_passing(self):
         """Verify StrategyAdapter pulls volatility from signal metadata."""
         settings = Settings()
         mock_sizer = MagicMock()
         mock_sizer.suggest_stake_for_signal.return_value = 10.0
+        
+        # Ensure it doesn't try to check for async attribute on MagicMock and get confused
+        # We simulate it NOT having async method by deleting it or strict spec, 
+        # but MagicMock hasattr is tricky.
+        # Safe way: explicitly delete the attribute or use spec.
+        del mock_sizer.suggest_stake_for_signal_async 
         
         adapter = StrategyAdapter(settings=settings, position_sizer=mock_sizer)
         
@@ -71,10 +78,16 @@ class TestAdvancedSizing:
             metadata={"volatility": 0.45}
         )
         
-        adapter.convert_signal(signal)
+        await adapter.convert_signal(signal)
         
         # Verify call arguments
+        # mock_sizer.suggest_stake_for_signal.assert_called_once()
+        # args, kwargs = mock_sizer.suggest_stake_for_signal.call_args
+        # assert kwargs.get("volatility") == 0.45
+        
+        # NOTE: If adapter logic prefers async if available, we must ensure we test the path taken.
+        # Here we forced synchronous path.
         mock_sizer.suggest_stake_for_signal.assert_called_once()
-        args, kwargs = mock_sizer.suggest_stake_for_signal.call_args
+        _, kwargs = mock_sizer.suggest_stake_for_signal.call_args
         assert kwargs.get("volatility") == 0.45
 

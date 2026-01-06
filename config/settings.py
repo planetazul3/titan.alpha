@@ -540,6 +540,16 @@ class Settings(BaseSettings):
         
         return self
 
+    @model_validator(mode="after")
+    def validate_stake_constraints(self) -> "Settings":
+        """Validate that default stake amount respects safety limits."""
+        if self.trading.stake_amount > self.execution_safety.max_stake_per_trade:
+             raise ValueError(
+                 f"Configuration Error: Default stake amount ({self.trading.stake_amount}) "
+                 f"exceeds maximum allowed stake ({self.execution_safety.max_stake_per_trade})."
+             )
+        return self
+
     def validate_api_credentials(self) -> bool:
         """Check if API credentials are configured."""
         token_value = self.deriv_api_token.get_secret_value()

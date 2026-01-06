@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python3.14
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /workspaces/x.titan
+configfile: pyproject.toml
+plugins: cov-7.0.0, asyncio-1.3.0, mock-3.15.1, anyio-4.12.0, typeguard-4.4.4, hypothesis-6.148.11
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/data/test_validation.py::TestFeatureBuilderValidation::test_high_less_than_low PASSED [ 25%]
+tests/data/test_validation.py::TestFeatureBuilderValidation::test_high_less_than_open PASSED [ 50%]
+tests/data/test_validation.py::TestFeatureBuilderValidation::test_negative_price PASSED [ 75%]
+tests/data/test_validation.py::TestFeatureBuilderValidation::test_valid_data FAILED [100%]
+
+=================================== FAILURES ===================================
+_________________ TestFeatureBuilderValidation.test_valid_data _________________
+tests/data/test_validation.py:38: in test_valid_data
+    self.builder.build(self.valid_ticks, self.valid_candles, validate=True)
+data/features.py:202: in build
+    output_schema.validate(features_dict)
+data/common/schema.py:117: in validate
+    if tensor.dtype != torch.float32:
+                       ^^^^^
+E   NameError: name 'torch' is not defined
+
+During handling of the above exception, another exception occurred:
+tests/data/test_validation.py:40: in test_valid_data
+    self.fail(f"Valid data raised exception: {e}")
+E   AssertionError: Valid data raised exception: name 'torch' is not defined
+------------------------------ Captured log call -------------------------------
+WARNING  data.processor:processor.py:197 Insufficient candles (5), returning zero-padded array
+WARNING  data.processor:processor.py:350 Insufficient candles (5) for volatility metrics
+=========================== short test summary info ============================
+FAILED tests/data/test_validation.py::TestFeatureBuilderValidation::test_valid_data
+========================= 1 failed, 3 passed in 1.72s ==========================

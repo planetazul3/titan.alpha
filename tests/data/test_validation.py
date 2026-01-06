@@ -28,9 +28,9 @@ class TestFeatureBuilderValidation(unittest.TestCase):
             [103.0, 104.0, 102.0, 102.5, 1200.0, 10120.0],
             [102.5, 106.0, 102.0, 105.0, 1800.0, 10180.0],
             [105.0, 107.0, 104.0, 106.0, 2000.0, 10240.0]
-        ])
+        ], dtype=np.float32)
         
-        self.valid_ticks = np.ones(10) * 100.0
+        self.valid_ticks = (np.ones(10) * 100.0).astype(np.float32)
 
     def test_valid_data(self):
         """Test valid data passes."""

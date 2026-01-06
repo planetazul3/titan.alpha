@@ -32,6 +32,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+from utils.numerical_validation import ensure_finite
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,16 @@ class KellyPositionSizer:
         """
         payout_ratio = payout_ratio if payout_ratio is not None else self.default_payout_ratio
 
+        # CRITICAL-003: NaN Hardening
+        probability = ensure_finite(probability, "Kelly.probability", 0.0)
+        payout_ratio = ensure_finite(payout_ratio, "Kelly.payout_ratio", self.default_payout_ratio)
+        model_confidence = ensure_finite(model_confidence, "Kelly.model_confidence", 0.0)
+        current_drawdown = ensure_finite(current_drawdown, "Kelly.drawdown", 0.0)
+        volatility = ensure_finite(volatility, "Kelly.volatility", 0.0)
+        
+        if account_balance is not None:
+             account_balance = ensure_finite(account_balance, "Kelly.balance", 0.0)
+
         # 1. Compute raw Kelly fraction
         kelly = self.compute_kelly_fraction(probability, payout_ratio)
         
@@ -289,7 +300,7 @@ class KellyPositionSizer:
             reason = f"Kelly optimal: f={kelly:.4f}, adjusted={adjusted:.4f} -> ${stake:.2f}"
         
         return PositionSizeResult(
-            stake=round(stake, 2),
+            stake=ensure_finite(round(stake, 2), "Kelly.final_stake", 0.0),
             kelly_fraction=kelly,
             adjusted_fraction=adjusted,
             confidence_multiplier=confidence_mult,
@@ -422,6 +433,9 @@ class CompoundingPositionSizer:
           - If yes, use the compounded _next_stake (limited by caps).
           - If no, RESET to base_stake (confidence not high enough to risk profits).
         """
+        # CRITICAL-003: NaN Hardening
+        probability = ensure_finite(probability, "Compounding.probability", 0.0)
+        
         with self._lock:
             # 1. Check Confidence Safety Reset
             # If we have profits on the table but the model is unsure, take the profit now.
