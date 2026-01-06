@@ -67,17 +67,20 @@ class CandleInputSchema(pa.DataFrameModel):
     timestamp: Series[np.float64] = pa.Field(gt=0.0, coerce=True) # Timestamp usually float64 for precision
 
     @pa.dataframe_check
-    def high_gte_low(cls, df: DataFrame) -> Series[bool]:
+    def high_gte_low(cls, df: DataFrame) -> Series[bool]:  # type: ignore
         """Ensure High is greater than or equal to Low."""
-        return df["high"] >= df["low"]
+        from typing import cast
+        return cast(Series[bool], df["high"] >= df["low"])
 
     @pa.dataframe_check
-    def high_gte_open_close(cls, df: DataFrame) -> Series[bool]:
+    def high_gte_open_close(cls, df: DataFrame) -> Series[bool]:  # type: ignore
         """Ensure High is the maximum of the bar."""
-        return (df["high"] >= df["open"]) & (df["high"] >= df["close"])
+        from typing import cast
+        return cast(Series[bool], (df["high"] >= df["open"]) & (df["high"] >= df["close"]))
 
     @pa.dataframe_check
-    def low_lte_open_close(cls, df: DataFrame) -> Series[bool]:
+    def low_lte_open_close(cls, df: DataFrame) -> Series[bool]:  # type: ignore
         """Ensure Low is the minimum of the bar."""
-        return (df["low"] <= df["open"]) & (df["low"] <= df["close"])
+        from typing import cast
+        return cast(Series[bool], (df["low"] <= df["open"]) & (df["low"] <= df["close"]))
 

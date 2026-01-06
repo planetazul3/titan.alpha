@@ -5,7 +5,7 @@ class DecisionMetrics:
     Tracks statistics for the Decision Engine.
     """
     def __init__(self):
-        self._stats = {
+        self._stats: dict[str, int] = {
             "processed": 0,
             "real": 0,
             "shadow": 0,

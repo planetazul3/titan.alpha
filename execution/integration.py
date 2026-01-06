@@ -202,7 +202,6 @@ def create_enhanced_executor(
         inner_executor=raw_executor,
         config=config,
         state_file=actual_state_file,
-        stake_resolver=stake_resolver,
     )
 
 

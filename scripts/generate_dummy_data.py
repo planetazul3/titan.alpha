@@ -10,7 +10,7 @@ def generate_dummy_data(output_path: str = "data_cache/dummy_backtest.parquet", 
     
     # Generate random walk price
     price = 100.0
-    prices = []
+    prices: list[float] = []
     
     data = []
     for d in dates:

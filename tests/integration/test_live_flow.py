@@ -128,7 +128,8 @@ class MockDerivClient:
         self.api = True  # Simulate connected state
         self._tick_idx = 0
         self._candle_idx = 0
-        self.executed_trades = []
+        from typing import Any
+        self.executed_trades: list[dict[str, Any]] = []
 
     async def connect(self):
         """Mock connection."""

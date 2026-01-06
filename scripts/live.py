@@ -1133,6 +1133,13 @@ async def run_inference(
         # Use close prices from buffer
         import numpy as np
         closes = buffer.get_candles_array(include_forming=False)[:, 3]
+        
+        # Ensure numpy
+        if hasattr(closes, "cpu"):
+             closes = closes.cpu().numpy()
+        elif hasattr(closes, "numpy"):
+             closes = closes.numpy()
+             
         volatility = 0.0
         if len(closes) > 20 and np.all(closes > 0):
              # Simple annualized vol estimate

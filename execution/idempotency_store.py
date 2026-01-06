@@ -84,3 +84,7 @@ class SQLiteIdempotencyStore:
         import asyncio
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self.record_execution(signal_id, contract_id, symbol))
+
+    async def close(self):
+        """Close resources (no-op for SQLite as we open per query)."""
+        pass

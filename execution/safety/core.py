@@ -54,6 +54,8 @@ class SafeTradeExecutor:
         # Concurrency safety
         self._state_lock = asyncio.Lock()
         self._last_reconciliation: str | None = None
+        self._pending_global = 0
+        self._pending_symbols: dict[str, int] = {}
         
         if TRACING_ENABLED:
             self.tracer: Any = trace.get_tracer(__name__)
@@ -65,7 +67,7 @@ class SafeTradeExecutor:
             self.register_with_policy(policy)
             
         logger.info(f"SafeTradeExecutor initialized with DB: {state_file}, policy_integrated={policy is not None}")
-    
+
     def register_with_policy(self, policy: "ExecutionPolicy") -> None:
         """Register rate-limit checks with ExecutionPolicy for unified veto logging."""
         from execution.policy import VetoPrecedence
@@ -76,7 +78,7 @@ class SafeTradeExecutor:
             level=VetoPrecedence.RATE_LIMIT,
             # Sync fallback (blocking)
             check_fn=lambda: self.store.get_trades_in_window(None, 60.0) >= self.config.max_trades_per_minute,
-            # Async implementation (non-blocking)
+            # Async implementation (non-blocking) - Use the public check method which handles pending
             async_check_fn=self._check_global_rate_limit_veto,
             reason=lambda: f"Global rate limit hit (max {self.config.max_trades_per_minute}/min)",
              details_fn=lambda: {
@@ -90,7 +92,9 @@ class SafeTradeExecutor:
         """Rate limit check for veto policy (returns True if vetoed)."""
         async with self._state_lock:
              count = await self.store.get_trades_in_window_async(None, 60.0)
-             return count >= self.config.max_trades_per_minute
+             # Add pending trades to the count
+             total_count = count + self._pending_global
+             return total_count >= self.config.max_trades_per_minute
 
     async def execute(self, request: ExecutionRequest) -> TradeResult:
         """Execute execution request with safety checks."""
@@ -103,18 +107,6 @@ class SafeTradeExecutor:
         # If the CALLER (DecisionEngine) passed a signal, it should have checked warmup.
         # However, as a safety layer, if we had access to buffer we would check it.
         # Currently ExecutionRequest doesn't have buffer info.
-        # But we can check if metadata implies insufficient history if available.
-        # For now, we rely on DecisionEngine H4 checks? 
-        # WAIT: The plan said "Add explicit check if len(prices) < config.warmup_steps"
-        # Since we don't have `prices` here, we assume DecisionEngine did it OR we rely on `request.metadata`
-        # BUT: SafeTradeExecutor is the "final gatekeeper". 
-        # If `request` object doesn't have history, we can't check H4 here effectively without context.
-        # Re-reading `safety.py`: it doesn't have access to `prices`.
-        # `decision.py` has `process_model_output`.
-        # `regime.py` checks warmup?
-        # `data/buffer.py` checks warmup.
-        # If the plan meant "Harden Warmup Veto", it might be in `DecisionEngine` or `safety.py` *if* it can access state.
-        # Assuming `DecisionEngine` (via Policy) is the right place for H4.
         
         # 1. Fallback Kill Switch check
         if self._policy is None and self.config.kill_switch_enabled:
@@ -124,23 +116,29 @@ class SafeTradeExecutor:
         if self._policy is None and not await self._check_daily_limits():
             return self._reject("Daily limits exceeded")
 
-        # 3. Check Short-Term Rate Limits
-        if not await self._check_rate_limits(request.symbol):
+        # 3. Check Short-Term Rate Limits AND Reserve Slot
+        # We must reserve the slot inside the check to prevent race conditions
+        reservation_token = await self._check_and_reserve_rate_limit(request.symbol)
+        if not reservation_token:
              return self._reject("Rate limit exceeded")
              
-        # 4. Check Stake Amount
-        if request.stake > self.config.max_stake_per_trade:
-            msg = f"Stake {request.stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
-            return self._reject(msg)
+        try:
+            # 4. Check Stake Amount
+            if request.stake > self.config.max_stake_per_trade:
+                msg = f"Stake {request.stake:.2f} exceeds safety limit {self.config.max_stake_per_trade:.2f}"
+                return self._reject(msg)
 
-        # 5. Execute with Retries
-        result = await self._execute_with_retry(request)
-            
-        # 6. Update State
-        if result.success:
-            await self._record_trade(request.symbol, result)
+            # 5. Execute with Retries
+            result = await self._execute_with_retry(request)
+                
+            # 6. Update State
+            if result.success:
+                await self._record_trade(request.symbol, result)
 
-        return result
+            return result
+        finally:
+            # RELEASE RESERVATION
+            await self._release_rate_limit_reservation(request.symbol)
 
     def _reject(self, reason: str) -> TradeResult:
         logger.warning(f"Trade rejected by Safety Shield: {reason}")
@@ -159,21 +157,37 @@ class SafeTradeExecutor:
             
         return True
 
-    async def _check_rate_limits(self, symbol: str) -> bool:
-        """Check per-minute limits using persistent store."""
+    async def _check_and_reserve_rate_limit(self, symbol: str) -> bool:
+        """Check limits and increment pending counters if allowed."""
         async with self._state_lock:
              # Check Global
              global_count = await self.store.get_trades_in_window_async(None, 60.0)
-             if global_count >= self.config.max_trades_per_minute:
+             if (global_count + self._pending_global) >= self.config.max_trades_per_minute:
                  return False
                  
              # Check Symbol
              if symbol:
                  symbol_count = await self.store.get_trades_in_window_async(symbol, 60.0)
-                 if symbol_count >= self.config.max_trades_per_minute_per_symbol:
+                 pending_symbol = self._pending_symbols.get(symbol, 0)
+                 if (symbol_count + pending_symbol) >= self.config.max_trades_per_minute_per_symbol:
                      return False
-                     
+
+             # Reserve
+             self._pending_global += 1
+             if symbol:
+                 self._pending_symbols[symbol] = self._pending_symbols.get(symbol, 0) + 1
+             
              return True
+
+    async def _release_rate_limit_reservation(self, symbol: str):
+        """Decrement pending counters."""
+        async with self._state_lock:
+            if self._pending_global > 0:
+                self._pending_global -= 1
+            
+            if symbol and symbol in self._pending_symbols:
+                if self._pending_symbols[symbol] > 0:
+                    self._pending_symbols[symbol] -= 1
 
     async def _execute_with_retry(self, request: ExecutionRequest) -> TradeResult:
         """Execute with exponential backoff on business logic errors only."""

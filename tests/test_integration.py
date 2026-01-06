@@ -23,8 +23,9 @@ from execution.signals import TradeSignal
 
 def _make_signal(probability: float = 0.65) -> TradeSignal:
     """Helper to create TradeSignal with required fields."""
+    from execution.signals import SIGNAL_TYPES
     return TradeSignal(
-        signal_type="REAL_TRADE",
+        signal_type=SIGNAL_TYPES.REAL_TRADE,
         contract_type="rise_fall",
         direction="CALL",
         probability=probability,

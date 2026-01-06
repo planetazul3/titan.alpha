@@ -276,14 +276,18 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
     async def update_outcome_async(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float, timeout: float = 5.0) -> bool:
         """Async update outcome."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.update_outcome, timeout, trade, outcome, exit_price)
+        res = await self.run_with_timeout(loop, self.update_outcome, timeout, trade, outcome, exit_price)
+        return cast(bool, res)
 
     async def mark_stale_async(self, trade_id: str, exit_price: float, timeout: float = 5.0) -> bool:
         """Async mark stale."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.mark_stale, timeout, trade_id, exit_price)
+        res = await self.run_with_timeout(loop, self.mark_stale, timeout, trade_id, exit_price)
+        return cast(bool, res)
 
     def update_resolution_context(self, trade_id: str, high: float, low: float, close: float) -> bool:
         """
@@ -338,16 +342,20 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
     ) -> bool:
         """Async update resolution context."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(
+        res = await self.run_with_timeout(
             loop, self.update_resolution_context, timeout, trade_id, high, low, close
         )
+        return cast(bool, res)
     
     async def query_async(self, timeout: float = 5.0, **kwargs) -> list[ShadowTradeRecord]:
         """Async query."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.query, timeout, **kwargs)
+        res = await self.run_with_timeout(loop, self.query, timeout, **kwargs)
+        return cast(list[ShadowTradeRecord], res)
 
     def prune(self, retention_days: int = 30) -> int:
         """

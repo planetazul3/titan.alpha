@@ -15,7 +15,7 @@ Numeric = Union[float, int]
 def ensure_finite(
     value: Numeric, 
     name: str, 
-    default: Optional[Numeric] = 0.0,
+    default: Numeric = 0.0,
     log_level: int = logging.WARNING
 ) -> Numeric:
     """

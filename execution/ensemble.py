@@ -73,7 +73,7 @@ class VotingEnsemble(EnsembleStrategy):
 class WeightedEnsemble(EnsembleStrategy):
     """Weighted average based on model reliability."""
     
-    def __init__(self, config: EnsembleConfig, weights: Dict[str, float] = None):
+    def __init__(self, config: EnsembleConfig, weights: Dict[str, float] | None = None):
         super().__init__(config)
         self.weights = weights or {} # model_name -> weight
         

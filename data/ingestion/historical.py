@@ -330,17 +330,21 @@ class PartitionedDownloader:
             # Use cleaned data (which might be the same DataFrame or a new one)
             df = cleaned_data
             
-            # Ensure schema compliance for missing optional columns
-            if data_type == "candles" and "volume" not in df.columns:
-                # Deriv API sometimes omits volume for certain instruments/granularities
-                df["volume"] = 0.0
-
             # --- STRICT SCHEMA VALIDATION ---
+            # Cast to Any to avoid mypy confusion (it thinks df could be list)
+            from typing import cast
+            df_any = cast(Any, df)
+            
+            # Ensure schema compliance for missing optional columns
+            if data_type == "candles" and "volume" not in df_any.columns:
+                 # Deriv API sometimes omits volume for certain instruments/granularities
+                 df_any["volume"] = 0.0
+
             try:
                 if data_type == "ticks":
-                    TickSchema.validate(df, lazy=True)
+                    TickSchema.validate(df_any, lazy=True)
                 elif data_type == "candles":
-                    CandleSchema.validate(df, lazy=True)
+                    CandleSchema.validate(df_any, lazy=True)
             except Exception as schema_err:
                 logger.error(f"Schema validation failed for {month_key} ({data_type}): {schema_err}")
                 # We raise to prevent corrupt data from touching disk

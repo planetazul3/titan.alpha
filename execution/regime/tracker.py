@@ -14,7 +14,7 @@ class WindowedPercentileTracker:
     """
     def __init__(self, window_size: int = 1000):
         self.window_size = window_size
-        self.history = deque(maxlen=window_size)
+        self.history: deque[float] = deque(maxlen=window_size)
         self.sorted_window: list[float] = []
         self._dirty = False
 

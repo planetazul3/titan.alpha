@@ -292,10 +292,12 @@ class ExecutionPolicy:
             for check in [c for c in checks_to_run if c["type"] == "sync"]:
                 try:
                     is_vetoed = False
+                    from typing import cast
+                    fn = cast(Callable[..., bool], check["fn"])
                     if check["ctx"]:
-                        is_vetoed = check["fn"](**kwargs)
+                        is_vetoed = fn(**kwargs)
                     else:
-                        is_vetoed = check["fn"]()
+                        is_vetoed = fn()
                         
                     if is_vetoed:
                         return self._create_veto_decision(level, check["reason"], check["details"])

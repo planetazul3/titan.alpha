@@ -1,7 +1,7 @@
 
 import logging
 import numpy as np
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
 from datetime import datetime
 import threading
 
@@ -20,6 +20,7 @@ class ProbabilityCalibrator:
     will map 0.9 -> 0.6, preventing Kelly criterion from over-betting.
     """
     
+    def __init__(self, config: ProbabilityCalibrationConfig):
         self.config = config
         self._regressor: Any = None
         self._last_update = datetime.min
@@ -114,7 +115,7 @@ class ProbabilityCalibrator:
                     return raw_prob
                 
                 win_rate = self._bin_wins[idx] / count
-                return win_rate
+                return float(win_rate)
             else:
                 # Scikit-learn path
                 calibrated = self._regressor.predict([raw_prob])[0]

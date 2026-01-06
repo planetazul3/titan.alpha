@@ -7,7 +7,7 @@ sys.path.append(os.getcwd())
 
 failed_imports = []
 successful_imports = []
-warnings = []
+warnings: list[str] = []
 
 # Directory to scan
 target_dir = 'x.titan'

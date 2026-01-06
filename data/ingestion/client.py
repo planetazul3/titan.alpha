@@ -972,7 +972,8 @@ class DerivClient:
                     return [{'quote': p, 'epoch': t} for p, t in zip(prices, times)]
             elif style == "candles":
                 if "candles" in resp:
-                    return resp["candles"]
+                    from typing import cast
+                    return cast(list[dict[str, Any]], resp["candles"])
                     
             return []
             
@@ -980,3 +981,5 @@ class DerivClient:
             logger.error(f"Failed to fetch history: {e}")
             self._circuit_breaker.record_failure()
             return []
+            
+        return []

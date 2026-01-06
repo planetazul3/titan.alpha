@@ -16,7 +16,10 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from execution.sqlite_shadow_store import SQLiteShadowStore
 
 from execution.shadow_store import ShadowTradeRecord
 

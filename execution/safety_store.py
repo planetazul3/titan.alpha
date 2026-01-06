@@ -250,8 +250,10 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
     async def get_daily_stats_async(self, timeout: float = 5.0) -> tuple[int, float]:
         """Async version of get_daily_stats."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.get_daily_stats, timeout)
+        res = await self.run_with_timeout(loop, self.get_daily_stats, timeout)
+        return cast(tuple[int, float], res)
 
     async def increment_daily_trade_count_async(self, timeout: float = 5.0):
         """Async version of increment_daily_trade_count."""
@@ -268,8 +270,10 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
     async def get_risk_metrics_async(self, timeout: float = 5.0) -> dict:
         """Async version of get_risk_metrics."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.get_risk_metrics, timeout)
+        res = await self.run_with_timeout(loop, self.get_risk_metrics, timeout)
+        return cast(dict, res)
 
     async def update_risk_metrics_async(self, drawdown: float, losses: int, peak_equity: float, returns: list[float] | None = None, timeout: float = 5.0):
         """Async version of update_risk_metrics."""
@@ -286,8 +290,10 @@ class SQLiteSafetyStateStore(SQLiteTransactionMixin):
     async def get_trades_in_window_async(self, symbol: str | None, window_seconds: float, timeout: float = 5.0) -> int:
         """Async version of get_trades_in_window."""
         import asyncio
+        from typing import cast
         loop = asyncio.get_running_loop()
-        return await self.run_with_timeout(loop, self.get_trades_in_window, timeout, symbol, window_seconds)
+        res = await self.run_with_timeout(loop, self.get_trades_in_window, timeout, symbol, window_seconds)
+        return cast(int, res)
 
     async def prune_old_timestamps_async(self, max_age_seconds: float = 3600, timeout: float = 5.0):
          """Async version of prune_old_timestamps."""
