@@ -47,15 +47,29 @@ class SignalAdapter:
             try:
                 # Use the protocol method
                 # IMPORTANT-001: Support async position sizers if they exist
-                 if hasattr(self.position_sizer, "suggest_stake_for_signal_async"):
-                      stake = await self.position_sizer.suggest_stake_for_signal_async(signal)
-                 else:
-                      stake = self.position_sizer.suggest_stake_for_signal(signal)
+                if hasattr(self.position_sizer, "suggest_stake_for_signal_async"):
+                    stake = await self.position_sizer.suggest_stake_for_signal_async(signal)
+                else:
+                    # Safe fallback for sync sizers (compute bound offloaded)
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                    stake = await loop.run_in_executor(
+                        None, 
+                        self.position_sizer.suggest_stake_for_signal, 
+                        signal
+                    )
             except AttributeError:
                 # Fallback if position_sizer doesn't follow protocol exactly
                 if hasattr(self.position_sizer, "compute_stake"):
-                     res = self.position_sizer.compute_stake(probability=signal.probability)
-                     stake = res.stake
+                    # Also wrap this fallback
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                    res = await loop.run_in_executor(
+                        None,
+                        self.position_sizer.compute_stake,
+                        probability=signal.probability
+                    )
+                    stake = res.stake
                 else:
                     stake = self.settings.trading.stake_amount
         else:

@@ -457,6 +457,14 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
                 
         return deleted_count
 
+    async def prune_async(self, retention_days: int = 30, timeout: float = 30.0) -> int:
+        """Async prune (heavy operation). timeout defaults to 30s."""
+        import asyncio
+        from typing import cast
+        loop = asyncio.get_running_loop()
+        res = await self.run_with_timeout(loop, self.prune, timeout, retention_days)
+        return cast(int, res)
+
     def query_iter(
         self,
         start: datetime | None = None,
@@ -666,6 +674,14 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
             "schema_version": SHADOW_STORE_SCHEMA_VERSION,
             "storage_backend": "sqlite",
         }
+
+    async def get_statistics_async(self, timeout: float = 5.0) -> dict[str, Any]:
+        """Async get_statistics."""
+        import asyncio
+        from typing import cast
+        loop = asyncio.get_running_loop()
+        res = await self.run_with_timeout(loop, self.get_statistics, timeout)
+        return cast(dict[str, Any], res)
 
 
 

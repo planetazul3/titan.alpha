@@ -59,6 +59,24 @@ class RegimeAssessmentProtocol(Protocol):
         ...
 
 
+@runtime_checkable
+class RegimeVetoProtocol(Protocol):
+    """
+    Protocol for the Regime Veto authority.
+    Decouples decision engine from concrete implementation.
+    """
+    threshold_caution: float
+    threshold_veto: float
+    
+    def assess(self, reconstruction_error: float) -> RegimeAssessmentProtocol:
+        """Assess regime trust based on reconstruction error."""
+        ...
+        
+    def update_prices(self, prices: Any) -> None:
+         """Update internal state with recent prices."""
+         ...
+
+
 @dataclass
 class RegimeAssessment:
     """

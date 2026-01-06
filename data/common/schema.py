@@ -114,11 +114,23 @@ class FeatureOutputSchema:
             TypeError: If dtypes are incorrect
         """
         # 1. Dtype Validation (CRITICAL-005)
+        # 1. Dtype Validation (CRITICAL-005)
+        # Ensure torch is available (fixes NameError)
+        import torch
+
         for key, tensor in features.items():
+            # Defensive coercion (CRITICAL ISSUE 3)
             if tensor.dtype != torch.float32:
-                 raise TypeError(f"Tensor '{key}' has invalid dtype {tensor.dtype}. Expected float32.")
+                # Log usage of defensive coercion if logger were available, but for now just convert
+                # In strict mode we might raise TypeError, but for robustness we coerce
+                try:
+                    features[key] = tensor.to(torch.float32)
+                except Exception as e:
+                     raise TypeError(f"Tensor '{key}' has invalid dtype {tensor.dtype} and cannot be converted to float32: {e}")
             
-            if not torch.isfinite(tensor).all():
+            # Re-check finiteness on the potentially coerced tensor
+            current_tensor = features[key]
+            if not torch.isfinite(current_tensor).all():
                  raise ValueError(f"Tensor '{key}' contains non-finite values (NaN/Inf).")
 
         # 2. Shape Validation

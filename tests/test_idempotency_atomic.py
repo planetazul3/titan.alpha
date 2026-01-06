@@ -21,7 +21,8 @@ async def test_atomic_reservation_success(store):
     assert contract_id is None
     
     # Check that it is now "PENDING"
-    assert store.get_contract_id(signal_id) == "PENDING"
+    contract_id = await store.get_contract_id_async(signal_id)
+    assert contract_id == "PENDING"
 
 @pytest.mark.asyncio
 async def test_atomic_reservation_race_condition(store):
@@ -43,7 +44,8 @@ async def test_update_contract_id(store):
     
     await store.update_contract_id_async(signal_id, "REAL_CONTRACT_ID")
     
-    assert store.get_contract_id(signal_id) == "REAL_CONTRACT_ID"
+    contract_id = await store.get_contract_id_async(signal_id)
+    assert contract_id == "REAL_CONTRACT_ID"
     
 @pytest.mark.asyncio
 async def test_delete_record(store):
@@ -51,4 +53,12 @@ async def test_delete_record(store):
     await store.check_and_reserve_async(signal_id, "AAPL")
     
     await store.delete_record_async(signal_id)
-    assert not store.exists(signal_id)
+    # exists() is now internal _exists(), but better to rely on public API? 
+    # Public API doesn't have exist_async, but check_and_reserve uses insertion.
+    # We can check internal state for test verification or add exist_async.
+    # For now, accessing internal _exists for assertion is acceptable in unit test?
+    # Or add exist_async. User said "all must be compliant with async".
+    # Let's rely on get_contract_id_async returning None.
+    
+    cid = await store.get_contract_id_async(signal_id)
+    assert cid is None

@@ -37,8 +37,8 @@ class SQLiteIdempotencyStore:
             # Create index for cleanup
             conn.execute("CREATE INDEX IF NOT EXISTS idx_executed_at ON executed_signals(executed_at)")
             
-    def exists(self, signal_id: str) -> bool:
-        """Check if a signal ID has already been executed."""
+    def _exists(self, signal_id: str) -> bool:
+        """Internal sync implementation."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM executed_signals WHERE signal_id = ?", 
@@ -46,8 +46,8 @@ class SQLiteIdempotencyStore:
             )
             return cursor.fetchone() is not None
             
-    def get_contract_id(self, signal_id: str) -> Optional[str]:
-        """Get the contract ID associated with a previously executed signal."""
+    def _get_contract_id(self, signal_id: str) -> Optional[str]:
+        """Internal sync implementation."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT contract_id FROM executed_signals WHERE signal_id = ?", 
@@ -58,9 +58,10 @@ class SQLiteIdempotencyStore:
 
             return row[0] if row else None
 
-    # CRITICAL-002: Atomic checks
-    def check_and_reserve(self, signal_id: str, symbol: str) -> tuple[bool, Optional[str]]:
+    # CRITICAL-002: Atomic checks - Internal Sync Implementation
+    def _check_and_reserve(self, signal_id: str, symbol: str) -> tuple[bool, Optional[str]]:
         """
+        Internal synchronous implementation of check_and_reserve.
         Atomically check if signal exists and reserve if not.
         Returns: (is_new: bool, existing_contract_id: str|None)
         """
@@ -84,8 +85,8 @@ class SQLiteIdempotencyStore:
                 logger.debug(f"Signal {signal_id} already exists (contract: {existing_id})")
                 return False, existing_id
 
-    def update_contract_id(self, signal_id: str, contract_id: str):
-        """Update a reserved execution with actual contract ID."""
+    def _update_contract_id(self, signal_id: str, contract_id: str):
+        """Internal sync implementation."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE executed_signals SET contract_id = ? WHERE signal_id = ?",
@@ -93,14 +94,14 @@ class SQLiteIdempotencyStore:
             )
         logger.debug(f"Updated reservation for {signal_id} with contract {contract_id}")
 
-    def delete_record(self, signal_id: str):
-        """Remove a record (e.g. after failed execution of reserved signal)."""
+    def _delete_record(self, signal_id: str):
+        """Internal sync implementation."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM executed_signals WHERE signal_id = ?", (signal_id,))
         logger.debug(f"Deleted record for signal {signal_id}")
 
-    def record_execution(self, signal_id: str, contract_id: str, symbol: str):
-        """Record a successful execution. Updated to be an upsert for safety."""
+    def _record_execution(self, signal_id: str, contract_id: str, symbol: str):
+        """Internal sync implementation."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO executed_signals (signal_id, contract_id, symbol) VALUES (?, ?, ?)",
@@ -116,35 +117,36 @@ class SQLiteIdempotencyStore:
             logger.info(f"Cleaned up {cursor.rowcount} old idempotency records")
 
     # Async wrappers for use in async context (executor.py)
+    # PUBLIC API - MUST BE USED IN PREFERENCE TO SYNC METHODS
     async def get_contract_id_async(self, signal_id: str) -> Optional[str]:
         """Async wrapper for get_contract_id."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.get_contract_id, signal_id)
+        return await loop.run_in_executor(None, self._get_contract_id, signal_id)
 
     async def record_execution_async(self, signal_id: str, contract_id: str, symbol: str = "unknown"):
         """Async wrapper for record_execution."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.record_execution(signal_id, contract_id, symbol))
+        await loop.run_in_executor(None, lambda: self._record_execution(signal_id, contract_id, symbol))
 
     async def check_and_reserve_async(self, signal_id: str, symbol: str) -> tuple[bool, Optional[str]]:
         """Async wrapper for check_and_reserve."""
         import asyncio
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.check_and_reserve, signal_id, symbol)
+        return await loop.run_in_executor(None, self._check_and_reserve, signal_id, symbol)
 
     async def update_contract_id_async(self, signal_id: str, contract_id: str):
         """Async wrapper for update_contract_id."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.update_contract_id, signal_id, contract_id)
+        await loop.run_in_executor(None, self._update_contract_id, signal_id, contract_id)
 
     async def delete_record_async(self, signal_id: str):
         """Async wrapper for delete_record."""
         import asyncio
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.delete_record, signal_id)
+        await loop.run_in_executor(None, self._delete_record, signal_id)
 
     async def close(self):
         """Close resources (no-op for SQLite as we open per query)."""

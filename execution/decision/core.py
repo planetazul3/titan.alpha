@@ -9,7 +9,9 @@ from config.settings import Settings
 from execution.contract_params import ContractDurationResolver
 from execution.decision_logic import process_signals_batch
 from execution.policy import ExecutionPolicy, SafetyProfile, VetoPrecedence
-from execution.regime import RegimeAssessmentProtocol, RegimeVeto
+from execution.regime import RegimeAssessmentProtocol
+# Use Protocol for type hinting to break dependency cycle risk
+from execution.regime.types import RegimeVetoProtocol
 from execution.safety_store import SQLiteSafetyStateStore
 from execution.shadow_store import ShadowTradeStore
 from execution.sqlite_shadow_store import SQLiteShadowStore
@@ -53,7 +55,7 @@ class DecisionEngine:
     def __init__(
         self,
         settings: Settings,
-        regime_veto: RegimeVeto | None = None,
+        regime_veto: RegimeVetoProtocol | None = None,
         shadow_store: ShadowTradeStore | SQLiteShadowStore | None = None,
         safety_store: SQLiteSafetyStateStore | None = None,
         policy: ExecutionPolicy | None = None,
@@ -72,9 +74,11 @@ class DecisionEngine:
         
         # IMPORTANT-002: Link regime thresholds to settings
         if regime_veto is None:
+            # Lazy import concrete implementation to avoid circular dependency
+            from execution.regime import RegimeVeto
             caution = getattr(settings.hyperparams, "regime_caution_threshold", 0.1)
             veto = getattr(settings.hyperparams, "regime_veto_threshold", 0.3)
-            self.regime_veto = RegimeVeto(threshold_caution=caution, threshold_veto=veto)
+            self.regime_veto: RegimeVetoProtocol = RegimeVeto(threshold_caution=caution, threshold_veto=veto)
         else:
             self.regime_veto = regime_veto
 
@@ -100,9 +104,21 @@ class DecisionEngine:
         self.policy.register_veto(
             level=VetoPrecedence.REGIME,
             check_fn=lambda reconstruction_error=0.0, **kwargs: self.regime_veto.assess(reconstruction_error).is_vetoed(),
-            reason=lambda: f"Market anomaly detected (Regime Veto L4). Error: {self._last_reconstruction_error:.3f}",
+            reason=lambda: self._generate_regime_veto_reason(self._last_reconstruction_error),
             use_context=True
         )
+
+    def _generate_regime_veto_reason(self, error: float) -> str:
+        """Generate detailed reason for regime veto."""
+        assessment = self.regime_veto.assess(error)
+        details = ""
+        # Check for hierarchical details
+        if hasattr(assessment, "micro") and hasattr(assessment.micro, "value"):
+             details += f" Micro={assessment.micro.value}"
+        if hasattr(assessment, "volatility") and hasattr(assessment.volatility, "value"):
+             details += f" Vol={assessment.volatility.value}"
+        
+        return f"Market anomaly detected (Regime Veto L4). Error: {error:.3f}{details}"
         
         if TRACING_ENABLED:
             self.tracer: Any = trace.get_tracer(__name__)
