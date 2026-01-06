@@ -1163,7 +1163,15 @@ async def run_inference(
                 # For now assuming simple sizing or adapter handles it
                 # Adapter.convert_signal(signal, account_balance=...)
                 try:
-                     execution_request = strategy_adapter.convert_signal(signal)
+                     # CRITICAL-004: Pass Regime Context
+                     assessment = engine.get_regime_assessment(reconstruction_error)
+                     regime_state = engine.get_regime_state_string(assessment)
+                     
+                     execution_request = strategy_adapter.convert_signal(
+                         signal, 
+                         reconstruction_error=reconstruction_error,
+                         regime_state=regime_state
+                     )
                      logger.info(f"EXECUTING Request: {execution_request}")
                 except Exception as e:
                      logger.error(f"Strategy Adapter failed to convert signal: {e}")

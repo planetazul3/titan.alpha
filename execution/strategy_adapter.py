@@ -1,4 +1,3 @@
-
 import logging
 from typing import Protocol, Optional, Any
 
@@ -6,7 +5,7 @@ from config.settings import Settings
 from config.constants import CONTRACT_TYPES
 from execution.common.types import ExecutionRequest
 from execution.signals import TradeSignal
-from execution.contract_params import ContractDurationResolver
+from execution.contract_params import ContractParameterService
 from execution.position_sizer import PositionSizer, FixedStakeSizer
 from execution.common.contract_mapping import map_signal_to_contract_type
 
@@ -27,23 +26,24 @@ class StrategyAdapter:
         self,
         settings: Settings,
         position_sizer: Optional[PositionSizer] = None,
-        duration_resolver: Optional[ContractDurationResolver] = None
+        # duration_resolver no longer used, kept for signature compat if needed, but we prefer param_service
     ):
         self.settings = settings
         self.position_sizer = position_sizer or FixedStakeSizer(stake=settings.trading.stake_amount)
-        self.duration_resolver = duration_resolver or ContractDurationResolver(settings)
+        self.param_service = ContractParameterService(settings)
         
     def convert_signal(
         self, 
         signal: TradeSignal, 
-        account_balance: Optional[float] = None
+        account_balance: Optional[float] = None,
+        reconstruction_error: Optional[float] = None,
+        regime_state: Optional[str] = None
     ) -> ExecutionRequest:
         """
         Convert a raw TradeSignal into a validated ExecutionRequest.
         """
         # 1. Determine Stake
         # Allow explicit override from signal metadata (e.g. from RL agent)
-        stake = signal.metadata.get("stake")
         stake = signal.metadata.get("stake")
         if stake is None:
             # R02: Pass volatility from metadata if available
@@ -54,23 +54,18 @@ class StrategyAdapter:
                 volatility=volatility
             )
             
-        # 2. Resolve Duration
-        duration, duration_unit = self.duration_resolver.resolve_duration(signal.contract_type)
+        # 2. Resolve Duration and Barriers (CRITICAL-003)
+        duration, duration_unit = self.param_service.resolve_duration(signal.contract_type)
+        barrier, barrier2 = self.param_service.resolve_barriers(signal.contract_type)
         
         # 3. Map Contract Type (Signal -> API)
-        # TODO: Move this mapping to a shared utility? 
-        # Ideally Executor handles the API-specific string mapping, but Request should be explicit.
-        # Let's keep the high-level types in Request and let Executor map to Deriv strings if they differ?
-        # Actually, Executor is "DerivTradeExecutor", so it expects Deriv strings or our constants?
-        # Current Executor maps:
-        # types.CONTRACT_TYPES.RISE_FALL -> "CALL"/"PUT"
-        # Let's do the rigorous mapping HERE so the Request is unambiguous.
-        
         deriv_contract_type = map_signal_to_contract_type(signal)
         
-        # 4. Extract Barriers
-        barrier = signal.metadata.get("barrier")
-        barrier2 = signal.metadata.get("barrier2")
+        # 4. Extract Barriers Override (if any in metadata)
+        if signal.metadata.get("barrier"):
+             barrier = signal.metadata.get("barrier")
+        if signal.metadata.get("barrier2"):
+             barrier2 = signal.metadata.get("barrier2")
         
         return ExecutionRequest(
             signal_id=signal.signal_id,
@@ -80,7 +75,10 @@ class StrategyAdapter:
             duration=duration,
             duration_unit=duration_unit,
             barrier=barrier,
-            barrier2=barrier2
+            barrier2=barrier2,
+            # CRITICAL-004: Regime Context
+            regime_state=regime_state,
+            reconstruction_error=reconstruction_error
         )
         
 

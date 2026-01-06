@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable, Optional, Union
 
 from execution.common.types import ExecutionRequest
-from execution.contract_params import ContractDurationResolver
+from execution.contract_params import ContractParameterService
 from execution.idempotency_store import SQLiteIdempotencyStore
 from execution.signals import TradeSignal
 from observability.execution_logging import execution_logger
@@ -68,8 +68,9 @@ class DerivTradeExecutor:
         self.position_sizer = position_sizer or FixedStakeSizer(stake=settings.trading.stake_amount)
         self.policy = policy
         self.idempotency_store = idempotency_store
-        self.duration_resolver = ContractDurationResolver(settings)
+        self.param_service = ContractParameterService(settings)
         self._executed_count = 0
+
         self._failed_count = 0
         
         # Multi-failure circuit breaker: track failure timestamps for rolling window

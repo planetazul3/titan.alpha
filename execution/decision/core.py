@@ -190,7 +190,7 @@ class DecisionEngine:
 
             regime_assessment = self.regime_veto.assess(reconstruction_error)
             if span:
-                span.set_attribute("regime_state", self._get_regime_state_string(regime_assessment))
+                span.set_attribute("regime_state", self.get_regime_state_string(regime_assessment))
 
             # Delegate to SignalProcessor (R02/R03)
             all_signals = self.processor.process(probs, timestamp)
@@ -312,7 +312,7 @@ class DecisionEngine:
         """Get decision statistics including regime veto counts."""
         return self.metrics.get_statistics()
 
-    def _get_regime_state_string(self, assessment: RegimeAssessmentProtocol) -> str:
+    def get_regime_state_string(self, assessment: RegimeAssessmentProtocol) -> str:
         """Extract regime state string."""
         if hasattr(assessment, "trust_state") and hasattr(assessment.trust_state, "value"):
             return str(assessment.trust_state.value)

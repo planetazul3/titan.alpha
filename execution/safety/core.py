@@ -150,6 +150,10 @@ class SafeTradeExecutor:
         
         # RC-8: Numerical Safety
         daily_pnl = ensure_finite(daily_pnl, "SafeTradeExecutor.check_daily_limits", 0.0)
+        
+        if not math.isfinite(daily_pnl):
+            logger.error(f"CRITICAL-002: NaN daily_pnl detected: {daily_pnl}. Failing closed.")
+            return False
 
         if self.config.max_daily_loss > 0 and daily_pnl <= -self.config.max_daily_loss:
             logger.warning(f"Daily loss limit hit: {daily_pnl:.2f} <= -{self.config.max_daily_loss}")

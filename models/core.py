@@ -121,6 +121,14 @@ class DerivOmniModel(nn.Module):
                 'touch_logit': (batch, 1)
                 'range_logit': (batch, 1)
         """
+        # CRITICAL-005: Enforce Float32 Input
+        if ticks.dtype != torch.float32:
+             raise TypeError(f"Model expected ticks float32, got {ticks.dtype}")
+        if candles.dtype != torch.float32:
+             raise TypeError(f"Model expected candles float32, got {candles.dtype}")
+        if vol_metrics.dtype != torch.float32:
+             raise TypeError(f"Model expected vol_metrics float32, got {vol_metrics.dtype}")
+
         candles_mask = masks.get("candles_mask") if masks else None
         ticks_mask = masks.get("ticks_mask") if masks else None
         

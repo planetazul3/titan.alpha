@@ -79,7 +79,10 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         barrier_level REAL,
         barrier2_level REAL,
         duration_minutes INTEGER DEFAULT 1,
-        resolution_context TEXT
+        resolution_context TEXT,
+        version_number INTEGER DEFAULT 0,
+        last_update_attempt TEXT,
+        update_conflict_count INTEGER DEFAULT 0
     )
     """
 
@@ -107,6 +110,9 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
 
         # Initialize schema via migrations
         self._init_migrations()
+        
+        # CRITICAL-001: Auto-migration for conflict tracking
+        self._ensure_conflict_columns()
 
         logger.info(
             f"SQLiteShadowStore initialized: {db_path} "
@@ -118,7 +124,28 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
         """Return database path for API compatibility with ShadowTradeStore."""
         return self._db_path
 
-
+    def _ensure_conflict_columns(self) -> None:
+        """
+        Ensure the schema has conflict tracking columns.
+        Auto-migrates existing databases if needed.
+        """
+        required_columns = {
+            "last_update_attempt": "TEXT", 
+            "update_conflict_count": "INTEGER DEFAULT 0"
+        }
+        
+        with self._transaction() as conn:
+            cursor = conn.execute("PRAGMA table_info(shadow_trades)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            for col, dtype in required_columns.items():
+                if col not in existing_columns:
+                    logger.warning(f"Auto-migrating schema: Adding column {col}")
+                    try:
+                        conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {col} {dtype}")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
 
     def _init_migrations(self) -> None:
         """Initialize database schema via migrations."""
@@ -157,8 +184,8 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
                     outcome, exit_price, resolved_at,
                     metadata, schema_version, created_at,
                     barrier_level, barrier2_level, duration_minutes, resolution_context,
-                    version_number
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    version_number, update_conflict_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     record.trade_id,
@@ -197,44 +224,80 @@ class SQLiteShadowStore(SQLiteTransactionMixin):
 
     def update_outcome(self, trade: ShadowTradeRecord, outcome: bool, exit_price: float) -> bool:
         """
-        Update a trade's outcome atomically.
+        Update a trade's outcome atomically with robust retry logic.
 
-        This is the KEY IMPROVEMENT over NDJSON - no file rewrite needed.
-
-        Args:
-            trade: Trade record to update
-            outcome: True for win, False for loss
-            exit_price: Actual exit price
-
-        Returns:
-            True if trade was found and updated, False otherwise
+        CRITICAL-001: Implements exponential backoff for optimistic locking conflicts.
         """
+        import time
+        import random
+        
         trade_id = trade.trade_id
         resolved_at = datetime.now(timezone.utc).isoformat()
+        current_version = trade.version_number
+        
+        max_retries = 5
+        base_delay = 0.1
+        
+        for attempt in range(max_retries):
+            try:
+                with self._transaction() as conn:
+                    # Update attempts
+                    conn.execute(
+                        "UPDATE shadow_trades SET last_update_attempt = ? WHERE trade_id = ?",
+                        (datetime.now(timezone.utc).isoformat(), trade_id)
+                    )
+                    
+                    cursor = conn.execute(
+                        """
+                        UPDATE shadow_trades
+                        SET outcome = ?, exit_price = ?, resolved_at = ?, 
+                            version_number = version_number + 1,
+                            update_conflict_count = update_conflict_count + ?
+                        WHERE trade_id = ? AND version_number = ?
+                        """,
+                        (1 if outcome else 0, exit_price, resolved_at, attempt, trade_id, current_version),
+                    )
 
-        with self._transaction() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE shadow_trades
-                SET outcome = ?, exit_price = ?, resolved_at = ?, version_number = version_number + 1
-                WHERE trade_id = ? AND version_number = ?
-                """,
-                (1 if outcome else 0, exit_price, resolved_at, trade_id, trade.version_number),
-            )
+                    if cursor.rowcount > 0:
+                        logger.debug(f"Updated outcome for {trade_id} (v{current_version}->v{current_version+1})")
+                        return True
+                    else:
+                        # Conflict or Not Found
+                        # Check current state
+                        cursor = conn.execute(
+                            "SELECT version_number, outcome FROM shadow_trades WHERE trade_id = ?", 
+                            (trade_id,)
+                        )
+                        row = cursor.fetchone()
+                        
+                        if not row:
+                            logger.warning(f"Trade not found for outcome update: {trade_id}")
+                            return False
+                        
+                        db_version, db_outcome = row[0], row[1]
+                        
+                        if db_outcome is not None:
+                             # Already resolved by concurrent process - Job Done
+                             logger.info(f"Trade {trade_id} already resolved (outcome={db_outcome}). Skipping.")
+                             return True
+                        
+                        if db_version != current_version:
+                            logger.warning(
+                                f"Optimistic lock conflict {trade_id}: v{current_version} vs v{db_version}. "
+                                f"Retrying ({attempt+1}/{max_retries})..."
+                            )
+                            current_version = db_version # Update version for next retry
+                            raise OptimisticLockError(f"Version mismatch v{current_version} vs v{db_version}")
 
-            if cursor.rowcount > 0:
-                logger.debug(f"Updated outcome for {trade_id}: outcome={outcome} (v{trade.version_number}->v{trade.version_number+1})")
-                return True
-            else:
-                # Check if trade exists at all to distinguish "not found" vs "conflict"
-                cursor = conn.execute("SELECT version_number FROM shadow_trades WHERE trade_id = ?", (trade_id,))
-                row = cursor.fetchone()
-                if row:
-                    logger.warning(f"Optimistic lock failure for {trade_id}. DB version: {row[0]}, Tried: {trade.version_number}")
-                    raise OptimisticLockError(f"Trade {trade_id} modified concurrently (v{trade.version_number} vs v{row[0]})")
-                
-                logger.warning(f"Trade not found for outcome update: {trade_id}")
-                return False
+            except OptimisticLockError:
+                if attempt < max_retries - 1:
+                    sleep_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Failed to update outcome for {trade_id} after {max_retries} attempts.")
+                    raise
+        
+        return False
 
     def mark_stale(self, trade_id: str, exit_price: float) -> bool:
         """

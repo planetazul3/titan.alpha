@@ -72,6 +72,52 @@ def validate_model_compatibility(checkpoint: Dict[str, Any], settings: Settings)
             )
 
 
+
+def verify_model_inference(model: DerivOmniModel, settings: Settings, device: str) -> None:
+    """
+    Run a dummy forward pass to verify inference capability and compatibility.
+    
+    IMPORTANT-003: Catches architecture mismatches that loading state_dict misses.
+    """
+    logger.info("Running dummy forward pass for compatibility check...")
+    try:
+        # Create dummy inputs based on settings
+        # Ticks: (Batch, Channels, Length) for CNN
+        ticks = torch.randn(
+            1, 
+            settings.data_shapes.num_features_ticks, 
+            settings.data_shapes.sequence_length_ticks,
+            dtype=torch.float32  # CRITICAL-005
+        ).to(device)
+        
+        # Candles: (Batch, Length, Features) for TFT/RNN
+        candles = torch.randn(
+            1, 
+            settings.data_shapes.sequence_length_candles, 
+            settings.data_shapes.num_features_candles,
+            dtype=torch.float32  # CRITICAL-005
+        ).to(device)
+        
+        # Volatility: (Batch, Features)
+        # Assuming 4 features if not specified, but best to use settings if available
+        # fallback to 6 (typical) or check settings?
+        vol_dim = getattr(settings.data_shapes, "num_features_volatility", 6)
+        vol_metrics = torch.randn(
+            1, 
+            vol_dim,
+            dtype=torch.float32  # CRITICAL-005
+        ).to(device)
+        
+        with torch.no_grad():
+            model(ticks, candles, vol_metrics)
+            
+        logger.info("Dummy forward pass successful.")
+        
+    except Exception as e:
+        logger.error(f"Inference Compatibility Check Failed! {e}")
+        raise RuntimeError(f"Model Checkpoint Incompatible with Current Architecture: {e}")
+
+
 def create_trading_stack(
     settings: Settings,
     checkpoint_path: Optional[Path] = None,
@@ -158,6 +204,9 @@ def create_trading_stack(
                 logger.info(f"Loaded model version: {model_version}")
             else:
                 logger.warning("Checkpoint missing 'manifest' - skipping compatibility validation (Legacy Model)")
+                
+            # IMPORTANT-003: Dynamic Inference Check
+            verify_model_inference(model, settings, device)
 
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint: {e}") from e
@@ -231,6 +280,10 @@ def create_challenger_stack(
                  model_version = ckpt["manifest"].get("model_version", "unknown")
                  
              model.load_state_dict(ckpt["model_state_dict"], strict=False)
+             
+             # IMPORTANT-003: Dynamic Inference Check
+             verify_model_inference(model, settings, device)
+             
         except Exception as e:
             logger.error(f"Failed to load challenger {checkpoint_path}: {e}")
             raise

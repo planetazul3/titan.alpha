@@ -314,6 +314,12 @@ class AdaptiveRiskManager:
         
         pnl = ensure_finite(pnl, "AdaptiveRiskManager.pnl", default=0.0)
 
+        import math
+        if not math.isfinite(pnl):
+            logger.error(f"CRITICAL-002: NaN PnL detected in record_trade even after ensure_finite! Value: {pnl}")
+            pnl = 0.0
+
+
         self._daily_pnl += pnl
         self.performance.record(pnl, current_equity)
         self._trades_since_limit_hit += 1

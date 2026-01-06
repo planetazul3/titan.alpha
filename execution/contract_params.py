@@ -8,9 +8,11 @@ from typing import Tuple
 from config.constants import CONTRACT_TYPES
 from config.settings import Settings
 
-class ContractDurationResolver:
+class ContractParameterService:
     """
-    Resolves contract duration and unit based on type and settings.
+    Centralized service for resolving all contract parameters (duration, barriers, stake).
+    
+    CRITICAL-003: Unifies scattered logic from executor and adapters.
     """
     
     def __init__(self, settings: Settings):
@@ -23,8 +25,6 @@ class ContractDurationResolver:
         Returns:
             Tuple of (duration_value, duration_unit)
         """
-        # We use the centralized contracts configuration as the source of truth
-        # for both real and shadow trades to ensure perfect alignment.
         config = self.settings.contracts
         
         if contract_type == CONTRACT_TYPES.RISE_FALL:
@@ -34,5 +34,33 @@ class ContractDurationResolver:
         elif contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
             return config.duration_range, "m"
             
-        # Fallback
         return getattr(config, "duration_minutes", 1), "m"
+
+    def resolve_barriers(self, contract_type: str, current_price: float = 0.0) -> Tuple[str | None, str | None]:
+        """
+        Resolve barrier levels for the contract.
+        
+        Args:
+            contract_type: Type of contract
+            current_price: Current spot price (optional, for absolute barriers)
+            
+        Returns:
+            Tuple of (barrier, barrier2) as strings or None
+        """
+        # CRITICAL-003: Centralized barrier logic
+        if contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
+            # For Touch/No Touch, we typically use a relative barrier offset
+            offset = self.settings.trading.barrier_offset
+            # If using relative barriers (e.g. "+0.5"), return directly.
+            # If using absolute, we'd need current_price.
+            # Assuming relative for now as per Deriv API standard for relative.
+            return f"+{offset}", None
+            
+        elif contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
+            # Range contracts usually need two barriers
+            offset = self.settings.trading.barrier_offset
+            # Example: +offset and -offset
+            return f"+{offset}", f"-{offset}"
+            
+        return None, None
+

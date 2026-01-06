@@ -75,6 +75,8 @@ class FeatureBuilder:
         >>> batch = builder.build_batch(tick_list, candle_list)
     """
 
+    CANONICAL_DTYPE = torch.float32 # CRITICAL-005
+
     def __init__(self, settings: Settings):
         """
         Initialize the canonical feature builder.
@@ -167,15 +169,39 @@ class FeatureBuilder:
                 # Strategy wants robust data, so we fail hard.
                 raise ValueError(f"Invalid market data structure: {e}")
 
-            self.schema.validate_ticks(tick_features)
-            self.schema.validate_candles(candle_features)
-            self.schema.validate_volatility(vol_features)
+            # CRITICAL-005: Output Schema Validation
+            from data.common.schema import FeatureOutputSchema
+            
+            output_schema = FeatureOutputSchema(
+                tick_length=self.schema.tick_length,
+                candle_length=self.schema.candle_length
+            )
+            
+            # Create dictionary (before wrapping in tensors for final return, or validate the tensors)
+            # Actually, `build` returns tensors. So we should create them first, convert to float32, then validate.
+            pass
 
-        return {
-            "ticks": torch.from_numpy(tick_features),
-            "candles": torch.from_numpy(candle_features),
-            "vol_metrics": torch.from_numpy(vol_features),
+        # CRITICAL-005: Enforce Float32
+        t_tensor = torch.from_numpy(tick_features).to(dtype=self.CANONICAL_DTYPE)
+        c_tensor = torch.from_numpy(candle_features).to(dtype=self.CANONICAL_DTYPE)
+        v_tensor = torch.from_numpy(vol_features).to(dtype=self.CANONICAL_DTYPE)
+
+        features_dict = {
+            "ticks": t_tensor,
+            "candles": c_tensor,
+            "vol_metrics": v_tensor,
         }
+
+        if validate:
+            # Validate using new Output Schema
+            from data.common.schema import FeatureOutputSchema
+            output_schema = FeatureOutputSchema(
+                tick_length=self.schema.tick_length,
+                candle_length=self.schema.candle_length
+            )
+            output_schema.validate(features_dict)
+
+        return features_dict
 
     def build_numpy(
         self, 

@@ -84,3 +84,54 @@ class CandleInputSchema(pa.DataFrameModel):
         from typing import cast
         return cast(Series[bool], (df["low"] <= df["open"]) & (df["low"] <= df["close"]))
 
+
+@dataclass(frozen=True)
+class FeatureOutputSchema:
+    """
+    Schema for validating final feature tensors before model input.
+    
+    Enforces:
+    1. Shape consistency
+    2. Data type consistency (float32)
+    3. Finiteness (no NaNs/Infs)
+    """
+    
+    tick_length: int
+    candle_length: int
+    candle_features: int = 10
+    volatility_features: int = 4
+    
+    def validate(self, features: dict[str, torch.Tensor]) -> None:
+        """
+        Validate feature dictionary against schema.
+        
+        Args:
+            features: Dictionary containing 'ticks', 'candles', 'vol_metrics' tensors
+            
+        Raises:
+            ValueError: If validation fails
+            TypeError: If dtypes are incorrect
+        """
+        # 1. Dtype Validation (CRITICAL-005)
+        for key, tensor in features.items():
+            if tensor.dtype != torch.float32:
+                 raise TypeError(f"Tensor '{key}' has invalid dtype {tensor.dtype}. Expected float32.")
+            
+            if not torch.isfinite(tensor).all():
+                 raise ValueError(f"Tensor '{key}' contains non-finite values (NaN/Inf).")
+
+        # 2. Shape Validation
+        ticks = features["ticks"]
+        candles = features["candles"]
+        vol_metrics = features["vol_metrics"]
+        
+        if ticks.shape != (self.tick_length,):
+            raise ValueError(f"Ticks shape mismatch: {ticks.shape} != ({self.tick_length},)")
+            
+        if candles.shape != (self.candle_length, self.candle_features):
+             raise ValueError(f"Candles shape mismatch: {candles.shape} != ({self.candle_length}, {self.candle_features})")
+             
+        if vol_metrics.shape != (self.volatility_features,):
+             raise ValueError(f"Vol metrics shape mismatch: {vol_metrics.shape} != ({self.volatility_features},)")
+
+
