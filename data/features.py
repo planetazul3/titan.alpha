@@ -144,6 +144,10 @@ class FeatureBuilder:
         """
         # CRITICAL-004: Staleness Validation
         if timestamp is not None and len(candles) > 0:
+            last_candle_ts = candles[-1, 5]
+            from data.validation import check_data_staleness
+            check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)
+        if timestamp is not None and len(candles) > 0:
             # Candle format: [Open, High, Low, Close, Volume, Timestamp]
             last_candle_ts = candles[-1, 5]
             check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)

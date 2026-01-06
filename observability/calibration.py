@@ -33,7 +33,16 @@ class CalibrationMonitor:
         self.consecutive_high_count = 0
         self.shadow_only_mode = False
         self.shadow_only_reason = ""
+        self.shadow_only_reason = ""
         self.alert_escalation_level = 0  # 0=none, 1=warning, 2=critical
+
+    def reset(self) -> None:
+        """Reset monitor state (e.g. after model reload)."""
+        self.errors.clear()
+        self.consecutive_high_count = 0
+        self.shadow_only_mode = False
+        self.shadow_only_reason = ""
+        self.alert_escalation_level = 0
 
     def record(self, error: float) -> None:
         """Record a new reconstruction error and update state."""

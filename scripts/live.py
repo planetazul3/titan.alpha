@@ -609,6 +609,11 @@ async def run_live_trading(args):
                             # Prevents race conditions where buffer changes during async inference
                             snapshot = buffer.get_snapshot()
                             
+                            # H-NEW-1 (FIXED): Validate snapshot structure
+                            if not snapshot or not all(k in snapshot for k in ("ticks", "candles", "tick_count", "candle_count")):
+                                logger.warning("Invalid market snapshot structure. Skipping inference.")
+                                continue
+                            
                             await run_inference(
                                 model,
                                 engine,
