@@ -32,13 +32,13 @@ class ContractParameterService:
         
         if contract_type == CONTRACT_TYPES.RISE_FALL:
             duration = config.duration_rise_fall
-            unit = "m"
+            unit = config.duration_unit_rise_fall
         elif contract_type == CONTRACT_TYPES.TOUCH_NO_TOUCH:
             duration = config.duration_touch
-            unit = "m"
+            unit = config.duration_unit_touch
         elif contract_type == CONTRACT_TYPES.STAYS_BETWEEN:
             duration = config.duration_range
-            unit = "m"
+            unit = config.duration_unit_range
         else:
             duration = getattr(config, "duration_minutes", 1)
             unit = "m"

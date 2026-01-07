@@ -85,16 +85,16 @@ class DerivTradeExecutor:
         Execute validated request on Deriv platform.
         Strictly requires ExecutionRequest.
         """
+        from data.ingestion.client import CircuitState
 
-
-        # CRITICAL-FIX (C-001): Check circuit breaker status
-        if self._is_circuit_breaker_active():
-            error_msg = f"Circuit breaker active: {len(self._failure_timestamps)} failures in last {CIRCUIT_BREAKER_WINDOW_SECONDS}s"
-            logger.warning(error_msg)
-            return TradeResult(success=False, error=error_msg)
+        # CRITICAL-FIX (C-001): Check delegated circuit breaker
+        if hasattr(self.client, "circuit_state") and self.client.circuit_state == CircuitState.OPEN:
+             error_msg = "Circuit breaker OPEN (delegated to client) - Execution suspended"
+             logger.warning(error_msg)
+             # Fail fast without incrementing failure count (as it's a safety backoff)
+             return TradeResult(success=False, error=error_msg)
 
         try:
-            # 5. Idempotency Check (CRITICAL-002)
             # 5. Idempotency Check (CRITICAL-002)
             if self.idempotency_store:
                 # Atomic check-and-reserve
@@ -136,23 +136,19 @@ class DerivTradeExecutor:
                 execution_logger.log_trade_success(request.signal_id, contract_id, buy_price)
                 
                 # Record in idempotency store
-                # Record in idempotency store (Update the reservation)
                 if self.idempotency_store:
                     await self.idempotency_store.update_contract_id_async(request.signal_id, contract_id)
                 
                 self._executed_count += 1
-                self._clear_failure_window()  # Reset on success
                 return TradeResult(success=True, contract_id=contract_id, entry_price=buy_price)
             else:
                 error_msg = result.get("error", {}).get("message", "Unknown execution error")
                 execution_logger.log_trade_failure(request.signal_id, error_msg, details=result)
                 self._failed_count += 1
-                self._record_failure(error_msg)  # Multi-failure tracking
                 return TradeResult(success=False, error=error_msg)
 
         except APIError as e:
             # Handle Deriv-specific API errors
-            # APIError usually has a 'message' and 'code' if it comes from the API response
             error_code = getattr(e, "code", "UnknownAPIError")
             error_msg = str(e)
             
@@ -163,9 +159,7 @@ class DerivTradeExecutor:
             
             # Rate limits are critical but temporary
             if "RateLimit" in str(error_code) or "RateLimit" in error_msg:
-                 logger.warning("Rate limit hit! Circuit breaker will likely trigger soon.")
-            
-            self._record_failure(f"{error_code}: {error_msg}")
+                 logger.warning("Rate limit hit! Client circuit breaker should handle this.")
             
             # Clean up reservation on definite API failure
             if self.idempotency_store:
@@ -177,14 +171,22 @@ class DerivTradeExecutor:
             logger.error(f"Connection lost during execution: {e}")
             execution_logger.log_trade_failure(request.signal_id, "ConnectionError")
             self._failed_count += 1
-            self._record_failure("ConnectionError")
             return TradeResult(success=False, error="ConnectionError")
+
+        except RuntimeError as e:
+             # Handle Safety/Circuit Breaker errors from client explicitly
+             if "Circuit breaker" in str(e):
+                  logger.warning(f"Client Rejected Execution: {e}")
+                  return TradeResult(success=False, error=str(e))
+             
+             logger.exception(f"Runtime error during execution: {e}")
+             self._failed_count += 1
+             return TradeResult(success=False, error=str(e))
 
         except Exception as e:
             logger.exception(f"Unexpected error during execution: {e}")
             execution_logger.log_trade_failure(request.signal_id, str(e))
             self._failed_count += 1
-            self._record_failure(str(e))  # Multi-failure tracking for all exceptions
             return TradeResult(success=False, error=str(e))
             
     async def shutdown(self) -> None:
@@ -195,58 +197,6 @@ class DerivTradeExecutor:
                 logger.info("Executor: Idempotency store closed.")
             except Exception as e:
                 logger.error(f"Executor: Failed to close idempotency store: {e}")
-    
-    def _record_failure(self, error_msg: str) -> None:
-        """
-        Record a failure and check if circuit breaker should trigger.
-        
-        Triggers circuit breaker on any N consecutive failures within the rolling window,
-        regardless of error type (Idempotency, InternalServerError, InsufficientBalance, etc.).
-        """
-        now = time.monotonic()
-        self._failure_timestamps.append(now)
-        
-        # Prune failures outside the rolling window
-        cutoff = now - CIRCUIT_BREAKER_WINDOW_SECONDS
-        self._failure_timestamps = [t for t in self._failure_timestamps if t > cutoff]
-        
-        # Check if we've hit the threshold
-        if len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD and self.policy:
-            self.policy.trigger_circuit_breaker(
-                f"Multi-failure circuit breaker: {len(self._failure_timestamps)} failures in {CIRCUIT_BREAKER_WINDOW_SECONDS}s. Last: {error_msg[:50]}"
-            )
-
-            
-    def _is_circuit_breaker_active(self) -> bool:
-        """Check if circuit breaker is currently active."""
-        if len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
-            # Check if we are still within the window relative to the last failure
-            # Actually, simply having N failures in the list (which is pruned on append) 
-            # implies they are within the window.
-            # But we should double check time just to be safe if _record_failure hasn't been called recently.
-            
-            # Prune first
-            now = time.monotonic()
-            cutoff = now - CIRCUIT_BREAKER_WINDOW_SECONDS
-            active_failures = [t for t in self._failure_timestamps if t > cutoff]
-            
-            if len(active_failures) < len(self._failure_timestamps):
-                 # Lazy prune
-                 self._failure_timestamps = active_failures
-                 
-            return len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD
-            
-        return False
-
-    def reset_circuit_breaker(self) -> None:
-        """Manually reset the circuit breaker."""
-        logger.info(f"Manual circuit breaker reset. clearing {len(self._failure_timestamps)} failures.")
-        self._failure_timestamps.clear()
-        self._failed_count = 0
-    
-    def _clear_failure_window(self) -> None:
-        """Clear failure window on successful execution."""
-        self._failure_timestamps.clear()
 
     def get_statistics(self) -> dict:
         total = self._executed_count + self._failed_count

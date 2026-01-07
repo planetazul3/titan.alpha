@@ -188,7 +188,7 @@ class DerivClient:
         self._reconnect_lock = asyncio.Lock()
         
         # I01 Fix: Circuit breaker for graceful degradation
-        self._circuit_breaker = CircuitBreaker(
+        self.circuit_breaker = CircuitBreaker(
             failure_threshold=5,
             initial_cooldown=60.0,
             max_cooldown=300.0,
@@ -203,6 +203,11 @@ class DerivClient:
             logger.info("🟡 Circuit breaker HALF-OPEN - attempting recovery probe")
         elif new_state == CircuitState.CLOSED:
             logger.info("🟢 Circuit breaker CLOSED - connection recovered")
+
+    @property
+    def circuit_state(self) -> CircuitState:
+        """Expose current circuit state."""
+        return self.circuit_breaker.state
 
     @property
     def is_connected(self) -> bool:

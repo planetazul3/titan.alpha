@@ -3,9 +3,12 @@ from execution.contract_params import ContractParameterService
 from config.constants import CONTRACT_TYPES
 from config.settings import Settings, ContractConfig, Trading, Thresholds, ModelHyperparams, ExecutionSafety
 
-def create_mock_settings(timeframe="5m", rise_fall_duration=1):
+def create_mock_settings(timeframe="5m", rise_fall_duration=1, rise_fall_unit="m"):
     return Settings.model_construct(
-        contracts=ContractConfig(duration_rise_fall=rise_fall_duration),
+        contracts=ContractConfig(
+            duration_rise_fall=rise_fall_duration,
+            duration_unit_rise_fall=rise_fall_unit
+        ),
         trading=Trading(symbol="R_100", stake_amount=10, timeframe=timeframe),
         thresholds=Thresholds(
             confidence_threshold_high=0.8,
@@ -24,12 +27,29 @@ def create_mock_settings(timeframe="5m", rise_fall_duration=1):
     )
 
 def test_resolve_duration_basic():
-    settings = create_mock_settings(timeframe="1m", rise_fall_duration=3)
+    settings = create_mock_settings(timeframe="1m", rise_fall_duration=3, rise_fall_unit="m")
     service = ContractParameterService(settings)
     
     dur, unit = service.resolve_duration(CONTRACT_TYPES.RISE_FALL)
     assert dur == 3
     assert unit == "m"
+
+def test_resolve_duration_units():
+    # Test ticks
+    settings = create_mock_settings(timeframe="1m", rise_fall_duration=5, rise_fall_unit="t")
+    service = ContractParameterService(settings)
+    
+    dur, unit = service.resolve_duration(CONTRACT_TYPES.RISE_FALL)
+    assert dur == 5
+    assert unit == "t"
+    
+    # Test hours
+    settings = create_mock_settings(timeframe="1h", rise_fall_duration=2, rise_fall_unit="h")
+    service = ContractParameterService(settings)
+    
+    dur, unit = service.resolve_duration(CONTRACT_TYPES.RISE_FALL)
+    assert dur == 2
+    assert unit == "h"
 
 def test_timeframe_parsing():
     settings = create_mock_settings()
@@ -41,7 +61,7 @@ def test_timeframe_parsing():
 
 def test_consistency_check_logging(caplog):
     # Timeframe 5m, Duration 1m -> Mismatch
-    settings = create_mock_settings(timeframe="5m", rise_fall_duration=1)
+    settings = create_mock_settings(timeframe="5m", rise_fall_duration=1, rise_fall_unit="m")
     service = ContractParameterService(settings)
     
     with caplog.at_level("DEBUG"):

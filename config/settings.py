@@ -323,13 +323,22 @@ class ContractConfig(BaseModel):
         default=1, description="Default contract duration in minutes", ge=1, le=60
     )
     duration_rise_fall: int = Field(
-        default=1, description="Duration for RISE_FALL contracts (minutes)", ge=1, le=60
+        default=1, description="Duration for RISE_FALL contracts", ge=1
+    )
+    duration_unit_rise_fall: Literal["t", "s", "m", "h", "d"] = Field(
+        default="m", description="Duration unit for RISE_FALL contracts"
     )
     duration_touch: int = Field(
-        default=5, description="Duration for TOUCH/NO_TOUCH contracts (minutes)", ge=1, le=60
+        default=5, description="Duration for TOUCH/NO_TOUCH contracts", ge=1
+    )
+    duration_unit_touch: Literal["t", "s", "m", "h", "d"] = Field(
+        default="m", description="Duration unit for TOUCH/NO_TOUCH contracts"
     )
     duration_range: int = Field(
-        default=5, description="Duration for STAYS_BETWEEN contracts (minutes)", ge=1, le=60
+        default=5, description="Duration for STAYS_BETWEEN contracts", ge=1
+    )
+    duration_unit_range: Literal["t", "s", "m", "h", "d"] = Field(
+        default="m", description="Duration unit for STAYS_BETWEEN contracts"
     )
 
 
