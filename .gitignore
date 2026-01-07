@@ -3,7 +3,9 @@ __pycache__/
 .env
 venv/
 .gemini/
-.agent/
+.agent/*
+!.agent/rules/
+!.agent/workflows/
 logs/
 data_cache/
 checkpoints/
