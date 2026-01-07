@@ -207,6 +207,10 @@ class TradingMetrics:
         self._alert_callbacks: list[Callable] = []
         self.reconstruction_error_threshold = 0.3  # Veto threshold
 
+        # Startup metrics
+        self.startup_duration = InternalGauge("startup_duration_seconds")
+        self.startup_buffered_events = InternalGauge("startup_buffered_events")
+
     def _init_prometheus_metrics(self) -> None:
         """Initialize Prometheus metrics."""
         self.prom_trades = Counter(
@@ -391,6 +395,8 @@ class TradingMetrics:
                 "daily_pnl": self.daily_pnl.get(),
                 "reconstruction_error": self.reconstruction_error.get(),
                 "account_balance": self.account_balance.get(),
+                "startup_duration_seconds": self.startup_duration.get(),
+                "startup_buffered_events": self.startup_buffered_events.get(),
             },
         }
 

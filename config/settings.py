@@ -433,6 +433,9 @@ class SystemConfig(BaseModel):
     system_db_path: str = Field(
         default="data_cache/trading_state.db", description="Unified system database path"
     )
+    challenger_model_dir: str = Field(
+        default="checkpoints/challengers", description="Directory for challenger models (A/B testing)"
+    )
 
 
 class Settings(BaseSettings):

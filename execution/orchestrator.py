@@ -39,16 +39,16 @@ class InferenceOrchestrator:
     def __init__(
         self,
         model: DerivOmniModel,
-        engine: Any, # DecisionEngine
-        executor: Any, # SafeTradeExecutor
-        feature_builder: Any,
+        engine: "DecisionEngine",  # From execution.decision
+        executor: "SafeTradeExecutor",  # From execution.safety
+        feature_builder: "FeatureBuilder",  # From data.features
         device: torch.device,
         settings: Settings,
         metrics: TradingMetrics,
         calibration_monitor: Optional[CalibrationMonitor] = None,
         trade_tracker: Optional[RealTradeTracker] = None,
         strategy_adapter: Optional[StrategyAdapter] = None,
-        tracer: Any = None
+        tracer: Optional["Tracer"] = None  # From opentelemetry.trace
     ):
         self.model = model
         self.engine = engine

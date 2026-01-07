@@ -94,6 +94,13 @@ async def run_live_trading(args):
     console_log(f"Symbol: {settings.trading.symbol} | Device: {device}", "INFO")
     logger.info(f"Starting live trading for {settings.trading.symbol}")
     logger.info(f"Device: {device}")
+    
+    # Initialize variables for reliable cleanup
+    model = None
+    client = None
+    engine = None
+    executor = None
+    shadow_store = None
 
     # M13: Disk Usage Management - DEPRECATED: Moved to background task
 
@@ -189,7 +196,7 @@ async def run_live_trading(args):
     # OPT5: Load Challenger Models (A/B Testing)
     # ══════════════════════════════════════════════════════════════════════════
     challengers = []
-    challenger_dir = Path("checkpoints/challengers")
+    challenger_dir = Path(settings.system.challenger_model_dir)
     if challenger_dir.exists():
         console_log(f"Scanning for challengers in {challenger_dir}...", "INIT")
         for ckpt_path in challenger_dir.glob("*.pt"):
@@ -906,14 +913,14 @@ async def run_live_trading(args):
         
         # Log statistics
         try:
-            if 'engine' in locals():
+            if engine:
                 stats = engine.get_statistics()
                 logger.info(f"Session statistics: {stats}")
         except Exception as e:
             logger.error(f"Error getting engine statistics: {e}")
 
         try:
-            if 'executor' in locals() and executor:
+            if executor:
                 # Log safety wrapper statistics
                 safety_stats = executor.get_safety_statistics()
                 logger.info(f"Safety statistics: {safety_stats}")

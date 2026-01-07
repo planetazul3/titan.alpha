@@ -17,16 +17,16 @@ from typing import Protocol, runtime_checkable, Optional, Union
 from execution.common.types import ExecutionRequest
 from execution.contract_params import ContractParameterService
 from execution.idempotency_store import SQLiteIdempotencyStore
-from execution.signals import TradeSignal
-from execution.signal_adapter_service import SignalAdapterService
 from observability.execution_logging import execution_logger
 from deriv_api import APIError
 
 logger = logging.getLogger(__name__)
 
 # Circuit breaker configuration
-CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5  # Number of consecutive failures to trigger
-CIRCUIT_BREAKER_WINDOW_SECONDS = 600   # 10 minute rolling window
+from config.constants import (
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    CIRCUIT_BREAKER_WINDOW_SECONDS,
+)
 
 @dataclass
 class TradeResult:
@@ -71,11 +71,6 @@ class DerivTradeExecutor:
         self.idempotency_store = idempotency_store
         self.param_service = ContractParameterService(settings)
         
-        # Use SignalAdapterService (I-001)
-        self.adapter_service = SignalAdapterService(settings, self.position_sizer)
-        # Keep internal adapter for legacy direct access if needed
-        self.adapter = self.adapter_service._internal_adapter
-        
         self._executed_count = 0
 
         self._failed_count = 0
@@ -85,19 +80,12 @@ class DerivTradeExecutor:
         
         logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
-    async def execute(self, request: ExecutionRequest | TradeSignal, check_only: bool = False) -> TradeResult:
+    async def execute(self, request: ExecutionRequest, check_only: bool = False) -> TradeResult:
         """
         Execute validated request on Deriv platform.
-        Handles both ExecutionRequest (direct) and TradeSignal (via adapter).
+        Strictly requires ExecutionRequest.
         """
-        # CRITICAL-FIX (C-001): Auto-adapt TradeSignal to ExecutionRequest
-        if isinstance(request, TradeSignal):
-            try:
-                # IMPORTANT-001: Use SignalAdapterService for centralized adaptation
-                request = await self.adapter_service.adapt(request)
-            except Exception as e:
-                logger.error(f"Failed to adapt signal {request.signal_id}: {e}")
-                return TradeResult(success=False, error=f"Signal Adaptation Error: {e}")
+
 
         # CRITICAL-FIX (C-001): Check circuit breaker status
         if self._is_circuit_breaker_active():
@@ -283,5 +271,5 @@ class MockTradeExecutor:
     async def shutdown(self) -> None:
         pass
         
-    def get_signals(self) -> list[TradeSignal]:
+    def get_signals(self) -> list[ExecutionRequest]:
         return self._signals # type: ignore[no-any-return]

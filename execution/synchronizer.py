@@ -30,10 +30,12 @@ class StartupSynchronizer:
     4. LIVE: Direct passthrough to the main buffer.
     """
     
-    def __init__(self, buffer: MarketDataBuffer):
+    def __init__(self, buffer: MarketDataBuffer, metrics: Optional[Any] = None):
         self.buffer = buffer
+        self.metrics = metrics
         self._buffering_active = True
         self._live_active = False
+        self._start_time = __import__('time').perf_counter()
         
         # Internal buffers for data arriving during history fetch
         self._buffered_ticks: List[float] = []
@@ -149,5 +151,14 @@ class StartupSynchronizer:
             
         for c in captured_candles:
             self.buffer.update_candle(c)
+        
+        # Record metrics if available
+        if self.metrics:
+            import time
+            duration = time.perf_counter() - self._start_time
+            total_buffered = self.stats["buffered_ticks_count"] + self.stats["buffered_candles_count"]
+            self.metrics.startup_duration.set(duration)
+            self.metrics.startup_buffered_events.set(total_buffered)
+            logger.info(f"[SYNC] Startup metrics: duration={duration:.3f}s, buffered_events={total_buffered}")
             
         logger.info("[SYNC] Synchronization complete. System is LIVE.")

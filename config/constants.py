@@ -172,3 +172,11 @@ FEATURE_SCHEMA_VERSION: Final[str] = "1.0.0"
 Current version of the feature engineering schema.
 Models must use a compatible schema version to be loaded.
 """
+
+# Circuit Breaker Configuration
+CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final[int] = 5
+"""Number of consecutive failures to trigger circuit breaker."""
+
+CIRCUIT_BREAKER_WINDOW_SECONDS: Final[int] = 600
+"""Rolling window in seconds (10 minutes) for failure tracking."""
+

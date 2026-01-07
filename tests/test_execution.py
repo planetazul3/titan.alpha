@@ -344,27 +344,30 @@ class TestTradeExecutor:
     """Tests for TradeExecutor abstraction."""
 
     def test_mock_executor_records_signals(self):
-        """MockTradeExecutor should record signals without executing."""
+        """MockTradeExecutor should record requests without executing."""
         import asyncio
 
         from execution.executor import MockTradeExecutor
-        from execution.signals import TradeSignal
+        from execution.common.types import ExecutionRequest
+        from config.constants import CONTRACT_TYPES
 
         executor = MockTradeExecutor()
 
-        signal = TradeSignal(
-            signal_type=SIGNAL_TYPES.REAL_TRADE,
+        request = ExecutionRequest(
+            signal_id="sig_123",
+            symbol="R_100",
             contract_type=CONTRACT_TYPES.RISE_FALL,
-            direction="CALL",
-            probability=0.85,
-            timestamp=datetime.now(timezone.utc),
+            stake=10.0,
+            duration=1,
+            duration_unit="m"
         )
 
-        result = asyncio.run(executor.execute(signal))
+        result = asyncio.run(executor.execute(request))
 
         assert result.success is True
         assert result.contract_id.startswith("MOCK_")
         assert len(executor.get_signals()) == 1
+        assert executor.get_signals()[0].signal_id == "sig_123"
 
     def test_trade_result_defaults(self):
         """TradeResult should have sensible defaults."""
