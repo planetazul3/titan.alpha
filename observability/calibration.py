@@ -2,6 +2,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# REC-002: Optional Prometheus integration
+try:
+    from prometheus_client import Counter, Gauge
+    HAS_PROMETHEUS = True
+except ImportError:
+    HAS_PROMETHEUS = False
+
+
 class CalibrationMonitor:
     """
     Monitor reconstruction errors for calibration issues.
@@ -10,11 +18,39 @@ class CalibrationMonitor:
     - Tracking of reconstruction error history
     - Shadow-only mode when errors are persistently high
     - Escalating alerts for sustained calibration issues
+    - Prometheus metrics export (REC-002)
 
     This enables graceful degradation: instead of blocking all trades
     when thresholds are miscalibrated, the system can fall back to
     shadow-only mode to continue learning while protecting the account.
     """
+
+    # Class-level Prometheus metrics (created once)
+    _prom_initialized = False
+    _prom_recon_error: "Gauge | None" = None
+    _prom_shadow_activations: "Counter | None" = None
+    _prom_consecutive_high: "Gauge | None" = None
+
+    @classmethod
+    def _init_prometheus_metrics(cls) -> None:
+        """Initialize Prometheus metrics (once per process)."""
+        if cls._prom_initialized or not HAS_PROMETHEUS:
+            return
+        
+        cls._prom_recon_error = Gauge(
+            "xtitan_calibration_reconstruction_error",
+            "Current reconstruction error from calibration monitor"
+        )
+        cls._prom_shadow_activations = Counter(
+            "xtitan_calibration_shadow_mode_activations_total",
+            "Total times shadow-only mode was activated"
+        )
+        cls._prom_consecutive_high = Gauge(
+            "xtitan_calibration_consecutive_high_errors",
+            "Current consecutive high error count"
+        )
+        cls._prom_initialized = True
+        logger.info("CalibrationMonitor Prometheus metrics initialized")
 
     def __init__(
         self, error_threshold: float = 1.0, consecutive_threshold: int = 5, window_size: int = 20
@@ -33,8 +69,10 @@ class CalibrationMonitor:
         self.consecutive_high_count = 0
         self.shadow_only_mode = False
         self.shadow_only_reason = ""
-        self.shadow_only_reason = ""
         self.alert_escalation_level = 0  # 0=none, 1=warning, 2=critical
+
+        # REC-002: Initialize Prometheus metrics
+        self._init_prometheus_metrics()
 
     def reset(self) -> None:
         """Reset monitor state (e.g. after model reload)."""
@@ -68,6 +106,10 @@ class CalibrationMonitor:
                     f"[SHADOW-ONLY] Activating shadow-only mode: {self.shadow_only_reason}"
                 )
                 self.alert_escalation_level = 2
+                
+                # REC-002: Export shadow activation to Prometheus
+                if HAS_PROMETHEUS and self._prom_shadow_activations:
+                    self._prom_shadow_activations.inc()
 
         # Escalate alerts based on persistence
         if len(self.errors) >= self.window_size:
@@ -80,6 +122,13 @@ class CalibrationMonitor:
                     f"[CALIBRATION] {high_error_ratio * 100:.0f}% of recent inferences have "
                     f"high reconstruction error. Consider model retraining."
                 )
+
+        # REC-002: Export current metrics to Prometheus
+        if HAS_PROMETHEUS:
+            if self._prom_recon_error:
+                self._prom_recon_error.set(error)
+            if self._prom_consecutive_high:
+                self._prom_consecutive_high.set(self.consecutive_high_count)
 
     def should_skip_real_trades(self) -> bool:
         """Return True if real trades should be skipped (shadow-only mode)."""
