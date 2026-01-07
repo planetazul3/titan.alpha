@@ -13,7 +13,7 @@ Backoff Formula: min(BASE_BACKOFF * 2^(failures-1), MAX_BACKOFF)
 - MAX_BACKOFF_SECONDS = 1800 (30 minutes)
 
 Implementation: 2026-01-07 (ADR-009)
-Reference: docs/plans/live_script_refactoring.md Section 4.2
+Reference: docs/adr/009-live-script-modularization.md
 """
 
 from __future__ import annotations

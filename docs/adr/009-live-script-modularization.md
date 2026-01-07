@@ -35,5 +35,4 @@ Extract nested functions into standalone modules using `LiveTradingContext` for 
 
 ## References
 
-- [live_script_refactoring.md](file:///home/planetazul3/x.titan/docs/plans/live_script_refactoring.md)
 - [ARCHITECTURE_SSOT.md](file:///home/planetazul3/x.titan/docs/reference/ARCHITECTURE_SSOT.md)

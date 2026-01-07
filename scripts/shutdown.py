@@ -8,7 +8,7 @@ Implements production best practices for async shutdown:
 - Timeout for forced shutdown (prevents hang)
 - Gather all tasks with return_exceptions=True
 
-Reference: docs/plans/live_script_refactoring.md Section 3.2
+Reference: docs/adr/009-live-script-modularization.md
 """
 
 from __future__ import annotations

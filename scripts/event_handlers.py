@@ -14,7 +14,7 @@ Inference Logic:
 - Regime detector update on new candles
 
 Implementation: 2026-01-07 (ADR-009)
-Reference: docs/plans/live_script_refactoring.md Section 4.3
+Reference: docs/adr/009-live-script-modularization.md
 """
 
 from __future__ import annotations
