@@ -495,6 +495,12 @@ class Settings(BaseSettings):
     deriv_app_id: int = Field(default=1089, description="Deriv application ID")
     
     dashboard_api_key: SecretStr = Field(default=SecretStr("titan-admin"), description="API key for dashboard access")
+    
+    # REC-001: Configuration schema versioning
+    schema_version: str = Field(
+        default="1.0.0",
+        description="Configuration schema version (semantic versioning). Increment on breaking changes.",
+    )
 
     def get_device(self) -> torch.device:
         """Resolve and return the compute device based on preference."""
@@ -595,8 +601,9 @@ def load_settings() -> Settings:
         
         if is_test:
             logger.info("TEST MODE DETECTED: Loaded configuration from .env.test")
-            
-        logger.info(f"Settings loaded successfully. Environment: {settings.environment}")
+        
+        # REC-001: Log schema version at startup for debugging
+        logger.info(f"Settings loaded successfully. Environment: {settings.environment}, Schema: v{settings.schema_version}")
         logger.debug(f"Device preference: {settings.device_preference}")
         return settings
     except Exception as e:
