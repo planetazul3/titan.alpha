@@ -73,43 +73,9 @@ async def test_idempotency_failure_blocks_execution():
     assert "Idempotency check failure" in result.error
     client.buy.assert_not_called()
 
-@pytest.mark.asyncio
-async def test_circuit_breaker_triggers_on_repeated_failures():
-    """Test that repeated execution failures trigger the circuit breaker.
-    
-    Multi-failure circuit breaker now triggers on 5 consecutive failures
-    within a 10-minute rolling window (per executor_resolver_audit.md fix).
-    """
-    client = MagicMock()
-    client.get_balance = AsyncMock(return_value=1000.0)
-    
-    # Mocking idempotency store failure
-    store = MagicMock()
-    store.get_contract_id_async = AsyncMock(side_effect=Exception("Idempotency check failure"))
-    
-    policy = ExecutionPolicy()
-    settings = create_real_settings()
-    
-    executor = DerivTradeExecutor(client, settings, policy=policy, idempotency_store=store)
-    
-    signal = ExecutionRequest(
-        signal_id="SIG_CB_TEST",
-        symbol="R_100",
-        contract_type="RISE_FALL",
-        stake=10.0,
-        duration=1,
-        duration_unit="m"
-    )
-    
-    # Failures 1-4: Circuit breaker should NOT be active
-    for i in range(4):
-        await executor.execute(signal)
-        assert policy._circuit_breaker_active is False, f"Should not trigger on failure {i+1}"
-    
-    # 5th failure: Circuit breaker should trigger
-    await executor.execute(signal)
-    assert policy._circuit_breaker_active is True
-    assert "Multi-failure circuit breaker" in policy._circuit_breaker_reason
+# Note: test_circuit_breaker_triggers_on_repeated_failures was removed.
+# The executor's internal circuit breaker was refactored to delegate to DerivClient.
+# The delegated behavior is now tested in tests/test_executor_circuit_breaker.py.
 
 @pytest.mark.asyncio
 async def test_policy_integration_blocks_decision():

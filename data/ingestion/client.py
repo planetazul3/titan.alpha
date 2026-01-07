@@ -475,7 +475,7 @@ class DerivClient:
         """
         while True:  # Outer reconnection loop
             # I01 Fix: Wait if circuit is open
-            await self._circuit_breaker.wait_if_open()
+            await self.circuit_breaker.wait_if_open()
             
             if not self.api:
                 raise RuntimeError("Client not connected")
@@ -486,7 +486,7 @@ class DerivClient:
                 source = await self.api.subscribe({"ticks": self.symbol})
                 
                 # I01: Record success on subscription
-                self._circuit_breaker.record_success()
+                self.circuit_breaker.record_success()
 
                 # RxPY to async generator adapter
                 # I02 Fix: Bounded queue to prevent memory exhaustion under backpressure
@@ -554,13 +554,13 @@ class DerivClient:
             except Exception as e:
                 logger.error(f"Tick stream subscription error: {e}")
                 # I01: Record failure
-                self._circuit_breaker.record_failure()
+                self.circuit_breaker.record_failure()
 
             # Attempt reconnection
             if not await self._reconnect():
                 # I01: Record failure on reconnection failure
-                self._circuit_breaker.record_failure()
-                if self._circuit_breaker.state == CircuitState.OPEN:
+                self.circuit_breaker.record_failure()
+                if self.circuit_breaker.state == CircuitState.OPEN:
                     logger.error("Circuit breaker open - will retry after cooldown")
                     continue  # Continue loop, wait_if_open will block
                 raise ConnectionError("Failed to reconnect tick stream after multiple attempts")
@@ -591,7 +591,7 @@ class DerivClient:
         """
         while True:  # Outer reconnection loop
             # I01 Fix: Wait if circuit is open
-            await self._circuit_breaker.wait_if_open()
+            await self.circuit_breaker.wait_if_open()
             
             if not self.api:
                 raise RuntimeError("Client not connected")
@@ -611,7 +611,7 @@ class DerivClient:
                 )
                 
                 # I01: Record success on subscription
-                self._circuit_breaker.record_success()
+                self.circuit_breaker.record_success()
 
                 # I02 Fix: Bounded queue to prevent memory exhaustion
                 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -680,13 +680,13 @@ class DerivClient:
             except Exception as e:
                 logger.error(f"Candle stream subscription error: {e}")
                 # I01: Record failure
-                self._circuit_breaker.record_failure()
+                self.circuit_breaker.record_failure()
 
             # Attempt reconnection
             if not await self._reconnect():
                 # I01: Record failure on reconnection failure  
-                self._circuit_breaker.record_failure()
-                if self._circuit_breaker.state == CircuitState.OPEN:
+                self.circuit_breaker.record_failure()
+                if self.circuit_breaker.state == CircuitState.OPEN:
                     logger.error("Circuit breaker open - will retry after cooldown")
                     continue  # Continue loop, wait_if_open will block
                 raise ConnectionError("Failed to reconnect candle stream after multiple attempts")
@@ -733,7 +733,7 @@ class DerivClient:
             raise RuntimeError("Client not connected")
         
         # OPT1: Check circuit breaker
-        if not self._circuit_breaker.should_allow_request():
+        if not self.circuit_breaker.should_allow_request():
             raise RuntimeError("Circuit breaker open - trading suspended")
         
         c_type = contract_type.upper()
@@ -766,13 +766,13 @@ class DerivClient:
             buy = await self.api.buy({"buy": prop_id, "price": amount})
 
             # OPT1: Record success
-            self._circuit_breaker.record_success()
+            self.circuit_breaker.record_success()
 
             return cast(dict[str, Any], buy["buy"])
         except Exception as e:
             # OPT1: Record failure for API errors
             logger.error(f"Buy failed: {e}")
-            self._circuit_breaker.record_failure()
+            self.circuit_breaker.record_failure()
             raise e
         finally:
             # H10: Garbage collection - forget the proposal stream to prevent leaks
@@ -806,7 +806,7 @@ class DerivClient:
             raise RuntimeError("Client not connected")
         
         # OPT1: Check circuit breaker
-        if not self._circuit_breaker.should_allow_request():
+        if not self.circuit_breaker.should_allow_request():
             raise RuntimeError("Circuit breaker open")
         
         try:
@@ -814,11 +814,11 @@ class DerivClient:
                 "proposal_open_contract": 1, 
                 "scope": "open"
             })
-            self._circuit_breaker.record_success()
+            self.circuit_breaker.record_success()
             return cast(list[dict[str, Any]], res)
         except Exception as e:
             logger.error(f"Failed to fetch open contracts: {e}")
-            self._circuit_breaker.record_failure()
+            self.circuit_breaker.record_failure()
             raise e
 
     async def subscribe_contract(
@@ -912,7 +912,7 @@ class DerivClient:
         
         try:
             # OPT1: Check circuit breaker
-            if not self._circuit_breaker.should_allow_request():
+            if not self.circuit_breaker.should_allow_request():
                 logger.warning(f"[CONTRACT] Circuit breaker open, skipping subscription for {contract_id}")
                 return False
 
@@ -925,7 +925,7 @@ class DerivClient:
             })
             
             # Record success on successful subscription
-            self._circuit_breaker.record_success()
+            self.circuit_breaker.record_success()
             
             # Subscribe to the Observable with callbacks
             # CRITICAL: Capture disposable to prevent memory leak in long-running app
@@ -937,7 +937,7 @@ class DerivClient:
             
         except Exception as e:
             logger.error(f"[CONTRACT] Failed to subscribe to {contract_id}: {e}")
-            self._circuit_breaker.record_failure()
+            self.circuit_breaker.record_failure()
             return True # Return True to avoid infinite retry loops in caller if checking strict boolean? 
             # Original code returned True on error (line 874). 
             # If we return False, caller might retry immediately. 
@@ -979,7 +979,7 @@ class DerivClient:
         Returns:
             List of history items (dicts)
         """
-        await self._circuit_breaker.wait_if_open()
+        await self.circuit_breaker.wait_if_open()
         if not self.api:
             raise RuntimeError("Client not connected")
             
@@ -1015,7 +1015,7 @@ class DerivClient:
             
         except Exception as e:
             logger.error(f"Failed to fetch history: {e}")
-            self._circuit_breaker.record_failure()
+            self.circuit_breaker.record_failure()
             return []
             
         return []

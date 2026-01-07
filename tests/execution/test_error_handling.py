@@ -3,13 +3,18 @@ import unittest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
 from execution.executor import DerivTradeExecutor, TradeResult
-from execution.signals import TradeSignal
+from execution.common.types import ExecutionRequest
 from deriv_api import APIError
 from config.settings import Settings
+
+from data.ingestion.client import CircuitState
 
 class TestExecutorErrorHandling(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client = AsyncMock()
+        # Mock the circuit state to CLOSED to allow execution
+        self.client.circuit_state = CircuitState.CLOSED
+        
         self.settings = MagicMock(spec=Settings)
         self.settings.trading = MagicMock()
         self.settings.trading.stake_amount = 10.0
@@ -25,15 +30,14 @@ class TestExecutorErrorHandling(unittest.IsolatedAsyncioTestCase):
         
         self.executor = DerivTradeExecutor(self.client, self.settings)
         
-        # Dummy signal
-        self.signal = TradeSignal(
+        # Dummy signal as ExecutionRequest
+        self.request = ExecutionRequest(
             signal_id="test_sig_1",
-            signal_type="ML_MODEL",
-            timestamp=1000.0,
-            direction="CALL",
-            contract_type="RISE_FALL",
-            probability=0.8,
-            metadata={"symbol": "R_100"}
+            symbol="R_100",
+            contract_type="CALL",
+            stake=10.0,
+            duration=1,
+            duration_unit="m"
         )
 
     async def test_api_error_handling(self):
@@ -43,7 +47,7 @@ class TestExecutorErrorHandling(unittest.IsolatedAsyncioTestCase):
         error.code = "RateLimit"
         self.client.buy.side_effect = error
         
-        result = await self.executor.execute(self.signal)
+        result = await self.executor.execute(self.request)
         
         self.assertFalse(result.success)
         self.assertIn("APIError", result.error)
@@ -55,7 +59,7 @@ class TestExecutorErrorHandling(unittest.IsolatedAsyncioTestCase):
         """Test handling of ConnectionError."""
         self.client.buy.side_effect = ConnectionError("Network down")
         
-        result = await self.executor.execute(self.signal)
+        result = await self.executor.execute(self.request)
         
         self.assertFalse(result.success)
         self.assertEqual(result.error, "ConnectionError")
