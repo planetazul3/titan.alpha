@@ -933,41 +933,9 @@ async def run_live_trading(args):
 
 if __name__ == "__main__":
     from scripts.shutdown_handler import run_async_with_graceful_shutdown
+    from scripts.cli import parse_live_trading_args
 
-    parser = argparse.ArgumentParser(description="Live trading")
-    parser.add_argument(
-        "--checkpoint", type=str, default=None, help="Checkpoint name to load (e.g., 'best_model')"
-    )
-    parser.add_argument(
-        "--checkpoint-dir", type=str, default="checkpoints", help="Checkpoint directory"
-    )
-    parser.add_argument("--test", action="store_true", help="Test connection only, don't trade")
-    parser.add_argument(
-        "--shadow-only", action="store_true", help="Run in shadow mode (no real trades)"
-    )
-    # I02: Checkpoint verification bypass (for development/debugging only)
-    parser.add_argument(
-        "--skip-checkpoint-verify", action="store_true", 
-        help="Skip checkpoint verification (not recommended for production)"
-    )
-    # Compounding / Position Sizing Arguments
-    parser.add_argument(
-        "--compound", action="store_true", help="Enable compounding strategy (alias for --strategy compound)"
-    )
-    parser.add_argument(
-        "--strategy", type=str, choices=["fixed", "compound", "martingale", "kelly"], 
-        help="Position sizing strategy (default: fixed)"
-    )
-    parser.add_argument(
-        "--x-amount", type=str, default=None, 
-        help="Multiplier/Type for compound/martingale (e.g., '2x', 'reinvest')"
-    )
-    parser.add_argument(
-        "--winstrikes", type=int, default=5, 
-        help="Max consecutive wins/losses for compounding/martingale (default: 5)"
-    )
-
-    args = parser.parse_args()
+    args = parse_live_trading_args()
     sys.exit(run_async_with_graceful_shutdown(run_live_trading(args)))
 
 
