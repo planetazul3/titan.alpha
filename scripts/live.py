@@ -58,7 +58,7 @@ from execution.orchestrator import InferenceOrchestrator
 from scripts.context import LiveTradingContext, HotReloadState
 from scripts.heartbeat import heartbeat_task
 from scripts.maintenance import maintenance_task as maintenance_task_module
-from scripts.event_handlers import MarketEventHandler
+from scripts.event_handlers import MarketEventHandler, tick_processor, candle_processor
 
 # I02: Checkpoint verification utility
 from tools.verify_checkpoint import verify_checkpoint
@@ -511,185 +511,17 @@ async def run_live_trading(args):
             calibration_monitor=calibration_monitor,
             system_monitor=system_monitor,
             metrics=metrics,
+            # Event Processing (Phase 5)
+            synchronizer=synchronizer,
+            event_bus=event_bus,
+            regime_veto=regime_veto,
+            challengers=challengers,
             args=args,
         )
         logger.info("LiveTradingContext initialized for extracted modules")
 
-        async def process_ticks():
-            """Process tick events from normalized MarketEventBus."""
-            nonlocal tick_count, last_tick_time, last_tick_log_count
-            first_tick = True
-            async for tick_event in event_bus.subscribe_ticks(symbol):
-                # H8 (FIXED): Update liveness immediately on receipt
-                last_tick_time = datetime.now()
-                try:
-                    # Update heartbeat timestamp
-                    # Update heartbeat timestamp
-                    
-                    logger.debug(f"Tick received: {tick_event}")
-                    
-                    
-                    # CRITICAL-001 (FIXED): Check Synchronizer (CONTINUE, don't RETURN)
-                    if synchronizer.handle_tick(tick_event.price):
-                        # Event buffered, skip live processing
-                        if not first_tick_received.is_set():
-                             first_tick_received.set()
-                        continue  # Correct control flow: continue loop, don't exit coroutine!
-
-                    # Strategy sees TickEvent, not broker-specific message
-                    buffer.append_tick(tick_event.price)
-                    tick_count += 1
-                    
-                    # Log first tick and then every 100 ticks
-                    if first_tick:
-                        console_log(f"First LIVE tick received: {tick_event.price:.2f}", "SUCCESS")
-                        first_tick = False
-                    elif tick_count - last_tick_log_count >= 100:
-                        console_log(
-                            f"Received {tick_count} ticks (latest: {tick_event.price:.2f})", "DATA"
-                        )
-                        last_tick_log_count = tick_count
-                except Exception as e:
-                    logger.error(f"Error processing tick: {e}", exc_info=True)
-
-        # C04 (FIXED): Removed duplicate historical data preloading.
-        # History is now fetched exclusively in the Synchronization Phase.
-        logger.info("[STARTUP] Skipping legacy preloading (consolidated into sync phase)")
-
-
-        async def process_candles():
-            """Process candle events from normalized MarketEventBus."""
-            
-            nonlocal candle_count, inference_count
-            first_candle = True
-            import time
-            last_inference_time = 0.0
-
-            
-            async for candle_event in event_bus.subscribe_candles(symbol, interval=60):
-                start_time = datetime.now()
-                try:
-                    if not candle_event:
-                        continue
-                        
-                    # CRITICAL-001 (FIXED): Startup buffering via Synchronizer
-                    if synchronizer.handle_candle(candle_event):
-                        logger.info(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
-                        continue  # Correct control flow: continue loop, don't exit coroutine!
-                        
-                    # Buffer handles candle close detection internally
-                    is_new_candle = buffer.update_candle(candle_event)
-                    candle_count += 1
-
-                    # Update regime detector with current price history on new candles
-                    # This prevents the detector from becoming stale after startup
-                    if is_new_candle and hasattr(regime_veto, 'update_prices'):
-                        closes = buffer.get_candles_array(include_forming=False)[:, 3]
-                        regime_veto.update_prices(closes)
-
-                    if first_candle:
-                        console_log(
-                            f"First LIVE candle received (O:{candle_event.open:.2f} H:{candle_event.high:.2f} L:{candle_event.low:.2f} C:{candle_event.close:.2f})",
-                            "SUCCESS",
-                        )
-                        first_candle = False
-
-                    # H6: Staleness Veto (per ARCHITECTURE_SSOT.md)
-                    # Prevent trading on old data if system lags
-                    # CRITICAL RULE 2: Timezone for Shadow Resolution (Must be UTC)
-                    now_utc = datetime.now(timezone.utc)
-                    latency = (now_utc - candle_event.timestamp).total_seconds()
-                    
-                    stale_threshold = settings.heartbeat.stale_data_threshold_seconds
-                    
-                    if latency > stale_threshold:
-                        logger.warning(
-                            f"[LATENCY] Skipping stale candle (closed {latency:.1f}s ago). "
-                            f"Threshold: {stale_threshold:.1f}s"
-                        )
-                        console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
-                        continue
-                    
-                    # Log processing time for observability
-                    process_time = (datetime.now() - start_time).total_seconds()
-                    
-                    if is_new_candle and buffer.is_ready():
-                         candle_msg = f"Running inference #{inference_count + 1}..."
-                    else:
-                         candle_msg = f"Skipping (ready={buffer.is_ready()}, new={is_new_candle})"
-
-                    console_log(f"Candle closed @ {candle_event.close:.2f} - {candle_msg} (latency: {latency:.1f}s)", "BRAIN")
-
-                    # C03 (FIXED): Ambiguous Control Flow
-                    # Separated Inference and Shadow Resolution logic explicitly 
-                    
-                    # 1. SHADOW RESOLUTION (Runs on EVERY candle close)
-                    # CRITICAL RULE 3: Deterministic resolution
-                    if is_new_candle:
-                         # Use candle timestamp for deterministic resolution
-                        candle_time = candle_event.timestamp
-                        resolved_count = await resolver.resolve_trades(
-                            current_price=candle_event.close,
-                            current_time=candle_time,
-                            high_price=candle_event.high,
-                            low_price=candle_event.low,
-                        )
-                        if resolved_count > 0:
-                            console_log(
-                                f"🎯 Resolved {resolved_count} shadow trade(s)",
-                                "SUCCESS",
-                            )
-                            logger.info(f"Resolved {resolved_count} shadow trades this candle")
-
-                    # 2. INFERENCE TRIGGER
-                    should_run_inference = False
-                    
-                    if is_new_candle and buffer.is_ready():
-                        import time
-                        time_since_last = time.time() - last_inference_time
-                        cooldown_active = time_since_last < 30.0
-                        
-                        if cooldown_active:
-                            logger.debug(f"[COOLDOWN] Skipping inference ({time_since_last:.1f}s < 30s)")
-                        else:
-                            should_run_inference = True
-
-                    # 3. EXECUTE INFERENCE
-                    if should_run_inference:
-                        console_log(
-                            f"Candle closed @ {candle_event.close:.2f} - Running inference #{inference_count + 1}... "
-                            f"(latency: {latency:.1f}s)",
-                            "MODEL",
-                        )
-                        logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
-
-                        try:
-                            # Issue 6 (FIXED): Delegated to Orchestrator
-                            # Issue 3 (FIXED): Orchestrator handles bounded concurrency for challengers
-                            
-                            snapshot = buffer.get_snapshot()
-                            
-                            reconstruction_error = await orchestrator.run_cycle(
-                                market_snapshot=snapshot,
-                                challengers=challengers
-                            )
-                            
-                            # Use return value for trend monitoring
-                            if reconstruction_error is not None and reconstruction_error > 0.3:
-                                console_log(f"⚠️ High reconstruction error: {reconstruction_error:.3f}", "WARN")
-                            
-                            inference_count += 1
-                            last_inference_time = time.time()
-                            
-                        except Exception as inf_e:
-                            logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
-                            metrics.record_error("inference_failure")
-
-                except Exception as e:
-                    logger.error(f"Error processing candle: {e}", exc_info=True)
-
-        # NOTE: heartbeat() and maintenance_task() functions removed
-        # Now using extracted modules: heartbeat_task(ctx) and maintenance_task_module(ctx)
+        # NOTE: process_ticks() and process_candles() functions removed
+        # Now using extracted modules: tick_processor(ctx) and candle_processor(ctx)
 
         # ══════════════════════════════════════════════════════════════════════
         # SYNCHRONIZATION PHASE
@@ -715,10 +547,10 @@ async def run_live_trading(args):
         # Issue C (FIXED): Use TaskGroup for deterministic exception propagation
         # TaskGroup automatically cancels all tasks when any task raises an exception
         # and re-raises the exception after cleanup.
-        # PHASE 5: Using extracted modules with LiveTradingContext
+        # PHASE 5: ALL tasks now use extracted modules with LiveTradingContext
         async with asyncio.TaskGroup() as tg:
-            tg.create_task(process_ticks(), name="tick_processor")
-            tg.create_task(process_candles(), name="candle_processor")
+            tg.create_task(tick_processor(ctx), name="tick_processor")  # Extracted module
+            tg.create_task(candle_processor(ctx), name="candle_processor")  # Extracted module
             tg.create_task(heartbeat_task(ctx), name="heartbeat_monitor")  # Extracted module
             tg.create_task(maintenance_task_module(ctx), name="maintenance_worker")  # Extracted module
             

@@ -271,3 +271,190 @@ class MarketEventHandler:
             if self.context.metrics:
                 self.context.metrics.record_error("inference_failure")
             return False
+
+
+async def tick_processor(context: LiveTradingContext) -> None:
+    """
+    Process tick events from event bus with synchronizer support.
+    
+    Replaces nested process_ticks() function in live.py.
+    
+    Args:
+        context: LiveTradingContext with event_bus, synchronizer, buffer
+    """
+    from scripts.console_utils import console_log
+    
+    if context.event_bus is None or context.settings is None:
+        logger.error("tick_processor: Missing event_bus or settings")
+        return
+    
+    symbol = context.settings.trading.symbol
+    first_tick = True
+    last_log_count = 0
+    
+    logger.info(f"tick_processor started for {symbol}")
+    
+    async for tick_event in context.event_bus.subscribe_ticks(symbol):
+        # Check shutdown
+        if context.shutdown_event.is_set():
+            logger.info("tick_processor: Shutdown event set")
+            break
+        
+        # Update liveness immediately (H8)
+        context.last_tick_time = datetime.now(timezone.utc)
+        
+        try:
+            logger.debug(f"Tick received: {tick_event}")
+            
+            # Synchronizer check for startup buffering
+            if context.synchronizer and context.synchronizer.handle_tick(tick_event.price):
+                continue
+            
+            # Add to buffer
+            if context.buffer:
+                context.buffer.append_tick(tick_event.price)
+            
+            tick_count = context.increment_tick_count()
+            
+            # Log first tick and every 100
+            if first_tick:
+                console_log(f"First LIVE tick received: {tick_event.price:.2f}", "SUCCESS")
+                first_tick = False
+            elif tick_count - last_log_count >= 100:
+                console_log(f"Received {tick_count} ticks (latest: {tick_event.price:.2f})", "DATA")
+                last_log_count = tick_count
+                
+        except asyncio.CancelledError:
+            logger.info("tick_processor cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error processing tick: {e}", exc_info=True)
+    
+    logger.info("tick_processor exiting")
+
+
+async def candle_processor(context: LiveTradingContext) -> None:
+    """
+    Process candle events from event bus with full safety checks.
+    
+    Replaces nested process_candles() function in live.py.
+    Preserves H6 staleness veto, regime updates, shadow resolution.
+    
+    Args:
+        context: LiveTradingContext with all dependencies
+    """
+    from scripts.console_utils import console_log
+    
+    if context.event_bus is None or context.settings is None:
+        logger.error("candle_processor: Missing event_bus or settings")
+        return
+    
+    symbol = context.settings.trading.symbol
+    first_candle = True
+    last_inference_time = 0.0
+    
+    logger.info(f"candle_processor started for {symbol}")
+    
+    async for candle_event in context.event_bus.subscribe_candles(symbol, interval=60):
+        # Check shutdown
+        if context.shutdown_event.is_set():
+            logger.info("candle_processor: Shutdown event set")
+            break
+        
+        start_time = datetime.now()
+        
+        try:
+            if not candle_event:
+                continue
+            
+            # Synchronizer check for startup buffering
+            if context.synchronizer and context.synchronizer.handle_candle(candle_event):
+                logger.info(f"[STARTUP] Buffered candle at {candle_event.timestamp}")
+                continue
+            
+            # Buffer update
+            is_new_candle = False
+            if context.buffer:
+                is_new_candle = context.buffer.update_candle(candle_event)
+            
+            context.increment_candle_count()
+            
+            # Update regime detector with price history
+            if is_new_candle and context.regime_veto and hasattr(context.regime_veto, 'update_prices'):
+                closes = context.buffer.get_candles_array(include_forming=False)[:, 3]
+                context.regime_veto.update_prices(closes)
+            
+            # First candle log
+            if first_candle:
+                console_log(
+                    f"First LIVE candle (O:{candle_event.open:.2f} H:{candle_event.high:.2f} "
+                    f"L:{candle_event.low:.2f} C:{candle_event.close:.2f})",
+                    "SUCCESS"
+                )
+                first_candle = False
+            
+            # H6 Staleness Veto
+            now_utc = datetime.now(timezone.utc)
+            candle_time = candle_event.timestamp
+            if candle_time.tzinfo is None:
+                candle_time = candle_time.replace(tzinfo=timezone.utc)
+            
+            latency = (now_utc - candle_time).total_seconds()
+            stale_threshold = context.settings.heartbeat.stale_data_threshold_seconds
+            
+            if latency > stale_threshold:
+                logger.warning(f"[H6 VETO] Skipping stale candle ({latency:.1f}s > {stale_threshold}s)")
+                console_log(f"Skipping stale candle ({latency:.1f}s lag)", "WARN")
+                continue
+            
+            # Shadow Resolution (every new candle)
+            if is_new_candle and context.resolver:
+                resolved = await context.resolver.resolve_trades(
+                    current_price=candle_event.close,
+                    current_time=candle_event.timestamp,
+                    high_price=candle_event.high,
+                    low_price=candle_event.low,
+                )
+                if resolved > 0:
+                    console_log(f"🎯 Resolved {resolved} shadow trade(s)", "SUCCESS")
+                    logger.info(f"Resolved {resolved} shadow trades this candle")
+            
+            # Inference (with cooldown)
+            if is_new_candle and context.buffer and context.buffer.is_ready():
+                time_since_last = time.time() - last_inference_time
+                
+                if time_since_last < INFERENCE_COOLDOWN_SECONDS:
+                    logger.debug(f"[COOLDOWN] Skipping inference ({time_since_last:.1f}s < 30s)")
+                else:
+                    console_log(
+                        f"Candle closed @ {candle_event.close:.2f} - Running inference... (latency: {latency:.1f}s)",
+                        "MODEL"
+                    )
+                    logger.info(f"Candle closed: running inference (latency: {latency:.3f}s)")
+                    
+                    try:
+                        snapshot = context.buffer.get_snapshot()
+                        
+                        result = await context.orchestrator.run_cycle(
+                            market_snapshot=snapshot,
+                            challengers=context.challengers
+                        )
+                        
+                        if result is not None and result > 0.3:
+                            console_log(f"⚠️ High reconstruction error: {result:.3f}", "WARN")
+                        
+                        context.increment_inference_count()
+                        last_inference_time = time.time()
+                        
+                    except Exception as inf_e:
+                        logger.error(f"Inference cycle failed: {inf_e}", exc_info=True)
+                        if context.metrics:
+                            context.metrics.record_error("inference_failure")
+                            
+        except asyncio.CancelledError:
+            logger.info("candle_processor cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error processing candle: {e}", exc_info=True)
+    
+    logger.info("candle_processor exiting")

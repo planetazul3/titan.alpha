@@ -95,6 +95,14 @@ class LiveTradingContext:
     strategy_adapter: SignalAdapterService | None = None
     
     # ═══════════════════════════════════════════════════════════════════════
+    # Event Processing (Added for Phase 5 integration)
+    # ═══════════════════════════════════════════════════════════════════════
+    synchronizer: Any | None = None  # StartupSynchronizer
+    event_bus: Any | None = None  # DerivEventAdapter
+    regime_veto: Any | None = None  # RegimeVeto
+    challengers: list = field(default_factory=list)  # Challenger model stacks
+    
+    # ═══════════════════════════════════════════════════════════════════════
     # Monitors & Observability
     # ═══════════════════════════════════════════════════════════════════════
     calibration_monitor: CalibrationMonitor | None = None
