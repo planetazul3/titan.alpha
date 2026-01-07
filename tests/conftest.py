@@ -52,3 +52,15 @@ except ImportError:
     sys.modules["pandas"] = MagicMock()
 
 
+import pytest
+from config.settings import load_settings
+
+
+@pytest.fixture
+def test_settings():
+    """Shared Settings fixture using load_settings() for proper test isolation.
+    
+    This fixture correctly uses .env.test and handles frozen model constraints.
+    For tests needing custom values, use settings.model_copy(update={...}).
+    """
+    return load_settings()

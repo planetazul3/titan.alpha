@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 from execution.decision import DecisionEngine
 from execution.sqlite_shadow_store import SQLiteShadowStore
-from config.settings import Settings
+from config.settings import load_settings
 from config.constants import CONTRACT_TYPES
 
 class TestABFramework(unittest.TestCase):
@@ -19,18 +19,28 @@ class TestABFramework(unittest.TestCase):
         # Shared Store
         self.store = SQLiteShadowStore(self.db_path)
         
-        # Settings
+        # Load settings properly (respects .env.test)
         os.environ["ENVIRONMENT"] = "development"
-        # Reload settings to pick up env var if needed or just init
-        self.settings = Settings()
+        base_settings = load_settings()
         
-        # Override thresholds for test predictability
-        self.settings.thresholds.confidence_threshold_high = 0.7
-        self.settings.thresholds.learning_threshold_min = 0.5
-        self.settings.shadow_trade.min_probability_track = 0.5
-        # Ensure regime caution doesn't filter
-        self.settings.hyperparams.regime_caution_threshold = 0.1
-        self.settings.hyperparams.regime_veto_threshold = 0.2
+        # Create updated nested models for frozen Settings using model_copy
+        updated_thresholds = base_settings.thresholds.model_copy(update={
+            "confidence_threshold_high": 0.7,
+            "learning_threshold_min": 0.5,
+        })
+        updated_shadow_trade = base_settings.shadow_trade.model_copy(update={
+            "min_probability_track": 0.5,
+        })
+        updated_hyperparams = base_settings.hyperparams.model_copy(update={
+            "regime_caution_threshold": 0.1,
+            "regime_veto_threshold": 0.2,
+        })
+        
+        self.settings = base_settings.model_copy(update={
+            "thresholds": updated_thresholds,
+            "shadow_trade": updated_shadow_trade,
+            "hyperparams": updated_hyperparams,
+        })
         
     def tearDown(self):
         self.store.close()

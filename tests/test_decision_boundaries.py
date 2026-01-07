@@ -1,14 +1,20 @@
 import pytest
 import torch
 from execution.decision import DecisionEngine
-from config.settings import Settings
+from config.settings import load_settings
 
 @pytest.fixture
 def settings():
-    s = Settings()
-    # Override warmup for testing boundaries immediately
-    s.data_shapes.warmup_steps = 0
-    return s
+    """Create test settings with warmup disabled and kill switch off for boundary testing."""
+    base_settings = load_settings()
+    # Use model_copy for frozen model - need to create new nested objects
+    updated_data_shapes = base_settings.data_shapes.model_copy(update={"warmup_steps": 0})
+    # Disable kill switch for tests that verify signal generation
+    updated_execution_safety = base_settings.execution_safety.model_copy(update={"kill_switch_enabled": False})
+    return base_settings.model_copy(update={
+        "data_shapes": updated_data_shapes,
+        "execution_safety": updated_execution_safety,
+    })
 
 @pytest.fixture
 def decision_engine(settings):
