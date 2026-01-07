@@ -218,15 +218,27 @@ class InferenceOrchestrator:
 
     async def _execute_trades(self, trades, entry_price, reconstruction_error, c_np):
         """Handle trade execution logic."""
-        # Calculate Volatility
+        import math
+        
+        # Calculate Volatility with numerical guards (I2-FIX)
         closes = c_np[:, 3]
         if hasattr(closes, "cpu"): closes = closes.cpu().numpy()
         elif hasattr(closes, "numpy"): closes = closes.numpy()
         
         volatility = 0.0
-        if len(closes) > 20:
-             log_returns = np.diff(np.log(closes[-20:]))
-             volatility = float(np.std(log_returns) * np.sqrt(365 * 24 * 60))
+        # I2-FIX: Guard against short arrays
+        if len(closes) >= 2:
+            # I2-FIX: Guard against zeros in closes (prevents log(0) = -inf)
+            safe_closes = np.maximum(closes[-20:], 1e-8)
+            log_returns = np.diff(np.log(safe_closes))
+            
+            if len(log_returns) > 0:
+                volatility = float(np.std(log_returns) * np.sqrt(365 * 24 * 60))
+            
+            # I2-FIX: Guard against NaN/Inf results
+            if not math.isfinite(volatility):
+                logger.warning(f"Non-finite volatility detected: {volatility}. Defaulting to 0.0")
+                volatility = 0.0
 
         for signal in trades:
             # Metadata injection

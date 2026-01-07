@@ -118,3 +118,50 @@ def test_staleness_check_logic(builder, mock_settings):
     with pytest.raises(StaleDataError):
          builder.build(ticks, candles, timestamp=timestamp, validate=False)
 
+
+# ========== I1-FIX: Validation Mode Toggle Tests ==========
+
+def test_set_validation_mode_strict(builder):
+    """set_validation_mode(True) should enable full Pandera validation."""
+    from data.features import FeatureBuilder
+    
+    # Ensure strict mode is enabled
+    FeatureBuilder.set_validation_mode(True)
+    assert FeatureBuilder._strict_validation == True
+
+
+def test_set_validation_mode_fast(builder):
+    """set_validation_mode(False) should enable fast validation."""
+    from data.features import FeatureBuilder
+    
+    # Switch to fast mode
+    FeatureBuilder.set_validation_mode(False)
+    assert FeatureBuilder._strict_validation == False
+    
+    # Reset to strict for other tests
+    FeatureBuilder.set_validation_mode(True)
+
+
+def test_fast_mode_skips_pandera_but_checks_shape(builder, mock_settings):
+    """In fast mode, Pandera is skipped but shape check still runs."""
+    from data.features import FeatureBuilder
+    
+    # Switch to fast mode
+    FeatureBuilder.set_validation_mode(False)
+    
+    try:
+        # Valid data should work
+        ticks = np.random.rand(20)
+        candles = np.random.rand(10, 6)  # Correct 6 columns
+        
+        # Should not raise (Pandera skipped, shape OK)
+        out = builder.build(ticks, candles, validate=True)
+        assert "ticks" in out
+        
+        # Wrong shape should still fail
+        wrong_shape_candles = np.random.rand(10, 5)  # Wrong: 5 columns
+        with pytest.raises(ValueError, match="must have 6 columns"):
+            builder.build(ticks, wrong_shape_candles, validate=True)
+    finally:
+        # Reset to strict mode
+        FeatureBuilder.set_validation_mode(True)

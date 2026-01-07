@@ -73,6 +73,11 @@ class FeatureBuilder:
     """
 
     CANONICAL_DTYPE = torch.float32 # CRITICAL-005
+    
+    # I1-FIX: Class-level validation mode
+    # True = Full Pandera validation (training/warmup)
+    # False = Fast shape checks only (inference hot path)
+    _strict_validation: bool = True
 
     def __init__(self, settings: Settings):
         """
@@ -98,6 +103,21 @@ class FeatureBuilder:
             f"FeatureBuilder initialized (schema v{FEATURE_SCHEMA_VERSION}): "
             f"ticks={self.schema.tick_length}, candles={self.schema.candle_length}x{self.schema.candle_features}"
         )
+
+    @classmethod
+    def set_validation_mode(cls, strict: bool) -> None:
+        """
+        Set validation mode for all FeatureBuilder instances.
+        
+        Args:
+            strict: If True, use full Pandera validation (training).
+                   If False, use fast shape checks only (inference).
+        
+        I1-FIX: Allows toggling to fast mode after warmup to reduce
+        inference latency in hot path.
+        """
+        cls._strict_validation = strict
+        logger.info(f"FeatureBuilder validation mode: {'strict' if strict else 'fast'}")
 
     def build(
         self, 
@@ -152,19 +172,24 @@ class FeatureBuilder:
 
         # Validate shapes
         if validate:
-            # IMPORTANT-002: Pandera Schema Validation
-            try:
-                # Convert to DataFrame for validation (lightweight for small batches)
-                df_candles = pd.DataFrame(
-                    candles, 
-                    columns=["open", "high", "low", "close", "volume", "timestamp"]
-                )
-                CandleInputSchema.validate(df_candles)
-            except pa.errors.SchemaError as e:
-                logger.error(f"Candle schema validation failed: {e}")
-                # Re-raise as ValueError for cleaner upstream handling, or keep SchemaError if preferred
-                # Strategy wants robust data, so we fail hard.
-                raise ValueError(f"Invalid market data structure: {e}")
+            # I1-FIX: Use strict validation mode to decide validation depth
+            if self._strict_validation:
+                # IMPORTANT-002: Full Pandera Schema Validation (training/warmup)
+                try:
+                    # Convert to DataFrame for validation
+                    df_candles = pd.DataFrame(
+                        candles, 
+                        columns=["open", "high", "low", "close", "volume", "timestamp"]
+                    )
+                    CandleInputSchema.validate(df_candles)
+                except pa.errors.SchemaError as e:
+                    logger.error(f"Candle schema validation failed: {e}")
+                    raise ValueError(f"Invalid market data structure: {e}")
+            else:
+                # I1-FIX: Fast validation for inference hot path
+                # Only check essential shape contract
+                if candles.shape[1] != 6:
+                    raise ValueError(f"Candles must have 6 columns, got {candles.shape[1]}")
 
             # CRITICAL-005: Output Schema Validation
             from data.common.schema import FeatureOutputSchema

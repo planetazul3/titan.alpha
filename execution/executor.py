@@ -80,6 +80,26 @@ class DerivTradeExecutor:
         
         logger.info(f"DerivTradeExecutor initialized with idempotency={idempotency_store is not None}")
 
+    def _check_rolling_window_breaker(self) -> bool:
+        """
+        Check if rolling window circuit breaker should trip.
+        
+        Returns True if circuit should OPEN (too many failures in window).
+        Uses time-based rolling window per best practices for HFT systems.
+        """
+        now = time.time()
+        # Filter to entries within rolling window
+        self._failure_timestamps = [
+            ts for ts in self._failure_timestamps 
+            if (now - ts) < CIRCUIT_BREAKER_WINDOW_SECONDS
+        ]
+        return len(self._failure_timestamps) >= CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    def _record_failure(self) -> None:
+        """Record a failure timestamp for rolling window tracking."""
+        self._failure_timestamps.append(time.time())
+        self._failed_count += 1
+
     async def execute(self, request: ExecutionRequest, check_only: bool = False) -> TradeResult:
         """
         Execute validated request on Deriv platform.
@@ -87,7 +107,16 @@ class DerivTradeExecutor:
         """
         from data.ingestion.client import CircuitState
 
-        # CRITICAL-FIX (C-001): Check delegated circuit breaker
+        # C1-FIX: Check executor-level rolling window circuit breaker FIRST
+        if self._check_rolling_window_breaker():
+            error_msg = (
+                f"Circuit breaker OPEN (executor rolling window) - "
+                f"{len(self._failure_timestamps)} failures in last {CIRCUIT_BREAKER_WINDOW_SECONDS}s"
+            )
+            logger.warning(error_msg)
+            return TradeResult(success=False, error=error_msg)
+
+        # Check delegated client circuit breaker
         if hasattr(self.client, "circuit_state") and self.client.circuit_state == CircuitState.OPEN:
              error_msg = "Circuit breaker OPEN (delegated to client) - Execution suspended"
              logger.warning(error_msg)
@@ -144,7 +173,7 @@ class DerivTradeExecutor:
             else:
                 error_msg = result.get("error", {}).get("message", "Unknown execution error")
                 execution_logger.log_trade_failure(request.signal_id, error_msg, details=result)
-                self._failed_count += 1
+                self._record_failure()
                 return TradeResult(success=False, error=error_msg)
 
         except APIError as e:
@@ -155,7 +184,7 @@ class DerivTradeExecutor:
             logger.error(f"API Error during execution ({error_code}): {error_msg}")
             execution_logger.log_trade_failure(request.signal_id, error_msg, details={"code": error_code})
             
-            self._failed_count += 1
+            self._record_failure()
             
             # Rate limits are critical but temporary
             if "RateLimit" in str(error_code) or "RateLimit" in error_msg:
@@ -170,7 +199,7 @@ class DerivTradeExecutor:
         except ConnectionError as e:
             logger.error(f"Connection lost during execution: {e}")
             execution_logger.log_trade_failure(request.signal_id, "ConnectionError")
-            self._failed_count += 1
+            self._record_failure()
             return TradeResult(success=False, error="ConnectionError")
 
         except RuntimeError as e:
@@ -180,13 +209,13 @@ class DerivTradeExecutor:
                   return TradeResult(success=False, error=str(e))
              
              logger.exception(f"Runtime error during execution: {e}")
-             self._failed_count += 1
+             self._record_failure()
              return TradeResult(success=False, error=str(e))
 
         except Exception as e:
             logger.exception(f"Unexpected error during execution: {e}")
             execution_logger.log_trade_failure(request.signal_id, str(e))
-            self._failed_count += 1
+            self._record_failure()
             return TradeResult(success=False, error=str(e))
             
     async def shutdown(self) -> None:
@@ -200,10 +229,14 @@ class DerivTradeExecutor:
 
     def get_statistics(self) -> dict:
         total = self._executed_count + self._failed_count
+        # Clean stale timestamps for accurate count
+        self._check_rolling_window_breaker()
         return {
             "executed": self._executed_count,
             "failed": self._failed_count,
             "success_rate": self._executed_count / total if total > 0 else 0.0,
+            "rolling_window_failures": len(self._failure_timestamps),
+            "circuit_breaker_threshold": CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         }
 
 class MockTradeExecutor:
