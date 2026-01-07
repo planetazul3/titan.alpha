@@ -109,9 +109,6 @@ async def run_live_trading(args):
     # Records: inference latency, trade outcomes, regime assessments, P&L
     # ══════════════════════════════════════════════════════════════════════
     console_log("Initializing metrics collector...", "WAIT")
-    # Records: inference latency, trade outcomes, regime assessments, P&L
-    # ══════════════════════════════════════════════════════════════════════
-    console_log("Initializing metrics collector...", "WAIT")
     metrics = TradingMetrics(enable_prometheus=settings.observability.enable_prometheus)
     
     # Initialize AlertManager

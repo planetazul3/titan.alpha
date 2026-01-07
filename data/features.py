@@ -35,9 +35,6 @@ import pandera.pandas as pa
 logger = logging.getLogger(__name__)
 
 
-logger = logging.getLogger(__name__)
-
-
 class FeatureBuilder:
     """
     CANONICAL FEATURE BUILDER - The single source of truth for feature engineering.
