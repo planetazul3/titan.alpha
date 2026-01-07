@@ -315,8 +315,8 @@ class MarketDataBuffer:
         candles_snap = list(candles_list)  # Copy the lists directly (already arrays)
         
         return {
-            "ticks": ticks_snap, 
-            "candles": candles_snap,
+            "ticks": np.array(ticks_snap, dtype=np.float32), 
+            "candles": np.array(candles_snap, dtype=np.float32),
             "tick_count": len(ticks_snap),
             "candle_count": len(candles_snap)
         }

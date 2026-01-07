@@ -248,7 +248,7 @@ class DecisionEngine:
                 regime_assessment=regime_assessment,
                 settings=self.settings,
                 reconstruction_error=reconstruction_error,
-                stats=self.metrics._stats, # Direct access for compatibility
+                stats=self.metrics.get_mutable_stats(),
                 tracer=span
             )
             
@@ -313,7 +313,7 @@ class DecisionEngine:
                 regime_assessment=assessment,
                 settings=self.settings,
                 reconstruction_error=reconstruction_error,
-                stats=self.metrics._stats, # Compat
+                stats=self.metrics.get_mutable_stats(),
                 tracer=span
             )
 

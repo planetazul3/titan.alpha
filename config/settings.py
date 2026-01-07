@@ -88,6 +88,12 @@ class Thresholds(BaseModel):
     learning_threshold_max: float = Field(
         ..., description="Maximum threshold for learning zone", ge=0.0, le=1.0
     )
+    caution_threshold_margin: float = Field(
+        default=0.05,
+        description="Additional margin above confidence_threshold_high during regime caution",
+        ge=0.0,
+        le=0.2
+    )
 
     @model_validator(mode="after")
     def validate_thresholds_logic(self) -> "Thresholds":

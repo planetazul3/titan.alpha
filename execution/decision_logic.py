@@ -106,7 +106,7 @@ def process_signals_batch(
         # Pre-filter real trades requiring higher confidence
         filtered_real = []
         for signal in real_trades:
-            caution_threshold = settings.thresholds.confidence_threshold_high + 0.05
+            caution_threshold = settings.thresholds.confidence_threshold_high + settings.thresholds.caution_threshold_margin
             if signal.probability >= caution_threshold:
                 filtered_real.append(signal)
             else:

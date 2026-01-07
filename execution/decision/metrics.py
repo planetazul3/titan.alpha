@@ -18,5 +18,13 @@ class DecisionMetrics:
         if metric in self._stats:
             self._stats[metric] += count
 
+    def get_mutable_stats(self) -> dict[str, int]:
+        """Return reference to internal stats dict for legacy compatibility.
+        
+        Use increment() for normal operations. This method exists only for
+        compatibility with process_signals_batch which mutates stats directly.
+        """
+        return self._stats
+
     def get_statistics(self) -> dict[str, Any]:
         return self._stats.copy()

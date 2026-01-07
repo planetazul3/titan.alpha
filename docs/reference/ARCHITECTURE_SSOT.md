@@ -67,7 +67,8 @@ To meet the high-frequency and safety requirements, the architecture employs:
 
 #### 5.2.1 Data Subsystem (`data/`)
 *   **`features.py`**: The **Canonical Feature Source**. Contains the `FeatureBuilder` class. It enforces that the exact same math (log returns, Z-scores) is applied in both `scripts/train.py` and `scripts/live.py`.
-*   **`schema.py`**: Defines `CandleInputSchema` using **Pandera**. Enforces strict statistical validation (e.g., High >= Low) on raw data inputs before processing.
+*   **`common/schema.py`**: Defines `FeatureSchema`, `CandleInputSchema`, and `FeatureOutputSchema`. Enforces strict shape and dtype validation.
+*   **`validation/schemas.py`**: Defines `TickSchema` and `CandleSchema` using **Pandera**. Enforces strict statistical validation (e.g., High >= Low) on raw data inputs before processing.
 *   **`buffer.py`**: `MarketDataBuffer` manages the sliding window of live data, ensuring the model always has a complete context window (e.g., last 200 candles) for inference.
 *   **`normalizers.py`**: Pure NumPy implementations of mathematical transforms.
 
@@ -78,13 +79,14 @@ To meet the high-frequency and safety requirements, the architecture employs:
 *   **`volatility.py`**: Autoencoder. Input: Volatility metrics. Output: Reconstruction Error (used for Regime Veto).
 
 #### 5.2.3 Execution Subsystem (`execution/`)
-*   **`decision.py`**: Evaluates model probabilities against thresholds. Integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
+*   **`decision/core.py`**: `DecisionEngine`. Central coordinator for trading decisions. Evaluates model probabilities against thresholds. Integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
+*   **`decision_logic.py`**: Pure functional logic for processing signals and applying caution filters.
 *   **`signal_adapter_service.py`**: **Adaptation Layer**. Centralizes conversion of TradeSignals to ExecutionRequests, handling duration resolution via `ContractParameterService` and position sizing.
 *   **`contract_params.py`**: **Parameter Resolution**. Centralized logic for resolving contract durations and barriers, preventing training/execution mismatches.
 *   **`idempotency_store.py`**: **Deduplication**. SQLite-based store preventing duplicate execution of the same signal ID.
 *   **`position_sizer.py`**: **Dynamic Risk Management**. Calculates optimal stake using `KellyPositionSizer` or `TargetVolatilitySizer`, decoupled from signal logic.
-*   **`regime.py`**: Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
-*   **`safety.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.
+*   **`regime/veto.py`**: `RegimeVeto`. Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
+*   **`safety/core.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.
 *   **`backtest.py`**: **Event-Driven Replay**. Replays historical data through the full pipeline (`Buffer` -> `Model` -> `Decision`) to ensure "What you test is what you fly".
 *   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)**.
 

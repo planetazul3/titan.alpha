@@ -128,3 +128,22 @@ def test_buffer_capacity_with_forming():
     closed = buffer.get_candles_array(include_forming=False)
     assert len(closed) == 3
 
+
+def test_snapshot_dtype_is_float32():
+    """Ensure get_snapshot() returns float32 arrays for model compatibility."""
+    import numpy as np
+    buffer = MarketDataBuffer(tick_length=10, candle_length=3)
+    
+    # Fill buffer with data
+    for i in range(10):
+        buffer.append_tick(float(i))
+    for i in range(3):
+        buffer.update_candle(CandleData(1, 2, 0.5, 1.5, 100, 1000.0 + i * 60))
+    
+    snapshot = buffer.get_snapshot()
+    
+    # Verify dtypes are float32
+    assert snapshot["ticks"].dtype == np.float32, f"Expected float32, got {snapshot['ticks'].dtype}"
+    assert snapshot["candles"].dtype == np.float32, f"Expected float32, got {snapshot['candles'].dtype}"
+
+

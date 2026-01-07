@@ -138,13 +138,22 @@ class RegimeVeto:
         else:
             conf = min(1.0, 0.5 + (error - threshold_veto) / threshold_veto) if threshold_veto > 0 else 1.0
 
-        return RegimeAssessment(
+        result = RegimeAssessment(
             trust_state=state,
             reconstruction_error=error,
             threshold_low=threshold_caution,
             threshold_high=threshold_veto,
             regime_confidence=conf
         )
+        
+        # Unified regime state logging for consolidated querying
+        logger.info(
+            f"REGIME_STATE: {state.value} | error={error:.4f} | "
+            f"thresholds=[{threshold_caution:.3f}, {threshold_veto:.3f}] | "
+            f"conf={conf:.3f} | hierarchical={self.use_hierarchical}"
+        )
+        
+        return result
 
     def update_thresholds(self, threshold_caution: float, threshold_veto: float) -> None:
         if threshold_caution >= threshold_veto:
