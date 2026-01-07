@@ -54,6 +54,12 @@ from utils.bootstrap import create_trading_stack, create_challenger_stack
 from execution.synchronizer import StartupSynchronizer
 from execution.orchestrator import InferenceOrchestrator
 
+# Phase 5 Integration: Extracted Modules
+from scripts.context import LiveTradingContext, HotReloadState
+from scripts.heartbeat import heartbeat_task
+from scripts.maintenance import maintenance_task as maintenance_task_module
+from scripts.event_handlers import MarketEventHandler
+
 # I02: Checkpoint verification utility
 from tools.verify_checkpoint import verify_checkpoint
 
@@ -484,6 +490,31 @@ async def run_live_trading(args):
         # Initialize challenger semaphore for Issue 3
         # (Managed internally by Orchestrator now, but ensuring we pass challengers list)
 
+        # ══════════════════════════════════════════════════════════════════════
+        # PHASE 5: Create LiveTradingContext for extracted module integration
+        # ══════════════════════════════════════════════════════════════════════
+        ctx = LiveTradingContext(
+            settings=settings,
+            device=device,
+            checkpoint_path=checkpoint_path,
+            client=client,
+            model=model,
+            engine=engine,
+            executor=executor,
+            buffer=buffer,
+            feature_builder=feature_builder,
+            shadow_store=shadow_store,
+            orchestrator=orchestrator,
+            resolver=resolver,
+            trade_tracker=real_trade_tracker,
+            strategy_adapter=strategy_adapter,
+            calibration_monitor=calibration_monitor,
+            system_monitor=system_monitor,
+            metrics=metrics,
+            args=args,
+        )
+        logger.info("LiveTradingContext initialized for extracted modules")
+
         async def process_ticks():
             """Process tick events from normalized MarketEventBus."""
             nonlocal tick_count, last_tick_time, last_tick_log_count
@@ -657,214 +688,8 @@ async def run_live_trading(args):
                 except Exception as e:
                     logger.error(f"Error processing candle: {e}", exc_info=True)
 
-        async def maintenance_task():
-            """
-            Background maintenance task for logs and database pruning.
-            Runs once every 24 hours.
-            """
-            interval = 86400  # 24 hours
-            while True:
-                try:
-                    logger.info("[MAINTENANCE] Starting background maintenance...")
-                    
-                    # 1. Log cleanup
-                    try:
-                        from config.logging_config import cleanup_logs
-                        
-                        # Run in executor to avoid blocking loop with file IO
-                        loop = asyncio.get_running_loop()
-                        deleted_logs = await loop.run_in_executor(
-                            None, 
-                            lambda: cleanup_logs(log_dir, retention_days=settings.system.log_retention_days)
-                        )
-                        
-                        if deleted_logs > 0:
-                            logger.info(f"[MAINTENANCE] Deleted {deleted_logs} old log files")
-                    except Exception as e:
-                        logger.error(f"[MAINTENANCE] Log cleanup failed: {e}")
-
-                    # 2. DB Pruning
-                    try:
-                        if shadow_store:
-                            # Run VACUUM/Prune in executor as it locks DB
-                            pruned_count = await loop.run_in_executor(
-                                None,
-                                lambda: shadow_store.prune(retention_days=settings.system.db_retention_days)
-                            )
-                            if pruned_count > 0:
-                                logger.info(f"[MAINTENANCE] Pruned {pruned_count} old shadow records")
-                    except Exception as e:
-                        logger.error(f"[MAINTENANCE] DB pruning failed: {e}")
-
-                    logger.info("[MAINTENANCE] Background maintenance completed.")
-                except Exception as e:
-                    logger.error(f"[MAINTENANCE] Unexpected error in maintenance task: {e}")
-                
-                await asyncio.sleep(interval)
-
-        async def heartbeat():
-            """Periodic status logging for observability."""
-            from observability.shadow_metrics import ShadowTradeMetrics
-            import time
-            
-            heartbeat_interval = settings.heartbeat.interval_seconds
-            stale_threshold = settings.heartbeat.stale_data_threshold_seconds
-            
-            # Cache shadow metrics
-            shadow_metrics_cache = ShadowTradeMetrics()
-            last_metrics_update = 0
-            metrics_update_interval = 300
-            
-            while True:
-                await asyncio.sleep(heartbeat_interval)
-                now = datetime.now()
-                now_ts = time.time()
-                stale_seconds = (now - last_tick_time).total_seconds()
-
-                # Get current statistics
-                stats = engine.get_statistics()
-                executor.get_safety_statistics() if executor else {}
-                cal_stats = calibration_monitor.get_statistics()
-                
-                # Update shadow trade metrics
-                if now_ts - last_metrics_update > metrics_update_interval:
-                    try:
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, shadow_metrics_cache.update_from_store, shadow_store
-                        )
-                        last_metrics_update = now_ts
-                    except Exception as e:
-                        logger.error(f"Failed to update shadow metrics: {e}")
-
-                # M12 (FIXED): Robust Hot-Reloading
-                # Uses persistent state dictionary instead of locals()
-                # C06 (FIXED): Atomic reload with rollback
-                if checkpoint_path and checkpoint_path.exists():
-                    try:
-                        current_mtime = checkpoint_path.stat().st_mtime
-                        
-                        # Initialize if missing (C02 Fix)
-                        if "last_ckpt_mtime" not in hot_reload_state:
-                            hot_reload_state["last_ckpt_mtime"] = current_mtime
-                        
-                        # Skip if in backoff period
-                        import time as time_module
-                        if time_module.time() < hot_reload_state.get("backoff_until", 0):
-                            pass  # Silent skip during backoff
-                        elif current_mtime > hot_reload_state["last_ckpt_mtime"]:
-                            console_log(f"Checkpoint update detected! Reloading... ({checkpoint_path.name})", "MODEL")
-                            logger.info(f"[HOT-RELOAD] Checkpoint modified at {datetime.fromtimestamp(current_mtime)}")
-                            
-                            # 1. Load into temporary model first (Atomic Step 1)
-                            # I03 Fix: Offload blocking IO to executor to avoid freezing event loop
-                            loop = asyncio.get_running_loop()
-                            new_checkpoint = await loop.run_in_executor(
-                                None, 
-                                lambda: torch.load(checkpoint_path, map_location=device, weights_only=True)
-                            )
-                            
-                            # Issue E: Support multiple common checkpoint key variants
-                            state_dict_key = None
-                            for key in ["model_state_dict", "state_dict", "model"]:
-                                if key in new_checkpoint:
-                                    state_dict_key = key
-                                    break
-                            
-                            if state_dict_key is None:
-                                logger.error(f"[HOT-RELOAD] No valid state_dict key found. Available: {list(new_checkpoint.keys())}")
-                                console_log("Hot-reload aborted: no valid state_dict key", "WARN")
-                                continue
-                            
-                            # 2. Validate Architecture (Atomic Step 2)
-                            current_keys = set(model.state_dict().keys())
-                            new_keys = set(new_checkpoint[state_dict_key].keys())
-                            
-                            missing = current_keys - new_keys
-                            unexpected = new_keys - current_keys
-                            
-                            if missing or unexpected:
-                                logger.warning(f"[HOT-RELOAD] Mismatch! Missing: {len(missing)}, Unexpected: {len(unexpected)}")
-                                console_log("Hot-reload aborted: architecture mismatch", "WARN")
-                            else:
-                                # I01 Fix: Validate schema BEFORE applying weights (prevent silent corruption)
-                                # 2.5. Schema Compatibility Check (BEFORE load_state_dict)
-                                try:
-                                    from utils.bootstrap import validate_model_compatibility
-                                    validate_model_compatibility(
-                                        new_checkpoint, 
-                                        settings, 
-                                        feature_builder=feature_builder
-                                    )
-                                    # Schema validated - safe to proceed
-                                except RuntimeError as schema_err:
-                                    logger.error(f"[HOT-RELOAD] Schema validation failed: {schema_err}")
-                                    console_log(f"Hot-reload aborted: {schema_err}", "ERROR")
-                                    # Continue using existing model - don't apply new weights
-                                    continue
-                                
-                                # 3. Apply changes (Atomic Step 3) - only after validation passes
-                                model.load_state_dict(new_checkpoint[state_dict_key], strict=False)
-                                model.eval()
-                                
-                                # 4. Update Metadata
-                                new_ver = "unknown"
-                                if "manifest" in new_checkpoint:
-                                    new_ver = new_checkpoint["manifest"].get("model_version", "unknown")
-                                if hasattr(engine, 'model_version'):
-                                    engine.model_version = new_ver
-                                console_log(f"Model reloaded: v{new_ver}", "SUCCESS")
-
-                                # 5. Update State & Reset Monitors
-                                hot_reload_state["last_ckpt_mtime"] = current_mtime
-                                hot_reload_state["consecutive_failures"] = 0  # Reset on success
-                                calibration_monitor.reset() # C06 Fix: Explicit reset method
-                                logger.info("[HOT-RELOAD] Success. Calibration monitor reset.")
-                                
-                    except Exception as e:
-                        # Exponential backoff for persistent failures
-                        import time as time_module
-                        hot_reload_state["consecutive_failures"] = hot_reload_state.get("consecutive_failures", 0) + 1
-                        failures = hot_reload_state["consecutive_failures"]
-                        
-                        # Backoff: 60s, 120s, 240s... max 30min
-                        backoff_seconds = min(60 * (2 ** (failures - 1)), 1800)
-                        hot_reload_state["backoff_until"] = time_module.time() + backoff_seconds
-                        
-                        logger.error(f"[HOT-RELOAD] Failed (attempt {failures}): {e}. Next retry in {backoff_seconds}s")
-                        console_log(f"Hot-reload failed: {e}", "ERROR")
-                        
-                        # Alert after 3 consecutive failures
-                        if failures >= 3:
-                            alert_manager.trigger(
-                                "hot_reload_persistent_failure",
-                                f"Model hot-reload failed {failures} times for {checkpoint_path.name}",
-                                AlertLevel.WARNING
-                            )
-
-                # HEARTBEAT LOGGING
-                stale_threshold = settings.heartbeat.stale_data_threshold_seconds
-                if stale_seconds > stale_threshold:
-                    console_log(f"WARNING: No ticks for {stale_seconds:.1f}s - possible connection issue", "WARN")
-                    logger.warning(f"[STALE] No ticks received for {stale_seconds:.1f}s")
-
-                logger.info(
-                    f"[HEARTBEAT] status={'LIVE' if synchronizer.is_live() else 'BUFFERING'}, "
-                    f"ticks={tick_count}, candles={candle_count}, "
-                    f"inferences={inference_count}, stale_sec={stale_seconds:.1f}, "
-                    f"shadow_win_rate={shadow_metrics_cache.win_rate:.3f}"
-                )
-                
-                # Issue 4 (FIXED): Task Liveness Check
-                for t in tasks:
-                    if t.done():
-                         # Task shouldn't be done unless it crashed or we are shutting down
-                         # If we are here, we are not shutting down (yet)
-                         if t.exception():
-                              logger.critical(f"FATAL: Background task failed: {t.get_name()} error={t.exception()}")
-                              alert_manager.trigger("task_failure", f"Task {t.get_name()} died unexpectedly", AlertLevel.CRITICAL)
-                         else:
-                              logger.warning(f"Background task {t.get_name()} finished unexpectedly")
+        # NOTE: heartbeat() and maintenance_task() functions removed
+        # Now using extracted modules: heartbeat_task(ctx) and maintenance_task_module(ctx)
 
         # ══════════════════════════════════════════════════════════════════════
         # SYNCHRONIZATION PHASE
@@ -890,11 +715,12 @@ async def run_live_trading(args):
         # Issue C (FIXED): Use TaskGroup for deterministic exception propagation
         # TaskGroup automatically cancels all tasks when any task raises an exception
         # and re-raises the exception after cleanup.
+        # PHASE 5: Using extracted modules with LiveTradingContext
         async with asyncio.TaskGroup() as tg:
             tg.create_task(process_ticks(), name="tick_processor")
             tg.create_task(process_candles(), name="candle_processor")
-            tg.create_task(heartbeat(), name="heartbeat_monitor")
-            tg.create_task(maintenance_task(), name="maintenance_worker")
+            tg.create_task(heartbeat_task(ctx), name="heartbeat_monitor")  # Extracted module
+            tg.create_task(maintenance_task_module(ctx), name="maintenance_worker")  # Extracted module
             
     except Exception as e:
         logger.critical(f"FATAL ERROR in main loop: {e}", exc_info=True)
