@@ -208,8 +208,10 @@ class TestIntegrationFlow:
         position_sizer = RegimeAwarePositionSizer(base_stake=10.0)
         
         # Simulate market data
+        # H3 Hardening: HIGH volatility now vetoes (trust=0.0)
+        # Generate 500pt trend with minimal noise for LOW volatility
         np.random.seed(42)
-        prices = 100 + np.cumsum(np.random.randn(100) * 0.5)
+        prices = np.linspace(100, 102, 500) + np.random.normal(0, 0.01, 500)
         regime_veto.update_prices(prices)
         
         # Get regime assessment
