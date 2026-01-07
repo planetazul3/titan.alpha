@@ -566,7 +566,7 @@ async def run_live_trading(args):
                         )
                         first_candle = False
 
-                    # H07: Stale Data Check
+                    # H6: Staleness Veto (per ARCHITECTURE_SSOT.md)
                     # Prevent trading on old data if system lags
                     # CRITICAL RULE 2: Timezone for Shadow Resolution (Must be UTC)
                     now_utc = datetime.now(timezone.utc)

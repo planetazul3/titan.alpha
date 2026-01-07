@@ -75,10 +75,11 @@ class HierarchicalRegimeDetector:
     ) -> float:
         trust = 1.0
 
+        # H3: Volatility Veto (HARD VETO per ARCHITECTURE_SSOT.md)
         if volatility == VolatilityRegime.HIGH:
-            trust *= 0.6
+            trust *= 0.0  # Hard veto: prevent trading in high volatility
         elif volatility == VolatilityRegime.MEDIUM:
-            trust *= 0.85
+            trust *= 0.7  # Caution: reduce position sizing
 
         if macro == MacroRegime.SIDEWAYS:
             trust *= 0.8

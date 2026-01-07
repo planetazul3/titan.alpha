@@ -43,16 +43,17 @@ class TestRegimeTracker(unittest.TestCase):
         # directly or via assess if we mock components.
         # Alternatively, we just check that assess doesn't crash on high error.
         
-        prices = np.full(100, 100.0) # Constant prices -> Low Volatility, Sideways
-        # update: constant prices might trigger issues in Hurst (div by zero?) 
-        # Better: slow trend
-        prices = np.linspace(100, 105, 100)
+        # Use longer price series with gradual trend and minimal noise for LOW volatility
+        # H3 Hardening: HIGH volatility now vetoes (trust=0.0), so we must generate LOW vol data
+        np.random.seed(42)  # Reproducibility
+        prices = np.linspace(100, 102, 500) + np.random.normal(0, 0.01, 500)  # Low noise
         
         # Normal error
-        # Note: detector penalties apply (Micro=Random if not enough data/trend?). 
-        # With linear trend, hurst should be high (Trending).
+        # With linear trend and low volatility, trust should be > 0.3
         res_normal = detector.assess(prices, reconstruction_error=0.1)
         print(f"Normal trust: {res_normal.trust_score}, Details: {res_normal.details}")
+        # With H3 hardened: HIGH vol -> 0.0, MEDIUM -> 0.7, LOW -> 1.0
+        # This data should yield LOW volatility -> trust near 1.0 before other penalties
         self.assertGreater(res_normal.trust_score, 0.3)
         
         # Extreme error (simulated burst)
