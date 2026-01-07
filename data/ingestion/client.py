@@ -374,6 +374,40 @@ class DerivClient:
         res = await self.api.balance()
         return float(res["balance"]["balance"])
 
+    async def get_api_limits(self) -> dict[str, Any]:
+        """
+        Risk 4 Mitigation: Fetch current API rate limits from Deriv server.
+        
+        Uses the website_status call to retrieve the authoritative rate limits,
+        enabling reconciliation between client-side tracking and server state.
+        
+        Returns:
+            dict: API call limits containing:
+                - max_proposal_subscription: Max concurrent proposal subscriptions
+                - max_requests_general: Max general requests per window
+                - max_requests_outcome: Max outcome requests per window  
+                - max_requests_pricing: Max pricing requests per window
+        
+        Raises:
+            RuntimeError: If client not connected
+            
+        Example:
+            >>> limits = await client.get_api_limits()
+            >>> print(f"Max general requests: {limits.get('max_requests_general')}")
+        """
+        if not self.api:
+            raise RuntimeError("Client not connected")
+        
+        try:
+            res = await self.api.website_status()
+            limits = res.get("website_status", {}).get("api_call_limits", {})
+            
+            logger.debug(f"API limits from server: {limits}")
+            return cast(dict[str, Any], limits)
+        except Exception as e:
+            logger.warning(f"Failed to fetch API limits: {e}")
+            return {}
+
     async def get_historical_ticks(self, count: int = 1000) -> list[float]:
         """
         Fetch historical tick data to pre-fill buffers.
