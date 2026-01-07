@@ -2,18 +2,31 @@
 """
 Unified live trading script (x.titan).
 
-Orchestrates the complete trading lifecycle:
-1.  **Ingestion**: Connects to Deriv API via `DerivClient` (async/stream).
-2.  **Buffering**: `MarketDataBuffer` accumulates ticks/candles for feature engineering.
-3.  **Inference**: `DerivOmniModel` (PyTorch) generates probabilities from `FeatureBuilder`.
-4.  **Decision**: `DecisionEngine` applies `RegimeVeto` (Absolute Authority) and confidence filters.
-5.  **Execution**: `SafeTradeExecutor` enforces "Swiss Cheese" safety (Kill Switch, Circuit Breaker).
-6.  **Observability**: Real-time metrics via `PerformanceTracker` and `CalibrationMonitor`.
+Thin orchestration layer after ADR-009 modularization (974 → 599 lines).
+
+Architecture:
+1.  **Bootstrap**: Load settings, model, create trading stack
+2.  **Context**: Initialize LiveTradingContext with all dependencies
+3.  **Sync**: Fetch history, populate buffer, transition to LIVE mode
+4.  **TaskGroup**: Launch 4 extracted modules concurrently:
+    - tick_processor (event_handlers.py)
+    - candle_processor (event_handlers.py)
+    - heartbeat_task (heartbeat.py)
+    - maintenance_task (maintenance.py)
+
+Safety Requirements (see ARCHITECTURE_SSOT.md):
+- [H6] Staleness veto in candle_processor
+- [M12] Atomic hot-reload in heartbeat_task
+- [C-01] Circuit breaker sync in event_handlers
+- [C-06] Exponential backoff in heartbeat_task
 
 Usage:
-    python scripts/live.py                    # Run live trading (Paper/Real based on .env)
-    python scripts/live.py --test             # Verify connection and configuration (No trades)
-    python scripts/live.py --checkpoint best  # Load specific model checkpoint
+    python scripts/live.py                    # Run live trading
+    python scripts/live.py --test             # Verify connection only
+    python scripts/live.py --shadow-only      # Shadow mode (no real trades)
+    python scripts/live.py --checkpoint best  # Load specific checkpoint
+
+Implementation: 2026-01-07 (ADR-009)
 """
 
 import argparse

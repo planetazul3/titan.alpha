@@ -7,6 +7,12 @@ Replaces implicit closure state with explicit context object for:
 - Observable system state
 - Resource management via async context manager
 
+Safety Requirements Preserved:
+- [C-01] Circuit Breaker Sync: executor respects client circuit state
+- [M12] Atomic Hot-Reload: hot_reload_state tracks failures + backoff
+- [H6] Staleness Veto: settings.max_candle_latency checked in handlers
+
+Implementation: 2026-01-07 (ADR-009)
 Reference: docs/plans/live_script_refactoring.md Section 3.1
 """
 

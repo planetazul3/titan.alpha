@@ -1,11 +1,21 @@
 """
 CLI argument parsing for live trading.
 
-Separates argument parsing from business logic for:
-- Testability and reusability
-- Fail-fast validation
-- Clean module boundaries
+Extracts argparse logic from live.py per ADR-009.
 
+Design Principles:
+- Separation of concerns: parsing isolated from business logic
+- Fail-fast validation: checkpoint dir checked at parse time
+- Testability: accepts optional argv for unit testing
+
+Exit Codes:
+- 0: Clean exit
+- 1: Fatal error
+- 2: Invalid arguments (argparse default)
+- 130: SIGINT (Ctrl+C)
+- 143: SIGTERM
+
+Implementation: 2026-01-07 (ADR-009)
 Reference: docs/plans/live_script_refactoring.md Section 4.1
 """
 

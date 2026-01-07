@@ -1,12 +1,19 @@
 """
 Market event handlers for tick and candle processing.
 
-Implements production patterns:
-- Circuit breaker integration for fault tolerance
-- H6 staleness veto for data freshness
-- Explicit state management via context
-- Inference cooldown to prevent overtrading
+Extracts process_ticks() and process_candles() from live.py per ADR-009.
 
+Production Safety Patterns:
+- [C-01] Circuit breaker check before processing
+- [H6] Staleness veto for data freshness (see handle_candle L151)
+- [H8] Liveness updates on tick receipt (see tick_processor L304)
+
+Inference Logic:
+- 30s cooldown between inference cycles (INFERENCE_COOLDOWN_SECONDS)
+- Shadow resolution on every candle close
+- Regime detector update on new candles
+
+Implementation: 2026-01-07 (ADR-009)
 Reference: docs/plans/live_script_refactoring.md Section 4.3
 """
 

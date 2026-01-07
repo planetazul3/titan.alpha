@@ -1,12 +1,18 @@
 """
 Heartbeat task with hot-reload support.
 
-Implements production best practices:
-- Exponential backoff for hot-reload failures
-- Schema validation before model swap (M12 safety)
-- Staleness detection for data freshness
-- Task liveness monitoring
+Extracts heartbeat() from live.py per ADR-009.
 
+Critical Safety Requirements:
+- [M12] Atomic hot-reload: validate schema BEFORE swap (see _check_hot_reload L213)
+- [C-06] Exponential backoff: 60s → 1800s on failures (see L257)
+- [H6] Staleness detection: alerts when no ticks received (see L97)
+
+Backoff Formula: min(BASE_BACKOFF * 2^(failures-1), MAX_BACKOFF)
+- BASE_BACKOFF_SECONDS = 60
+- MAX_BACKOFF_SECONDS = 1800 (30 minutes)
+
+Implementation: 2026-01-07 (ADR-009)
 Reference: docs/plans/live_script_refactoring.md Section 4.2
 """
 

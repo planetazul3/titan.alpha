@@ -1,11 +1,18 @@
 """
 Maintenance task for log cleanup and database pruning.
 
-Runs periodically in background with:
-- Async file I/O (non-blocking)
-- run_in_executor for CPU-bound operations
-- Graceful shutdown support
+Extracts maintenance_task() from live.py per ADR-009.
 
+Production Patterns:
+- Async file I/O via run_in_executor (non-blocking)
+- Graceful shutdown support via context.shutdown_event
+- Default 24-hour interval (configurable via settings)
+
+Operations:
+- Log cleanup: removes files older than settings.log_retention_days
+- DB pruning: removes shadow records older than settings.db_retention_days
+
+Implementation: 2026-01-07 (ADR-009)
 Reference: docs/plans/live_script_refactoring.md Section 4.4
 """
 
