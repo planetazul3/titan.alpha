@@ -83,14 +83,20 @@ def verify_checkpoint(checkpoint_path: Path):
         dummy_ticks = (base_price + np.random.randn(tick_len) * 5).astype(np.float32)
         dummy_candles = np.zeros((candle_len, 6), dtype=np.float32)
         for i in range(candle_len):
-             c_base = base_price + np.random.randn() * 5
+             c_open = base_price + np.random.randn() * 5
+             c_close = base_price + np.random.randn() * 5
+             # Ensure valid OHLC: high >= max(open, close), low <= min(open, close)
+             c_high = max(c_open, c_close) + abs(np.random.randn()) * 2
+             c_low = min(c_open, c_close) - abs(np.random.randn()) * 2
+             # Ensure low is positive (prices can't be negative)
+             c_low = max(c_low, 0.01)
              dummy_candles[i] = [
-                 c_base, # open
-                 c_base + abs(np.random.randn()), # high
-                 c_base - abs(np.random.randn()), # low
-                 c_base + np.random.randn(), # close
-                 100.0, # volume
-                 1600000000.0 + i * 60 # timestamp
+                 c_open,  # open
+                 c_high,  # high (always >= open and close)
+                 c_low,   # low (always <= open and close)
+                 c_close, # close
+                 100.0,   # volume
+                 1600000000.0 + i * 60  # timestamp
              ]
         
         # Build features

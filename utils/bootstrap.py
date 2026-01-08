@@ -115,10 +115,9 @@ def verify_model_inference(model: DerivOmniModel, settings: Settings, device: st
     logger.info("Running dummy forward pass for compatibility check...")
     try:
         # Create dummy inputs based on settings
-        # Ticks: (Batch, Channels, Length) for CNN
+        # Ticks: (Batch, Length) - 1D sequence of tick prices
         ticks = torch.randn(
             1, 
-            settings.data_shapes.num_features_ticks, 
             settings.data_shapes.sequence_length_ticks,
             dtype=torch.float32  # CRITICAL-005
         ).to(device)
@@ -127,17 +126,14 @@ def verify_model_inference(model: DerivOmniModel, settings: Settings, device: st
         candles = torch.randn(
             1, 
             settings.data_shapes.sequence_length_candles, 
-            settings.data_shapes.num_features_candles,
+            settings.data_shapes.feature_dim_candles,
             dtype=torch.float32  # CRITICAL-005
         ).to(device)
         
         # Volatility: (Batch, Features)
-        # Assuming 4 features if not specified, but best to use settings if available
-        # fallback to 6 (typical) or check settings?
-        vol_dim = getattr(settings.data_shapes, "num_features_volatility", 6)
         vol_metrics = torch.randn(
             1, 
-            vol_dim,
+            settings.data_shapes.feature_dim_volatility,
             dtype=torch.float32  # CRITICAL-005
         ).to(device)
         
@@ -149,6 +145,7 @@ def verify_model_inference(model: DerivOmniModel, settings: Settings, device: st
     except Exception as e:
         logger.error(f"Inference Compatibility Check Failed! {e}")
         raise RuntimeError(f"Model Checkpoint Incompatible with Current Architecture: {e}")
+
 
 
 def create_trading_stack(
