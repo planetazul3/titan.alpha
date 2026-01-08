@@ -187,6 +187,11 @@ class DerivClient:
         self._keep_alive_task: asyncio.Task | None = None
         self._reconnect_lock = asyncio.Lock()
         
+        # Anti-cascade mechanism: epoch counter increments on each successful reconnection
+        # Stream generators check this to avoid thundering herd on resubscription
+        self._reconnect_epoch: int = 0
+        self._subscriber_count: int = 0  # Track active stream subscribers
+        
         # I01 Fix: Circuit breaker for graceful degradation
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=5,
@@ -351,7 +356,9 @@ class DerivClient:
                     await asyncio.sleep(jitter)
                     
                     await self.connect()
-                    logger.info("Reconnection successful")
+                    # Increment epoch on successful reconnection to signal streams
+                    self._reconnect_epoch += 1
+                    logger.info(f"Reconnection successful (epoch={self._reconnect_epoch})")
                     return True
                 except Exception as e:
                     logger.error(f"Reconnection attempt {attempt + 1} failed: {e}")
@@ -514,6 +521,9 @@ class DerivClient:
             if not self.api:
                 raise RuntimeError("Client not connected")
 
+            # Anti-cascade: capture epoch at start of this streaming attempt
+            starting_epoch = self._reconnect_epoch
+            
             logger.info(f"Subscribing to ticks for {self.symbol}...")
 
             try:
@@ -590,6 +600,15 @@ class DerivClient:
                 # I01: Record failure
                 self.circuit_breaker.record_failure()
 
+            # Anti-cascade: check if another task already reconnected while we were streaming
+            if self._reconnect_epoch > starting_epoch:
+                # Another task already reconnected - add jittered delay to stagger resubscription
+                jitter = random.uniform(0.5, 2.0)
+                logger.info(f"Epoch changed ({starting_epoch} -> {self._reconnect_epoch}), "
+                           f"waiting {jitter:.1f}s before resubscribing (anti-cascade)")
+                await asyncio.sleep(jitter)
+                continue  # Skip reconnect attempt, just resubscribe
+
             # Attempt reconnection
             if not await self._reconnect():
                 # I01: Record failure on reconnection failure
@@ -629,6 +648,9 @@ class DerivClient:
             
             if not self.api:
                 raise RuntimeError("Client not connected")
+
+            # Anti-cascade: capture epoch at start of this streaming attempt
+            starting_epoch = self._reconnect_epoch
 
             logger.info(f"Subscribing to candle stream ({interval}s) for {self.symbol}...")
 
@@ -689,8 +711,6 @@ class DerivClient:
                     queue.put_nowait(None)
 
                 subscription = source.subscribe(on_next=on_next, on_error=on_error, on_completed=on_completed)
-                
-
 
                 try:
                     while True:
@@ -715,6 +735,15 @@ class DerivClient:
                 logger.error(f"Candle stream subscription error: {e}")
                 # I01: Record failure
                 self.circuit_breaker.record_failure()
+
+            # Anti-cascade: check if another task already reconnected while we were streaming
+            if self._reconnect_epoch > starting_epoch:
+                # Another task already reconnected - add jittered delay to stagger resubscription
+                jitter = random.uniform(0.5, 2.0)
+                logger.info(f"Epoch changed ({starting_epoch} -> {self._reconnect_epoch}), "
+                           f"waiting {jitter:.1f}s before resubscribing (anti-cascade)")
+                await asyncio.sleep(jitter)
+                continue  # Skip reconnect attempt, just resubscribe
 
             # Attempt reconnection
             if not await self._reconnect():

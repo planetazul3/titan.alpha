@@ -150,5 +150,46 @@ class TestCircuitBreakerProbeLock:
         assert any("was in closed for" in record.message.lower() for record in caplog.records)
 
 
+class TestEpochAntiCascade:
+    """Test epoch-based anti-cascade mechanism for reconnection storm prevention."""
+
+    def test_epoch_increments_on_init(self):
+        """Verify epoch counter is initialized to 0."""
+        settings = MagicMock()
+        client = DerivClient(settings)
+        assert client._reconnect_epoch == 0
+        assert client._subscriber_count == 0
+
+    @pytest.mark.asyncio
+    async def test_epoch_increments_on_reconnect(self):
+        """Verify epoch increments after successful reconnection."""
+        settings = MagicMock()
+        settings.trading.symbol = "R_100"
+        client = DerivClient(settings)
+        
+        initial_epoch = client._reconnect_epoch
+        
+        with patch("data.ingestion.client.DerivAPI") as mock_api_cls:
+            mock_api = MagicMock()
+            mock_api_cls.return_value = mock_api
+            mock_api.ping = AsyncMock(return_value={"ping": 1})
+            mock_api.authorize = AsyncMock(return_value={"authorize": {"balance": 100, "currency": "USD"}})
+            mock_api.forget_all = AsyncMock()
+            mock_api.clear = AsyncMock()
+            
+            # Manually set connected state to simulate reconnection
+            client.api = mock_api
+            
+            # Force disconnect first
+            await client.disconnect()
+            
+            # Now reconnect
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await client._reconnect(max_attempts=1)
+            
+            assert result is True
+            assert client._reconnect_epoch == initial_epoch + 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
