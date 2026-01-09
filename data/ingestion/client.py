@@ -216,8 +216,17 @@ class DerivClient:
 
     @property
     def is_connected(self) -> bool:
-        """Check if client is currently connected and authorized."""
-        return self.api is not None and self._keep_alive_task is not None and not self._keep_alive_task.done()
+        """Check if client is currently connected and authorized.
+        
+        Also checks circuit breaker state to prevent using a zombie connection
+        where the API object exists but the underlying WebSocket is dead.
+        """
+        return (
+            self.api is not None 
+            and self._keep_alive_task is not None 
+            and not self._keep_alive_task.done()
+            and self.circuit_breaker.state != CircuitState.OPEN
+        )
 
     async def connect(self, max_retries: int = 3) -> None:
         """
@@ -524,6 +533,9 @@ class DerivClient:
             # Anti-cascade: capture epoch at start of this streaming attempt
             starting_epoch = self._reconnect_epoch
             
+            # M20: Track subscription time to detect quick failures (zombie connections)
+            subscription_start = time.monotonic()
+            
             logger.info(f"Subscribing to ticks for {self.symbol}...")
 
             try:
@@ -600,10 +612,25 @@ class DerivClient:
                 # I01: Record failure
                 self.circuit_breaker.record_failure()
 
+            # M20: Detect quick failures indicating zombie connection
+            stream_duration = time.monotonic() - subscription_start
+            if stream_duration < 5.0:
+                logger.warning(
+                    f"Stream failed quickly ({stream_duration:.1f}s) - possible zombie connection"
+                )
+                # Record extra failure to help circuit breaker trigger faster
+                self.circuit_breaker.record_failure()
+
+            # M21: Minimum delay after ANY stream termination to prevent tight loop storms
+            await asyncio.sleep(1.0)
+
             # Anti-cascade: check if another task already reconnected while we were streaming
             if self._reconnect_epoch > starting_epoch:
-                # Another task already reconnected - add jittered delay to stagger resubscription
-                jitter = random.uniform(0.5, 2.0)
+                # Another task already reconnected - but if we got here due to immediate failure,
+                # the connection may be dead. Record failure to help circuit breaker trigger.
+                self.circuit_breaker.record_failure()
+                # M22: Increased delay (2-5s instead of 0.5-2s) to prevent reconnection storms
+                jitter = random.uniform(2.0, 5.0)
                 logger.info(f"Epoch changed ({starting_epoch} -> {self._reconnect_epoch}), "
                            f"waiting {jitter:.1f}s before resubscribing (anti-cascade)")
                 await asyncio.sleep(jitter)
@@ -651,6 +678,9 @@ class DerivClient:
 
             # Anti-cascade: capture epoch at start of this streaming attempt
             starting_epoch = self._reconnect_epoch
+
+            # M20: Track subscription time to detect quick failures (zombie connections)
+            subscription_start = time.monotonic()
 
             logger.info(f"Subscribing to candle stream ({interval}s) for {self.symbol}...")
 
@@ -736,10 +766,25 @@ class DerivClient:
                 # I01: Record failure
                 self.circuit_breaker.record_failure()
 
+            # M20: Detect quick failures indicating zombie connection
+            stream_duration = time.monotonic() - subscription_start
+            if stream_duration < 5.0:
+                logger.warning(
+                    f"Stream failed quickly ({stream_duration:.1f}s) - possible zombie connection"
+                )
+                # Record extra failure to help circuit breaker trigger faster
+                self.circuit_breaker.record_failure()
+
+            # M21: Minimum delay after ANY stream termination to prevent tight loop storms
+            await asyncio.sleep(1.0)
+
             # Anti-cascade: check if another task already reconnected while we were streaming
             if self._reconnect_epoch > starting_epoch:
-                # Another task already reconnected - add jittered delay to stagger resubscription
-                jitter = random.uniform(0.5, 2.0)
+                # Another task already reconnected - but if we got here due to immediate failure,
+                # the connection may be dead. Record failure to help circuit breaker trigger.
+                self.circuit_breaker.record_failure()
+                # M22: Increased delay (2-5s instead of 0.5-2s) to prevent reconnection storms
+                jitter = random.uniform(2.0, 5.0)
                 logger.info(f"Epoch changed ({starting_epoch} -> {self._reconnect_epoch}), "
                            f"waiting {jitter:.1f}s before resubscribing (anti-cascade)")
                 await asyncio.sleep(jitter)
