@@ -31,8 +31,8 @@ from execution.sqlite_shadow_store import SQLiteShadowStore
 
 @pytest.fixture
 def mock_settings():
-    """Create real settings for testing."""
-    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes, ShadowTradeConfig, ContractConfig
+    """Create real settings for testing with trading enabled."""
+    from config.settings import Settings, Trading, Thresholds, ModelHyperparams, DataShapes, ShadowTradeConfig, ContractConfig, ExecutionSafety
     
     trading = Trading.model_construct(
         symbol="R_100",
@@ -65,6 +65,10 @@ def mock_settings():
     shadow_trade = ShadowTradeConfig.model_construct(
         min_probability_track=0.40
     )
+    # C2 Fix: Explicitly enable trading in test settings
+    execution_safety = ExecutionSafety.model_construct(
+        kill_switch_enabled=False  # Enable trading for tests
+    )
     
     return Settings.model_construct(
         trading=trading,
@@ -73,6 +77,7 @@ def mock_settings():
         data_shapes=data_shapes,
         contracts=contracts,
         shadow_trade=shadow_trade,
+        execution_safety=execution_safety,  # C2 Fix
         environment="development"
     )
 
@@ -286,7 +291,7 @@ class TestLiveFlowIntegration:
             return_value=TradeResult(success=True, contract_id="TEST")
         )
 
-        config = ExecutionSafetyConfig(max_trades_per_minute=3, max_trades_per_minute_per_symbol=3, max_daily_loss=100.0)
+        config = ExecutionSafetyConfig(max_trades_per_minute=3, max_trades_per_minute_per_symbol=3, max_daily_loss=100.0, kill_switch_enabled=False)
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "rate_limit.db")
 
         # Execute trades up to limit
@@ -412,7 +417,7 @@ class TestEndToEndFlow:
             return_value=TradeResult(success=True, contract_id="EXEC_1")
         )
 
-        config = ExecutionSafetyConfig(max_trades_per_minute=10)
+        config = ExecutionSafetyConfig(max_trades_per_minute=10, kill_switch_enabled=False)
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "state.db")
 
         regime_veto = RegimeVeto(threshold_caution=0.1, threshold_veto=0.3)
@@ -456,7 +461,7 @@ class TestErrorHandling:
         mock_executor.execute = AsyncMock(side_effect=Exception("Broker error"))
 
         config = ExecutionSafetyConfig(
-            max_trades_per_minute=10, max_retry_attempts=2, retry_base_delay=0.01
+            max_trades_per_minute=10, max_retry_attempts=2, retry_base_delay=0.01, kill_switch_enabled=False
         )
         safe_executor = SafeTradeExecutor(mock_executor, config, state_file=tmp_path / "state.db")
 

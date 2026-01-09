@@ -34,6 +34,7 @@ async def test_concurrent_safety_checks(tmp_path):
     config = ExecutionSafetyConfig(
         max_trades_per_minute=50, 
         max_trades_per_minute_per_symbol=50,
+        kill_switch_enabled=False,  # C2 Fix: Enable trading for tests
     )
     
     mock_executor = MagicMock()

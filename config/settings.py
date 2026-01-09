@@ -246,7 +246,7 @@ class ExecutionSafety(BaseModel):
         default=1.0, description="Base delay in seconds for exponential backoff", gt=0, le=30
     )
     kill_switch_enabled: bool = Field(
-        default=False, description="Emergency halt - blocks ALL trading"
+        default=True, description="Emergency halt - blocks ALL trading (safe-by-default)"
     )
     circuit_breaker_reset_minutes: int = Field(
         default=15, description="Minutes before circuit breaker automatically resets", ge=1, le=1440

@@ -67,7 +67,7 @@ async def test_safe_executor_daily_limit(clean_db):
     
     # Config: Max 2 trades/day for testing (via pnl limit or trade count?)
     # Config has max_daily_loss. Let's use that.
-    config = ExecutionSafetyConfig(max_daily_loss=50.0)
+    config = ExecutionSafetyConfig(max_daily_loss=50.0, kill_switch_enabled=False)
     
     mock_inner = AsyncMock()
     mock_inner.execute.return_value = TradeResult(success=True)
@@ -100,7 +100,7 @@ async def test_safe_executor_daily_limit(clean_db):
 @pytest.mark.asyncio
 async def test_safe_executor_rate_limit(clean_db):
     """Verify rate limits."""
-    config = ExecutionSafetyConfig(max_trades_per_minute=2)
+    config = ExecutionSafetyConfig(max_trades_per_minute=2, kill_switch_enabled=False)
     mock_inner = AsyncMock()
     mock_inner.execute.return_value = TradeResult(success=True)
     

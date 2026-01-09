@@ -56,7 +56,7 @@ class TestSafeTradeExecutor:
 
     @pytest.fixture
     def config(self):
-        """Create standard safety config."""
+        """Create standard safety config with trading enabled."""
         return ExecutionSafetyConfig(
             max_trades_per_minute=5,
             max_trades_per_minute_per_symbol=3,
@@ -64,6 +64,7 @@ class TestSafeTradeExecutor:
             max_stake_per_trade=10.0,
             max_retry_attempts=3,
             retry_base_delay=0.01,  # Fast for tests
+            kill_switch_enabled=False,  # Explicitly enable trading for tests
         )
 
     @pytest.mark.asyncio
@@ -249,13 +250,13 @@ class TestExecutionSafetyConfig:
     """Tests for ExecutionSafetyConfig dataclass."""
 
     def test_default_values(self):
-        """Should have sensible defaults."""
+        """Should have sensible defaults (kill switch ON for safety)."""
         config = ExecutionSafetyConfig()
 
         assert config.max_trades_per_minute == 5
         assert config.max_daily_loss == 50.0
         assert config.max_stake_per_trade == 20.0
-        assert config.kill_switch_enabled is False
+        assert config.kill_switch_enabled is True  # C2 Fix: Safe-by-default
 
     def test_custom_values(self):
         """Should accept custom values."""

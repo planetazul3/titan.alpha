@@ -305,7 +305,7 @@ class TestRegimeVeto:
         """
         from execution.decision import DecisionEngine
         from execution.regime import RegimeVeto
-        from config.settings import Settings, Thresholds, ModelHyperparams, Trading, DataShapes
+        from config.settings import Settings, Thresholds, ModelHyperparams, Trading, DataShapes, ExecutionSafety
         thresholds = Thresholds.model_construct(
             confidence_threshold_high=0.75,
             learning_threshold_min=0.40,
@@ -316,11 +316,14 @@ class TestRegimeVeto:
             regime_veto_threshold=0.3
         )
         trading = Trading.model_construct(symbol="R_100", stake_amount=10.0)
+        # C2 Fix: Explicitly disable kill switch for this test (test is about regime veto)
+        execution_safety = ExecutionSafety.model_construct(kill_switch_enabled=False)
         settings = Settings.model_construct(
             thresholds=thresholds,
             hyperparams=hyperparams,
             trading=trading,
             data_shapes=DataShapes.model_construct(warmup_steps=0),
+            execution_safety=execution_safety,  # C2 Fix
             environment="development"
         )
 
