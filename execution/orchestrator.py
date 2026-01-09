@@ -116,7 +116,7 @@ class InferenceOrchestrator:
             # 3. Model Inference (Offloaded to Executor)
             loop = asyncio.get_running_loop()
             
-            with torch.no_grad():
+            with torch.inference_mode():  # I4: More memory-efficient than no_grad()
                 # Predict Probabilities
                 probs = await loop.run_in_executor(
                     None, 

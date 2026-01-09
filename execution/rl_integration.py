@@ -212,7 +212,7 @@ class RLTradingIntegration:
         
         if use_rl:
             # Get RL recommendation
-            with torch.no_grad():
+            with torch.inference_mode():  # I4: More memory-efficient
                 action, log_prob, mean = self.actor.sample(
                     state.unsqueeze(0),
                     deterministic=deterministic,

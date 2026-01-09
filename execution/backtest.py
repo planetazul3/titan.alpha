@@ -404,7 +404,7 @@ class BacktestEngine:
                         
                         # Inference
                         self.model.eval()
-                        with torch.no_grad():
+                        with torch.inference_mode():  # I4: More memory-efficient
                             outputs = self.model(tick_tensor, candle_tensor)
                             
                         # Parse outputs (assuming model returns dict or tuple)
