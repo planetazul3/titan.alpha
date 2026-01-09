@@ -155,25 +155,14 @@ class CircuitBreaker:
             return False
     
     async def wait_if_open(self) -> None:
-        """
-        Wait for cooldown if circuit is open.
-        
-        PERF-002 FIX: Optimized wait logic.
-        """
+        """Wait for cooldown if circuit is open."""
         while self.state == CircuitState.OPEN:
-            elapsed = time.monotonic() - self._last_failure_time
-            remaining = self._current_cooldown - elapsed
-            
-            if remaining <= 0:
+            remaining = self._current_cooldown - (time.monotonic() - self._last_failure_time)
+            if remaining > 0:
+                logger.info(f"Circuit open, waiting {remaining:.0f}s for cooldown...")
+                await asyncio.sleep(min(remaining, 10))  # Check every 10s max
+            else:
                 break
-                
-            # Log only if waiting for a significant time
-            if remaining > 1.0:
-                logger.info(f"Circuit open, waiting {remaining:.1f}s for cooldown...")
-            
-            # Sleep the exact amount needed (or max 5s for responsiveness/logging)
-            # asyncio.sleep is non-blocking to the loop, so this is safe.
-            await asyncio.sleep(min(remaining, 5.0))
 
 
 

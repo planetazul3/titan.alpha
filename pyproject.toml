@@ -19,7 +19,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
 exclude = [
     "venv",
@@ -43,7 +43,7 @@ ignore = ["E501"]  # Line too long
 
 [tool.black]
 line-length = 100
-target-version = ['py312']
+target-version = ['py310', 'py311', 'py312']
 exclude = '''
 /(
     \.git

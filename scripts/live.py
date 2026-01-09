@@ -561,37 +561,11 @@ async def run_live_trading(args):
         # TaskGroup automatically cancels all tasks when any task raises an exception
         # and re-raises the exception after cleanup.
         # PHASE 5: ALL tasks now use extracted modules with LiveTradingContext
-        # CRYTICAL-001 Fix: Python 3.10 Compatibility (TaskGroup is 3.11+)
-        # Using explicit task management instead
-        
-        tasks = []
-        try:
-            # Create tasks
-            ctx.tasks["tick_processor"] = asyncio.create_task(tick_processor(ctx), name="tick_processor")
-            ctx.tasks["candle_processor"] = asyncio.create_task(candle_processor(ctx), name="candle_processor")
-            ctx.tasks["heartbeat"] = asyncio.create_task(heartbeat_task(ctx), name="heartbeat_monitor")
-            ctx.tasks["maintenance"] = asyncio.create_task(maintenance_task(ctx), name="maintenance_worker")
-            
-            # Collect for waiting
-            tasks = list(ctx.tasks.values())
-            
-            # Wait for all tasks - if any fails with exception, it will raise here if we use gather
-            # graceful_shutdown sets shutdown_event, which tasks observe and exit cleanly
-            await asyncio.gather(*tasks, return_exceptions=False)
-            
-        except asyncio.CancelledError:
-            logger.info("Main task group cancelled")
-        except Exception as e:
-            logger.critical(f"Critical task failure: {e}", exc_info=True)
-        finally:
-            # cleanup is handled by finally block in main(), but we ensure tasks are done
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            
-            if tasks:
-                # Wait for cancellation to complete
-                await asyncio.gather(*tasks, return_exceptions=True)
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(tick_processor(ctx), name="tick_processor")  # Extracted module
+            tg.create_task(candle_processor(ctx), name="candle_processor")  # Extracted module
+            tg.create_task(heartbeat_task(ctx), name="heartbeat_monitor")  # Extracted module
+            tg.create_task(maintenance_task_module(ctx), name="maintenance_worker")  # Extracted module
             
     except Exception as e:
         logger.critical(f"FATAL ERROR in main loop: {e}", exc_info=True)

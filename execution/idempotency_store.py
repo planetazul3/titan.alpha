@@ -16,55 +16,47 @@ logger = logging.getLogger(__name__)
 class SQLiteIdempotencyStore:
     """
     SQLite-backed store for tracking executed signal IDs.
-    
-    PERF-001 FIX: Uses persistent connection.
     """
     
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # PERF-001: Persistent connection with larger cache and thread checks disabled
-        # (Since we only access via run_in_executor sequentially mostly, or we handle concurrency carefully)
-        # Actually, sqlite3 modules checking same thread can be an issue if accessed from different threads
-        # via run_in_executor. check_same_thread=False is needed.
-        self.conn = sqlite3.connect(
-            self.db_path, 
-            check_same_thread=False, 
-            isolation_level=None  # Autocommit mode for speed
-        )
-        self.conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for concurrency
-        self.conn.execute("PRAGMA synchronous=NORMAL")  # Speed vs safety tradeoff
         self._init_db()
         
     def _init_db(self):
         """Initialize database schema."""
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS executed_signals (
-                signal_id TEXT PRIMARY KEY,
-                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                contract_id TEXT,
-                symbol TEXT
-            )
-        """)
-        # Create index for cleanup
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_executed_at ON executed_signals(executed_at)")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS executed_signals (
+                    signal_id TEXT PRIMARY KEY,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    contract_id TEXT,
+                    symbol TEXT
+                )
+            """)
+            # Create index for cleanup
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_executed_at ON executed_signals(executed_at)")
             
     def _exists(self, signal_id: str) -> bool:
         """Internal sync implementation."""
-        cursor = self.conn.execute(
-            "SELECT 1 FROM executed_signals WHERE signal_id = ?", 
-            (signal_id,)
-        )
-        return cursor.fetchone() is not None
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM executed_signals WHERE signal_id = ?", 
+                (signal_id,)
+            )
+            return cursor.fetchone() is not None
             
     def _get_contract_id(self, signal_id: str) -> Optional[str]:
         """Internal sync implementation."""
-        cursor = self.conn.execute(
-            "SELECT contract_id FROM executed_signals WHERE signal_id = ?", 
-            (signal_id,)
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT contract_id FROM executed_signals WHERE signal_id = ?", 
+                (signal_id,)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+            return row[0] if row else None
 
     # CRITICAL-002: Atomic checks - Internal Sync Implementation
     def _check_and_reserve(self, signal_id: str, symbol: str) -> tuple[bool, Optional[str]]:
@@ -73,50 +65,56 @@ class SQLiteIdempotencyStore:
         Atomically check if signal exists and reserve if not.
         Returns: (is_new: bool, existing_contract_id: str|None)
         """
-        try:
-            # Use INSERT OR IGNORE to atomically reserve
-            # We use 'PENDING' as temporary contract_id
-            self.conn.execute(
-                "INSERT INTO executed_signals (signal_id, contract_id, symbol) VALUES (?, 'PENDING', ?)",
-                (signal_id, symbol)
-            )
-            # If we get here without integrity error, we reserved it
-            logger.debug(f"Reserved execution for signal {signal_id}")
-            return True, None
-        except sqlite3.IntegrityError:
-            # Already exists, fetch current state
-            cursor = self.conn.execute("SELECT contract_id FROM executed_signals WHERE signal_id = ?", (signal_id,))
-            row = cursor.fetchone()
-            existing_id = row[0] if row else None
-            logger.debug(f"Signal {signal_id} already exists (contract: {existing_id})")
-            return False, existing_id
+        with sqlite3.connect(self.db_path) as conn:
+            # Try to reserve
+            try:
+                # Use INSERT OR IGNORE to atomically reserve
+                # We use 'PENDING' as temporary contract_id
+                cursor = conn.execute(
+                    "INSERT INTO executed_signals (signal_id, contract_id, symbol) VALUES (?, 'PENDING', ?)",
+                    (signal_id, symbol)
+                )
+                # If we get here without integrity error, we reserved it
+                logger.debug(f"Reserved execution for signal {signal_id}")
+                return True, None
+            except sqlite3.IntegrityError:
+                # Already exists, fetch current state
+                cursor = conn.execute("SELECT contract_id FROM executed_signals WHERE signal_id = ?", (signal_id,))
+                row = cursor.fetchone()
+                existing_id = row[0] if row else None
+                logger.debug(f"Signal {signal_id} already exists (contract: {existing_id})")
+                return False, existing_id
 
     def _update_contract_id(self, signal_id: str, contract_id: str):
         """Internal sync implementation."""
-        self.conn.execute(
-            "UPDATE executed_signals SET contract_id = ? WHERE signal_id = ?",
-            (contract_id, signal_id)
-        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE executed_signals SET contract_id = ? WHERE signal_id = ?",
+                (contract_id, signal_id)
+            )
         logger.debug(f"Updated reservation for {signal_id} with contract {contract_id}")
 
     def _delete_record(self, signal_id: str):
         """Internal sync implementation."""
-        self.conn.execute("DELETE FROM executed_signals WHERE signal_id = ?", (signal_id,))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM executed_signals WHERE signal_id = ?", (signal_id,))
         logger.debug(f"Deleted record for signal {signal_id}")
 
     def _record_execution(self, signal_id: str, contract_id: str, symbol: str):
         """Internal sync implementation."""
-        self.conn.execute(
-            "INSERT OR REPLACE INTO executed_signals (signal_id, contract_id, symbol) VALUES (?, ?, ?)",
-            (signal_id, contract_id, symbol)
-        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO executed_signals (signal_id, contract_id, symbol) VALUES (?, ?, ?)",
+                (signal_id, contract_id, symbol)
+            )
         logger.debug(f"Recorded execution for signal {signal_id} (contract: {contract_id})")
 
     def cleanup(self, days: int = 7):
         """Clean up old records to prevent database bloat."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        cursor = self.conn.execute("DELETE FROM executed_signals WHERE executed_at < ?", (cutoff,))
-        logger.info(f"Cleaned up {cursor.rowcount} old idempotency records")
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM executed_signals WHERE executed_at < ?", (cutoff,))
+            logger.info(f"Cleaned up {cursor.rowcount} old idempotency records")
 
     # Async wrappers for use in async context (executor.py)
     # PUBLIC API - MUST BE USED IN PREFERENCE TO SYNC METHODS
@@ -151,6 +149,5 @@ class SQLiteIdempotencyStore:
         await loop.run_in_executor(None, self._delete_record, signal_id)
 
     async def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
+        """Close resources (no-op for SQLite as we open per query)."""
+        pass
