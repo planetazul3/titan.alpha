@@ -12,14 +12,19 @@ class TickSchema(pa.DataFrameModel):
         coerce = True
 
 class CandleSchema(pa.DataFrameModel):
-    """Strict schema for Candle data."""
+    """Strict schema for Candle data per SSOT Section 5.2.1."""
     epoch: Series[int] = pa.Field(ge=0, coerce=True)
     open: Series[float] = pa.Field(gt=0, coerce=True)
     high: Series[float] = pa.Field(gt=0, coerce=True)
     low: Series[float] = pa.Field(gt=0, coerce=True)
     close: Series[float] = pa.Field(gt=0, coerce=True)
-    volume: Series[float] = pa.Field(ge=0, coerce=True, nullable=True) # Volume can be 0, sometimes missing/nan in partials? No, usually 0.
+    volume: Series[float] = pa.Field(ge=0, coerce=True, nullable=True)
+    
+    @pa.dataframe_check
+    def high_gte_low(cls, df) -> Series[bool]:
+        """Ensure High is greater than or equal to Low (SSOT validation)."""
+        return df["high"] >= df["low"]
     
     class Config:
-        strict = True # Reject unknown columns
+        strict = True
         coerce = True
