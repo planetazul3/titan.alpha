@@ -316,7 +316,8 @@ async def run_live_trading(args):
             sizer = CompoundingPositionSizer(
                 base_stake=base_stake,
                 max_consecutive_wins=max_streak,
-                streak_multiplier=multiplier
+                streak_multiplier=multiplier,
+                min_confidence_to_compound=settings.thresholds.confidence_threshold_high
             )
             console_log(f"Strategy: COMPOUNDING (Multiplier: {multiplier or 'Profit'}, MaxStreak: {max_streak})", "INFO")
         
@@ -453,7 +454,7 @@ async def run_live_trading(args):
         tick_count = 0
         candle_count = 0
         inference_count = 0
-        last_tick_time = datetime.now()
+        last_tick_time = datetime.now(timezone.utc)
         last_tick_log_count = 0  # For refined tick logging
         last_inference_time = 0.0  # CRITICAL RULE 1: Inference Cooldown
         

@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -77,7 +77,7 @@ async def heartbeat_task(context: LiveTradingContext) -> None:
             except asyncio.TimeoutError:
                 pass  # Normal timeout, continue with heartbeat
             
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             now_ts = time.time()
             stale_seconds = (now - context.last_tick_time).total_seconds()
             
