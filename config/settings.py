@@ -73,20 +73,29 @@ class Thresholds(BaseModel):
     - learning_threshold_min <= prob < learning_threshold_max: Learning zone
     - prob < learning_threshold_min: IGNORE
 
+    Auto-Adaptation:
+        When only `confidence_threshold_high` is set, learning thresholds are
+        automatically derived:
+        - learning_threshold_max = confidence_threshold_high - 0.05 (5% below)
+        - learning_threshold_min = confidence_threshold_high - 0.15 (15% below)
+        
+        This allows users to change only `confidence_threshold_high` and have
+        the learning zone adapt proportionally.
+
     Attributes:
         confidence_threshold_high: Minimum probability for real trade execution
-        learning_threshold_min: Minimum probability to track as shadow trade
-        learning_threshold_max: Maximum probability for learning zone
+        learning_threshold_min: Minimum probability to track as shadow trade (auto-derived if not set)
+        learning_threshold_max: Maximum probability for learning zone (auto-derived if not set)
     """
 
     confidence_threshold_high: float = Field(
         ..., description="High confidence threshold for real trades", gt=0.5, le=1.0
     )
     learning_threshold_min: float = Field(
-        ..., description="Minimum threshold for shadow trades", ge=0.0, le=1.0
+        default=None, description="Minimum threshold for shadow trades (auto-derived if not set)", ge=0.0, le=1.0
     )
     learning_threshold_max: float = Field(
-        ..., description="Maximum threshold for learning zone", ge=0.0, le=1.0
+        default=None, description="Maximum threshold for learning zone (auto-derived if not set)", ge=0.0, le=1.0
     )
     caution_threshold_margin: float = Field(
         default=0.05,
@@ -94,6 +103,39 @@ class Thresholds(BaseModel):
         ge=0.0,
         le=0.2
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def auto_derive_learning_thresholds(cls, data: dict) -> dict:
+        """
+        Auto-derive learning thresholds from confidence_threshold_high if not explicitly set.
+        
+        Formula:
+        - learning_threshold_max = confidence_threshold_high - 0.05 (5% buffer)
+        - learning_threshold_min = confidence_threshold_high - 0.15 (15% buffer, minimum 0.45)
+        
+        This ensures the learning zone maintains a consistent 10% spread while
+        staying proportional to the confidence threshold.
+        """
+        if isinstance(data, dict):
+            conf_high = data.get("confidence_threshold_high")
+            
+            if conf_high is not None:
+                # Auto-derive learning_threshold_max if not explicitly set
+                if data.get("learning_threshold_max") is None:
+                    derived_max = max(conf_high - 0.05, 0.51)  # At least above random chance
+                    data["learning_threshold_max"] = round(derived_max, 2)
+                
+                # Auto-derive learning_threshold_min if not explicitly set
+                if data.get("learning_threshold_min") is None:
+                    # Ensure a 10% learning zone spread, with floor at 0.45
+                    derived_min = max(conf_high - 0.15, 0.45)
+                    # Ensure min < max
+                    if data.get("learning_threshold_max"):
+                        derived_min = min(derived_min, data["learning_threshold_max"] - 0.05)
+                    data["learning_threshold_min"] = round(max(derived_min, 0.40), 2)
+        
+        return data
 
     @model_validator(mode="after")
     def validate_thresholds_logic(self) -> "Thresholds":
