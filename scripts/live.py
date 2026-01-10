@@ -545,9 +545,10 @@ async def run_live_trading(args):
         console_log("Synchronizing with market history...", "WAIT")
         
         # Fetch history before starting background tasks
-        hist_ticks = await client.get_historical_ticks(count=settings.data_shapes.sequence_length_ticks)
+        # NOTE: Use buffer dimensions (includes warmup offset), not raw settings
+        hist_ticks = await client.get_historical_ticks(count=buffer.tick_length)
         hist_candles_raw = await client.get_historical_candles(
-            count=settings.data_shapes.sequence_length_candles, 
+            count=buffer.candle_length, 
             interval=60
         )
         

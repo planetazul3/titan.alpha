@@ -112,27 +112,38 @@ class Thresholds(BaseModel):
         
         Formula:
         - learning_threshold_max = confidence_threshold_high - 0.05 (5% buffer)
-        - learning_threshold_min = confidence_threshold_high - 0.15 (15% buffer, minimum 0.45)
+        - learning_threshold_min = confidence_threshold_high - 0.15 (15% buffer, minimum 0.40)
         
-        This ensures the learning zone maintains a consistent 10% spread while
-        staying proportional to the confidence threshold.
+        For very low confidence thresholds (near 51%), uses tighter margins to ensure
+        learning_min < learning_max < confidence_high constraint is always satisfied.
         """
         if isinstance(data, dict):
-            conf_high = data.get("confidence_threshold_high")
+            conf_high_raw = data.get("confidence_threshold_high")
             
-            if conf_high is not None:
+            if conf_high_raw is not None:
+                # Convert to float (env vars come as strings)
+                try:
+                    conf_high = float(conf_high_raw)
+                except (ValueError, TypeError):
+                    return data  # Let Pydantic handle the validation error
+                
                 # Auto-derive learning_threshold_max if not explicitly set
                 if data.get("learning_threshold_max") is None:
-                    derived_max = max(conf_high - 0.05, 0.51)  # At least above random chance
+                    # Ensure at least 0.01 gap below confidence_high
+                    derived_max = conf_high - 0.05
+                    # For low thresholds, use tighter margin (conf - 0.01)
+                    if derived_max <= 0.50:
+                        derived_max = conf_high - 0.01
                     data["learning_threshold_max"] = round(derived_max, 2)
                 
                 # Auto-derive learning_threshold_min if not explicitly set
                 if data.get("learning_threshold_min") is None:
-                    # Ensure a 10% learning zone spread, with floor at 0.45
-                    derived_min = max(conf_high - 0.15, 0.45)
-                    # Ensure min < max
-                    if data.get("learning_threshold_max"):
-                        derived_min = min(derived_min, data["learning_threshold_max"] - 0.05)
+                    derived_max_val = float(data.get("learning_threshold_max", conf_high - 0.05))
+                    # Ensure at least 0.05 gap below learning_max, floor at 0.40
+                    derived_min = max(derived_max_val - 0.10, 0.40)
+                    # Ensure min < max with at least 0.01 gap
+                    if derived_min >= derived_max_val:
+                        derived_min = derived_max_val - 0.01
                     data["learning_threshold_min"] = round(max(derived_min, 0.40), 2)
         
         return data

@@ -288,11 +288,25 @@ app.add_middleware(
         "http://localhost:3000",  # Alternative dev server
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://localhost:8000",  # Self
+        "http://127.0.0.1:8000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static files for dashboard
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+
+@app.get("/")
+async def root():
+    """Redirect root to dashboard."""
+    return RedirectResponse(url="/static/index.html")
 
 
 # =============================================================================
