@@ -163,7 +163,20 @@ class FeatureBuilder:
         if timestamp is not None and len(candles) > 0:
             # Candle format: [Open, High, Low, Close, Volume, Timestamp]
             last_candle_ts = candles[-1, 5]
-            check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)
+            
+            # Infer period to validate against CLOSE time, not OPEN time
+            # (Prevent false positives for 60s candles with 10s threshold)
+            period = 0.0
+            if len(candles) >= 2:
+                prev_ts = candles[-2, 5]
+                diff = last_candle_ts - prev_ts
+                # Simple sanity check for period (e.g. 1s to 1 week)
+                if 0 < diff < 604800:
+                    period = diff
+            
+            # Effective timestamp is the CLOSE time of the candle
+            effective_ts = last_candle_ts + period
+            check_data_staleness(timestamp, effective_ts, self.settings.trading.stale_candle_threshold)
                  
         # Process through canonical preprocessors
         tick_features = self._tick_pp.process(ticks)
@@ -245,7 +258,17 @@ class FeatureBuilder:
         # CRITICAL-004: Staleness Validation (Duplicate logic for numpy path)
         if timestamp is not None and len(candles) > 0:
             last_candle_ts = candles[-1, 5]
-            check_data_staleness(timestamp, last_candle_ts, self.settings.trading.stale_candle_threshold)
+            
+            # Infer period to validate against CLOSE time, not OPEN time
+            period = 0.0
+            if len(candles) >= 2:
+                prev_ts = candles[-2, 5]
+                diff = last_candle_ts - prev_ts
+                if 0 < diff < 604800:
+                    period = diff
+            
+            effective_ts = last_candle_ts + period
+            check_data_staleness(timestamp, effective_ts, self.settings.trading.stale_candle_threshold)
 
         tick_features = self._tick_pp.process(ticks)
         candle_features = self._candle_pp.process(candles)
