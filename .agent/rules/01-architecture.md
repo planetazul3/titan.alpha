@@ -17,18 +17,27 @@ alwaysApply: true
 
 1. Read `docs/reference/ARCHITECTURE_SSOT.md`
 2. Check `docs/adr/` for relevant decisions
-3. Research best practices via web search
-4. Update SSOT and changelog BEFORE coding
+3. Research best practices via web search (≥3 sources)
+4. Choose the option with highest profitability probability
+5. Update SSOT and changelog if architecture changes
 
-## Safety Vetoes (H1-H6)
+## Simplified Safety Model (SSOT §4)
 
-These are non-negotiable. See SSOT §7.1 for full definitions.
+Three hard stops. Everything else is a feature, not a requirement.
 
-| ID | Trigger | Action |
-|----|---------|--------|
-| H1 | Daily loss limit hit | Halt trading |
-| H2 | Stake exceeds max | Reject trade |
-| H3 | Volatility anomaly | Veto signal |
-| H4 | Buffer not warm | Reject signal |
-| H5 | Regime uncertain | Veto signal |
-| H6 | Stale data | Reject signal |
+| Check | Trigger | Action |
+|-------|---------|--------|
+| **Daily Loss Limit** | Loss > MAX_DAILY_LOSS | STOP trading for the day |
+| **Stake Cap** | Stake > MAX_STAKE | Reject trade |
+| **Sanity Checks** | Stale data (>5s) or NaN | Reject signal |
+
+Regime detection, volatility filters → **Optional optimizations**, not safety requirements.
+
+## Optimization Priorities (SSOT §3.5)
+
+When making trade-offs, prioritize in this order:
+1. Execution Reliability (must run without crashing)
+2. Profitability (Win Rate × Payout)
+3. Speed of Development
+4. Code Cleanliness
+5. Safety (catastrophic loss prevention only)

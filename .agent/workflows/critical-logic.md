@@ -1,8 +1,14 @@
 ---
-description: Critical logic rules for live.py that must not be changed without understanding
+description: Critical operational logic that must not be changed without understanding
 ---
 
 # Critical Logic - DO NOT CHANGE WITHOUT READING
+
+## Context
+
+This documents **operational knowledge** that prevents subtle bugs. These are not safety framework rules (those live in SSOT §4), but rather timing/coordination logic discovered through real-world failures.
+
+---
 
 ## 1. Inference Cooldown (60 seconds)
 **Location**: `scripts/live.py` in `process_candles()`
@@ -74,3 +80,23 @@ THRESHOLDS__CONFIDENCE_THRESHOLD_HIGH=0.70
 Only change if user explicitly requests.
 
 **DO NOT**: Lower threshold without user approval.
+
+---
+
+## 6. Kill Switch Locations (SSOT §4)
+
+### Daily Loss Limit
+- **Check Location**: `execution/safety/core.py` or policy layer
+- **Rule**: `if total_loss > MAX_DAILY_LOSS: halt_trading()`
+- **Non-negotiable**: Account drain prevention
+
+### Stake Cap
+- **Check Location**: Execution request validation
+- **Rule**: `if stake > MAX_STAKE: reject_trade()`
+- **Non-negotiable**: Single-trade disaster prevention
+
+### Sanity Checks
+- **Stale Data**: Reject if `timestamp_age > 5 seconds`
+- **NaN Detection**: Reject if `any(isnan(features))`
+
+**DO NOT**: Bypass these checks. Ever.

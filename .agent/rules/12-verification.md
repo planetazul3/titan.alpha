@@ -4,27 +4,34 @@ description: Rules for testing and verification
 
 # Verification Phase Rules
 
-When verifying changes:
+**Real-World Validation > Test Coverage**
+
+## Success Criteria (SSOT §1.2)
+
+- **Component**: Runs for 1 hour of live data without crashing
+- **System (Shadow)**: >20 trades, Positive Expectancy (Win Rate >53-55%)
+- **System (Live)**: Net Profit > $0 after daily session
 
 ## Required Checks
 
 ```bash
-pytest                 # All tests pass
+pytest                 # Core tests pass
 ruff check .          # Linting clean
-mypy .                # Type checking passes
 ```
+
+Type checking (`mypy`) is optional for rapid prototyping.
 
 ## Verification Mindset
 
-- Did I break any existing tests?
-- Did I add tests for new functionality?
-- Are edge cases covered?
-- Is the change documented?
+Priority order:
+1. Does it run in shadow mode for 1 hour?
+2. Are kill switches still functional? (loss limit, stake cap, sanity)
+3. Did I break existing working features?
+4. Is the change observable in logs?
 
 ## Before Committing
 
-- [ ] Tests pass
-- [ ] Linting clean
-- [ ] Type checking passes
-- [ ] No regressions introduced
-- [ ] Changes documented
+- [ ] Component runs without crashing (1hr test preferred)
+- [ ] Safety kill switches intact
+- [ ] No regressions in core trading flow
+- [ ] Changes logged/observable

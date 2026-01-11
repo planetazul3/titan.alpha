@@ -1,141 +1,108 @@
-# x.titan Architecture: Single Source of Truth
+# Operational Mandate & Architecture SSOT (v1.1)
 
 > [!IMPORTANT]
-> This document is the **definitive, canonical reference** for the x.titan trading system. It supersedes `unica.md` and all prior architectural documentation. Any deviation from this specification in the code must be treated as a bug or requires a formal update to this document.
+> **Primary Objective**: Sustained Profitability.
+> This document overrides all previous architectural constraints. If a "best practice" blocks profitability or slows down execution, it must be discarded.
 
-## 1. Introduction and Goals
+## 1. Vision & Core Philosophy
 
-### 1.1 Vision
-x.titan is a high-frequency, deep-learning-based algorithmic trading system designed for binary options markets (specifically Deriv.com). It aims to achieve consistent profitability by leveraging a **multi-expert neural network formulation** that separates temporal, spatial, and volatility analysis.
+**Goal**: Build an automated binary options trading system that makes money.
+**Operator**: Single Developer + AI Agent.
+**Approach**: Pragmatic, experimental, and autonomous.
 
-### 1.2 Core Design Principles
-*   **Safety First (Swiss Cheese Model)**: Execution logic is decoupled from signal generation. Multiple independent safety layers (Regime Veto, Risk Caps, Circuit Breakers) must *all* align for a trade to execute.
-*   **Micro-Modularity**: The codebase is composed of small, focused files (typically <200 lines) with single responsibilities.
-*   **Canonical Data**: A single shared feature generation pipeline ensures that training data and real-time inference data are mathematically identical.
-*   **Shadow Verification**: Every decision is logged to a persistent "Shadow Store", allowing for counterfactual analysis and safe validation of model updates.
+### 1.1 Core Principles
+1.  **Profit > Code Quality**: A messy script that makes money is better than a perfect architecture that loses money.
+2.  **Bias for Action**: Implement, test, and iterate. Do not get stuck in "Planning" or "Architecture Review".
+3.  **Dynamic Evolution**: The system structure is mutable. If a component is too complex, delete it. If a library helps, add it.
+4.  **Real-World Validation**: Backtests are just hints. Small-scale live testing (or "Shadow Trading" on live data) is the only metric that matters.
 
-## 2. Constraints
+### 1.2 Success Criteria ("What Works")
+A component or system is considered **functionally acceptable** only when it meets these real-world metrics:
 
-### 2.1 Technical Constraints
-*   **Runtime Environment**: Python 3.12 (strict requirement).
-*   **Resource Limits**:
-    *   **RAM**: Unconstrained (System Dependent). Large datasets should still use memory-mapping for efficiency.
-    *   **Concurrency**: `asyncio` for I/O bound tasks, avoiding blocking calls in the main loop.
-*   **Dependencies**:
-    *   **ML**: PyTorch (with CUDA/MPS acceleration).
-    *   **Data**: NumPy/SciPy (Pandas used sparingly or not at all in hot paths).
-    *   **Config**: Pydantic for strong typing.
+*   **Component**: Runs without crashing for 1 hour of live data processing.
+*   **System (Shadow Mode)**:
+    *   Executes > 20 trades.
+    *   Achieves **Positive Expectancy** (Win Rate > 53-55% depending on payout).
+*   **System (Live Mode)**:
+    *   Net Profit > $0 after a daily session.
 
-### 2.2 Organizational & Regulatory Constraints
-*   **Auditability**: All trade decisions must be traceable to specific model inputs and versions.
-*   **Hardening**: No `NaN` propagation allowed in risk calculations (RC-8). Use `math.isfinite()`.
-*   **API Usage**: Strict adherence to Deriv API rate limits to avoid account bans.
+*If it doesn't print money or run reliably, it is broken, regardless of code quality.*
 
-## 3. Context and Scope
+## 2. System Scope
 
-The system operates as an autonomous agent interacting with the Deriv.com trading platform.
+The system acts as an autonomous execution engine interacting with the Deriv.com platform.
 
-*   **Inputs**: Real-time tick stream (WebSocket), OHLC candles.
-*   **Outputs**: Trade execution commands (Buy/Sell), Heartbeat metrics, Logs.
-*   **Actors**:
-    *   **Deriv API**: External platform for market data and execution.
-    *   **Operator**: Manages lifecycle (Start/Stop) and monitors via Dashboard.
+*   **Inputs**: Market Data (Price, Volume, Time).
+*   **Decision**: Buy/Sell/Hold, Duration, Stake.
+*   **Outputs**: API calls to execute trades.
 
-## 4. Solution Strategy
+## 3. Pragmatic Architecture
 
-To meet the high-frequency and safety requirements, the architecture employs:
-1.  **Asynchronous Event Loop**: For handling high-throughput WebSocket data without blocking.
-2.  **DerivOmniModel**: A unified model architecture combining:
-    *   **Temporal Expert**: BiLSTM + Attention (Trend detection).
-    *   **Spatial Expert**: CNN Pyramid (Pattern/Shape detection).
-    *   **Volatility Expert**: Autoencoder (Regime detection & anomaly scoring).
-3.  **Strict Typing**: Extensive use of Python type hints and Pydantic validation to fail fast on configuration or data errors.
+The architecture is streamlined to three functional layers.
 
-## 5. Building Block View
+### 3.1 Data Layer (Ingest & Process)
+*   **Responsibility**: Get market data, make it usable.
+*   **Constraint**: Must act faster than the decision tick.
+*   **Components**: Client (WebSocket), Buffer, Features.
 
-### 5.1 Level 1: High-Level Subsystems
+### 3.2 Decision Layer (The Brain)
+*   **Responsibility**: Predict market direction.
+*   **Implementation**: Flexible. Deep Learning (`DerivOmniModel`), XGBoost, or Heuristics.
+*   **Rule**: If the "Advanced Model" is too heavy or slow, simplify it.
 
-| Module | Responsibility | Key Components |
-| :--- | :--- | :--- |
-| `config` | **Central Configuration**. Single source of truth for all tunable parameters. | `settings.py`, `constants.py` |
-| `data` | **Data Pipeline**. Ingestion, normalization, and feature engineering. | `features.py`, `buffer.py`, `DerivDataset` |
-| `models` | **inference Engine**. Neural network definitions and forward pass logic. | `core.py`, `temporal.py`, `spatial.py` |
-| `execution` | **Decision & Safety**. Business logic, risk management, and API bridging. | `decision.py`, `safety.py`, `executor.py`, `position_sizer.py`, `backtest.py` |
-| `training` | **Optimization**. Training loops and validation. | `train.py`, `trainer.py` |
+### 3.3 Execution Layer (The Hands)
+*   **Responsibility**: Execute the trade and manage risk.
+*   **Components**: Executor, Safety Guards (minimal).
 
-### 5.2 Level 2: Component Details
+### 3.4 Operational File Map
+*   `data/`: Ingestion and Feature engineering.
+*   `models/`: AI/ML logic.
+*   `execution/`: Trade logic and API calls.
+*   `scripts/`: Entry points (train, live, backtest).
+*   `config/`: Settings.
 
-#### 5.2.1 Data Subsystem (`data/`)
-*   **`features.py`**: The **Canonical Feature Source**. Contains the `FeatureBuilder` class. It enforces that the exact same math (log returns, Z-scores) is applied in both `scripts/train.py` and `scripts/live.py`.
-*   **`common/schema.py`**: Defines `FeatureSchema`, `CandleInputSchema`, and `FeatureOutputSchema`. Enforces strict shape and dtype validation.
-*   **`validation/schemas.py`**: Defines `TickSchema` and `CandleSchema` using **Pandera**. Enforces strict statistical validation (e.g., High >= Low) on raw data inputs before processing.
-*   **`buffer.py`**: `MarketDataBuffer` manages the sliding window of live data, ensuring the model always has a complete context window (e.g., last 200 candles) for inference.
-*   **`normalizers.py`**: Pure NumPy implementations of mathematical transforms.
+### 3.5 Optimization Priorities (The Decision Framework)
+When making trade-offs, the AI Dev must prioritize in this order:
 
-#### 5.2.2 Model Subsystem (`models/`)
-*   **`core.py`**: `DerivOmniModel`. The orchestrator that calls the sub-experts and fuses their embeddings.
-*   **`temporal.py`**: Captures time-dependencies. Input: Sequence of candles. Output: Temporal Embedding.
-*   **`spatial.py`**: Captures geometric properties of the price curve. Input: Raw ticks/high-res sequence. Output: Spatial Embedding.
-*   **`volatility.py`**: Autoencoder. Input: Volatility metrics. Output: Reconstruction Error (used for Regime Veto).
+1.  **Execution Reliability**: The system must run and trade. If it crashes, nothing else matters.
+2.  **Profitability (Expectancy)**: Win Rate and Payout optimization.
+3.  **Speed of Development**: Ship features fast to test them.
+4.  **Code Cleanliness**: Refactor only if it speeds up #3.
+5.  **Safety/Security**: Only preventing catastrophic loss (account drain).
 
-#### 5.2.3 Execution Subsystem (`execution/`)
-*   **`decision/core.py`**: `DecisionEngine`. Central coordinator for trading decisions. Evaluates model probabilities against thresholds. Integrates `ProbabilityCalibrator` and `EnsembleStrategy` for robust signal generation.
-*   **`decision_logic.py`**: Pure functional logic for processing signals and applying caution filters.
-*   **`signal_adapter_service.py`**: **Adaptation Layer**. Centralizes conversion of TradeSignals to ExecutionRequests, handling duration resolution via `ContractParameterService` and position sizing.
-*   **`contract_params.py`**: **Parameter Resolution**. Centralized logic for resolving contract durations and barriers, preventing training/execution mismatches.
-*   **`idempotency_store.py`**: **Deduplication**. SQLite-based store preventing duplicate execution of the same signal ID.
-*   **`position_sizer.py`**: **Dynamic Risk Management**. Calculates optimal stake using `KellyPositionSizer` or `TargetVolatilitySizer`, decoupled from signal logic.
-*   **`regime/veto.py`**: `RegimeVeto`. Checks the Volatility Expert's reconstruction error. If Error > `REGIME_VETO_THRESHOLD`, the signal is vetoed immediately.
-*   **`safety/core.py`**: `SafeTradeExecutor`. The final gatekeeper. Checks H1-H6 policies.
-*   **`backtest.py`**: **Event-Driven Replay**. Replays historical data through the full pipeline (`Buffer` -> `Model` -> `Decision`) to ensure "What you test is what you fly".
-*   **`sqlite_shadow_store.py`**: ACID-compliant storage for every decision made. Uses **Optimistic Concurrency Control (OCC)**.
+## 4. Operational Safety (The "Kill Switch" Model)
 
-#### 5.2.4 Calibration & Ensembling (`execution/`)
-*   **`calibration.py`**: `ProbabilityCalibrator`. Maps raw model logits/probabilities to realized win rates using Isotonic Regression.
-*   **`ensemble.py`**: `EnsembleStrategy`. Combines predictions from multiple model checkpoints (e.g., Voting, Weighted Average) to reduce variance.
+We replace complex "Swiss Cheese" models with simple, hard stops.
 
-## 6. Runtime View
+1.  **Daily Loss Limit (Hard Stop)**: If Loss > `MAX_DAILY_LOSS`, STOP trading for the day. (Non-negotiable).
+2.  **Stake Cap**: Never bet more than `MAX_STAKE`.
+3.  **Sanity Checks**:
+    *   Don't trade on stale data (> 5s latency).
+    *   Don't trade if data is clearly broken (NaNs).
 
-### 6.1 Live Trading Pipeline
-1.  **Ingest**: `DerivClient` receives a new Candle Close event.
-2.  **Update**: `MarketDataBuffer` appends the candle and updates sliding windows.
-3.  **Process**: `FeatureBuilder` takes the window and generates a Normalized Tensor.
-4.  **Infer**: `DerivOmniModel` runs the forward pass. Returns raw probabilities.
-5.  **Calibrate & Ensemble**: `ProbabilityCalibrator` maps raw outputs to win rates. `EnsembleStrategy` combines multiple model outputs.
-6.  **Evaluate**: `DecisionEngine` checks thresholds.
-    *   *IF* `reconstruction_error` > Limit: **VETO** (Unknown Regime).
-    *   *ELSE IF* `probability` < Threshold: **IGNORE**.
-    *   *ELSE*: Generate `TradeSignal`.
-7.  **Safeguard**: `SafeTradeExecutor` runs H1-H6 policies.
-    *   *IF* Pass: Execute Trade via API.
-    *   *IF* Fail: Log rejection code.
-8.  **Record**: `ShadowStore` records inputs, model outputs, and final decision.
+**Everything else (Regime detection, volatility filters) is a feature, not a safety requirement.** Adding them is an optimization, not a mandate.
 
-## 7. Cross-cutting Concepts
+## 5. Technology Stack
 
-### 7.1 Safety Policies (The "Hard Vetoes")
-| Rule ID | Name | Trigger Condition | Action |
-| :--- | :--- | :--- | :--- |
-| **H1** | Daily Loss Limit | Cumulative P&L <= `-MAX_DAILY_LOSS` | Halt trading until reset (00:00 UTC) |
-| **H2** | Stake Cap | Stake > `MAX_STAKE` | Reject trade |
-| **H3** | Volatility Veto | Volatility Anomaly > `REGIME_VETO_THRESHOLD` (Percentile/StdDev) | Veto Signal |
-| **H4** | Warmup Veto | Buffer candles < `WARMUP_PERIOD` | Reject Signal |
-| **H5** | Regime Veto | Regime == `UNCERTAIN` (High AE Error) | Veto Signal |
-| **H6** | Staleness Veto | Data Latency > `STALE_THRESHOLD` | Reject Signal (Data Quality) |
+*   **Language**: Python.
+*   **Libraries**: PyTorch, NumPy, Pandera (optional).
+*   **Deployment**: Docker/Local.
 
-### 7.2 Persistence
-*   **Safety State**: stored in `data_cache/safety_state.db`. Contains items like `daily_pnl` and `consecutive_losses`. Must persist across process restarts to prevent risk limit bypass.
-*   **Shadow Store**: stored in `data_cache/shadow_trades.db`. Logging system for analysis.
+## 6. Development Protocol for AI Agents
 
-## 8. Deployment View
-*   **Production**: Deployed via Docker/Devcontainer.
-*   **Configuration**: All environment-specific variables (API Keys, Limits) are injected via `.env` file, loaded by `config/settings.py`.
-*   **Entry Points**:
-    *   `scripts/live.py`: Main daemon.
-    *   `scripts/train.py`: Training job.
-    *   `scripts/backtest.py`: Historical simulation and validation.
+1.  **Autonomous Research**: Check the web for strategy ideas. Don't ask user permission.
+2.  **Implement Fully**: Write the code, run it.
+3.  **Fix Forward**: Use real data failures to fix logic. Don't revert to safety frameworks.
+4.  **Simplify**: Aggressively delete unused abstractions.
 
-## 9. Glossary
-*   **Shadow Trade**: A simulated trade logged to the database used for validating model performance on live data without financial risk.
-*   **Regime Veto**: A mechanism where the model self-identifies that market conditions are "out of distribution" compared to its training data, causing it to withdraw from trading.
-*   **DerivOmniModel**: The specific name of the neural network architecture used in x.titan.
+### 6.1 Definition of Done
+A task or module is **DONE** only when:
+*   [ ] **It Runs**: The code executes without syntax errors or immediate crashes.
+*   [ ] **It is Observable**: It logs clear activity (e.g., "Trade Executed", "Signal 0.85").
+*   [ ] **No Loose Ends**: No critical `TODO`, `pass`, or implementation placeholders in the main path.
+*   [ ] **Delivered**: The user can run a command and see it work.
+
+## 7. Persistence & State
+
+*   **Shadow Mode**: Log decisions to evaluate performance.
+*   **Live Mode**: Turn on when Shadow Mode shows positive expectancy.

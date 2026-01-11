@@ -99,3 +99,78 @@ The following changes were applied to create the Single Source of Truth (SSOT), 
 #### 2. Runtime Warning Resolution (Hardening)
 *   **Change**: Added safe-guards in `scripts/live.py` for volatility calculation.
 *   **Justification**: Prevents log noise from `divide by zero` on empty/flat history.
+
+## [2.0.0] - 2026-01-10
+
+### Agent Governance Migration (Breaking Change)
+
+**Context**: ARCHITECTURE_SSOT.md v1.1 introduced a fundamental philosophical shift from "safety-first SDLC framework" to "pragmatic profitability mandate." This update aligns all agent governance rules (`.agent/rules/`) with that new operational philosophy.
+
+#### 1. Core Identity Transformation
+*   **Change**: Replaced "complete SDLC team" identity with "pragmatic engineer pair" focused on profit-first development.
+*   **Files Modified**: `.agent/rules/00-identity.md`
+*   **Key Principles**:
+    - Profit > Code Quality (SSOT §1.1)
+    - Bias for Action (planning ≤20% of task time)
+    - Lifecycle simplified: IMPLEMENT → TEST WITH REAL DATA → ITERATE
+*   **Justification**: Previous identity was too process-heavy for single-developer + AI operational model. New identity emphasizes speed and real-world validation.
+
+#### 2. Simplified Safety Model Adoption
+*   **Change**: Removed H1-H6 safety veto framework, replaced with "Kill Switch" model (3 hard stops).
+*   **Files Modified**: `.agent/rules/01-architecture.md`, `.agent/rules/20-trading-safety.md`, `.agent/workflows/critical-logic.md`
+*   **Kill Switches** (SSOT §4):
+    1. Daily Loss Limit: If Loss > MAX_DAILY_LOSS, STOP trading
+    2. Stake Cap: Never exceed MAX_STAKE per trade
+    3. Sanity Checks: Reject stale data (>5s) and NaN values
+*   **Deprecated**: Regime Veto (H5), Volatility Veto (H3), Buffer Warmup Veto (H4) - now **optional optimizations**, not safety requirements.
+*   **Justification**: Swiss Cheese safety model added complexity without proven profitability benefit. Kill switches prevent catastrophic loss; everything else is a feature to optimize win rate.
+
+#### 3. Optimization Priority Hierarchy
+*   **Change**: Codified SSOT §3.5 decision framework in architecture rules.
+*   **Priority Order**:
+    1. Execution Reliability (must run without crashing)
+    2. Profitability (Win Rate × Payout)
+    3. Speed of Development
+    4. Code Cleanliness
+    5. Safety (catastrophic loss prevention only)
+*   **Justification**: Provides clear guidance for trade-off decisions. "Best practice" that conflicts with #1-3 should be discarded.
+
+#### 4. Phase-Specific Rule Updates
+*   **Planning** (10-planning.md): Added "Analysis Paralysis" anti-pattern. If 3 credible sources agree, implement.
+*   **Execution** (11-execution.md): "Working Prototype > Clean Abstraction." Emphasized aggressive code deletion.
+*   **Verification** (12-verification.md): Real-world validation > test coverage. Success = runs 1 hour in shadow mode without crashing.
+*   **Justification**: Aligns with SSOT §1.2 success criteria and §6 development protocol.
+
+#### 5. Documentation as Memory Updates
+*   **Change**: Updated memory lookup table to remove references to non-existent docs, clarified safety rule sources.
+*   **Files Modified**: `.agent/rules/02-docs-as-memory.md`
+*   **Justification**: Ensures agents don't search for deprecated documents.
+
+#### 6. Critical Logic Preservation
+*   **Change**: Updated `critical-logic.md` to separate "operational knowledge" (cooldowns, timezones) from "safety framework" (deprecated H1-H6).
+*   **Added**: Kill switch location references.
+*   **Justification**: Preserves hard-won operational lessons while removing obsolete safety model references.
+
+### Breaking Changes for AI Agents
+
+> [!WARNING]
+> This is a **breaking change** for agent behavior:
+> - **OLD**: Cautious, plan-heavy, exhaustive testing, multi-layer safety validation
+> - **NEW**: Action-biased, profit-focused, real-world validation, minimal safety (kill switches only)
+>
+> Agents will now:
+> - Implement faster with less upfront planning
+> - Simplify/delete abstractions that slow development
+> - Prioritize shadow mode testing over unit test coverage for trading logic
+> - Treat regime/volatility filters as optional features, not safety requirements
+
+### Rationale
+
+The previous agent governance framework was designed for a theoretical "production-grade distributed system." The actual deployment is a single-developer experimental trading bot where:
+- Speed to market testing is critical
+- Over-engineering slows iteration
+- Real shadow mode data reveals what unit tests cannot
+- Catastrophic loss prevention requires 3 hard stops, not 20 layers
+
+This migration aligns agent behavior with project reality.
+

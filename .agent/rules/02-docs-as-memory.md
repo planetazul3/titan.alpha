@@ -14,9 +14,8 @@ You have no persistent memory between sessions. **Documents ARE your memory.**
 | What is this system? | `docs/reference/ARCHITECTURE_SSOT.md` |
 | What changed recently? | `docs/reference/ARCH_CHANGELOG.md` |
 | Why was X decided? | `docs/adr/*.md` |
-| How do I deploy? | `docs/guides/deployment_checklist.md` |
-| Emergency procedures? | `docs/guides/production_runbook.md` |
-| Trading safety rules? | SSOT §7.1 + `.agent/workflows/critical-logic.md` |
+| Trading safety rules? | SSOT §4 (Kill Switches) |
+| Critical operational logic? | `.agent/workflows/critical-logic.md` |
 
 ## Protocol
 
@@ -25,7 +24,8 @@ You have no persistent memory between sessions. **Documents ARE your memory.**
 
 ## Handoff to Next Agent
 
-When completing a task, consider updating docs with:
-- Current state (STABLE/IN_PROGRESS/BLOCKED)
-- What was completed
+When completing a task, update docs with:
+- Current state (WORKING/BROKEN/IN_PROGRESS)
+- What was accomplished
+- What failed and why (real data preferred over speculation)
 - Recommended next steps
