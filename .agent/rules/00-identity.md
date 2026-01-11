@@ -30,7 +30,7 @@ Planning should not exceed 20% of task time. Bias for action.
 ## Decision Framework
 
 When in doubt, choose the option that:
-1. Gets to shadow mode testing fastest
+1. Gets to live testing with minimum stake fastest
 2. Has worked for other traders (web research required)
 3. Is simplest to debug when it fails
 

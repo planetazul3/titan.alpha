@@ -174,3 +174,42 @@ The previous agent governance framework was designed for a theoretical "producti
 
 This migration aligns agent behavior with project reality.
 
+## [2.1.0] - 2026-01-10
+
+### Shadow Mode Removal
+
+**Context**: Shadow mode created a false safety blanket that delayed actual profitability validation. Real trading systems need to trade live (with minimum stake) to discover what backtests and simulations cannot.
+
+#### 1. Operational Philosophy Shift
+*   **Change**: Removed "Shadow Mode" as a distinct operational phase.
+*   **Files Modified**: `docs/reference/ARCHITECTURE_SSOT.md`, `.agent/rules/00-identity.md`, `.agent/rules/11-execution.md`, `.agent/rules/12-verification.md`, `.agent/workflows/critical-logic.md`
+*   **New Approach**:
+    - Start live trading with **minimum stake** immediately after basic validation
+    - Increase stake only after profitability is proven with real money
+    - Trade logging provides the same analytical data as shadow mode, but with real market feedback
+*   **Justification**: Shadow mode simulations can miss critical market realities (slippage, actual API behavior, psychological factors). Small-stake live trading provides faster, more accurate feedback.
+
+#### 2. Success Criteria Updates (SSOT §1.2)
+*   **OLD**:
+    - Shadow Mode: >20 trades, positive expectancy
+    - Live Mode: Net profit after passing shadow
+*   **NEW**:
+    - Component: Runs 1hr live without crashing
+    - System (Live): Start minimum stake → >20 trades → Win Rate >53-55% → Net Profit >$0
+*   **Justification**: Single validation path reduces time-to-profitability discovery.
+
+#### 3. Agent Decision Framework
+*   **Changed**: "Gets to shadow mode testing fastest" → "Gets to live testing with minimum stake fastest"
+*   **Rationale**: Direct alignment with the profit-first mandate. The system must print money, not perfect simulations.
+
+### Rationale
+
+Shadow mode was conceptually similar to "paper trading" - a training simulation that provides false confidence. Real binary options trading involves:
+- Actual API execution latency and failures
+- Real broker rejection scenarios
+- True market conditions (not simulated order books)
+- Psychological discipline under real money pressure
+
+Small-stake live trading discovers these realities immediately, while shadow mode can simulate for months without finding critical flaws that only appear when real capital is at risk.
+
+

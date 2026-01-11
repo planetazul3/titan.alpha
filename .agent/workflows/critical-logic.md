@@ -26,21 +26,21 @@ but we want to trade 1-minute contracts. Running inference every 2 seconds would
 
 ---
 
-## 2. Timezone for Shadow Resolution (UTC)
+## 2. Timezone for Trade Resolution (UTC)
 **Location**: `scripts/live.py` line ~557
 
 ```python
 current_time=datetime.now(timezone.utc)  # Must be UTC to match trade timestamps
 ```
 
-**Why**: Shadow trades are stored with UTC timestamps. Using `datetime.now()` (local time)
+**Why**: Trades are stored with UTC timestamps. Using `datetime.now()` (local time)
 causes trades to appear "in the future" and never resolve.
 
 **DO NOT**: Change to `datetime.now()` without timezone.
 
 ---
 
-## 3. Shadow Resolution Runs on Every Candle Close
+## 3. Trade Resolution Runs on Every Candle Close
 **Location**: `scripts/live.py` after inference block
 
 ```python

@@ -9,7 +9,7 @@ description: Rules for code implementation
 When implementing code:
 
 1. **Ship Fast**: Get to testable state as quickly as possible
-2. **Test with Real Data**: Shadow mode > unit tests for trading logic
+2. **Test with Real Data**: Live testing with minimum stake > unit tests for trading logic
 3. **Small Commits**: One logical change per commit
 4. **Aggressively Delete**: Remove unused abstractions and dead code
 5. **Docs if Architecture Changes**: Update SSOT/changelog for structural changes
@@ -32,5 +32,5 @@ When implementing code:
 ## Anti-Patterns
 
 - Perfect abstraction before proving the feature works
-- Refactoring code that hasn't run in shadow mode
+- Refactoring code that hasn't been tested live
 - Adding frameworks when functions would work

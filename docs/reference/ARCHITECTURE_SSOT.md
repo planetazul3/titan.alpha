@@ -14,16 +14,16 @@
 1.  **Profit > Code Quality**: A messy script that makes money is better than a perfect architecture that loses money.
 2.  **Bias for Action**: Implement, test, and iterate. Do not get stuck in "Planning" or "Architecture Review".
 3.  **Dynamic Evolution**: The system structure is mutable. If a component is too complex, delete it. If a library helps, add it.
-4.  **Real-World Validation**: Backtests are just hints. Small-scale live testing (or "Shadow Trading" on live data) is the only metric that matters.
+4.  **Real-World Validation**: Backtests are just hints. Live testing with small stakes is the only metric that matters.
 
 ### 1.2 Success Criteria ("What Works")
 A component or system is considered **functionally acceptable** only when it meets these real-world metrics:
 
 *   **Component**: Runs without crashing for 1 hour of live data processing.
-*   **System (Shadow Mode)**:
+*   **System (Live Mode)**:
+    *   Start with minimum stake.
     *   Executes > 20 trades.
     *   Achieves **Positive Expectancy** (Win Rate > 53-55% depending on payout).
-*   **System (Live Mode)**:
     *   Net Profit > $0 after a daily session.
 
 *If it doesn't print money or run reliably, it is broken, regardless of code quality.*
@@ -104,5 +104,5 @@ A task or module is **DONE** only when:
 
 ## 7. Persistence & State
 
-*   **Shadow Mode**: Log decisions to evaluate performance.
-*   **Live Mode**: Turn on when Shadow Mode shows positive expectancy.
+*   **Trade Logging**: All decisions and outcomes are logged for performance analysis.
+*   **Start Small**: Begin live trading with minimum stake, increase as profitability is validated.
